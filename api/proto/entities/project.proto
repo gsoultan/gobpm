@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package process;
+
+option go_package = "github.com/gsoultan/gobpm/api/proto/entities;entities";
+
+import "entities/organization.proto";
+
+message Project {
+  string id = 1;
+  Organization organization = 2;
+  string name = 3;
+  string description = 4;
+}

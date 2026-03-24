@@ -1,0 +1,25 @@
+package services
+
+import (
+	serviceContracts "github.com/gsoultan/gobpm/server/domains/services/contracts"
+)
+
+// ServiceFacade is the main interface for the Hermod system, aggregating all sub-services.
+type ServiceFacade interface {
+	serviceContracts.OrganizationService
+	serviceContracts.ProjectService
+	serviceContracts.DefinitionService
+	serviceContracts.TaskService
+	serviceContracts.ExecutionEngine
+	serviceContracts.JobService
+	serviceContracts.ExternalTaskService
+	serviceContracts.DecisionService
+	serviceContracts.MigrationService
+	serviceContracts.ConnectorService
+	serviceContracts.CollaborationService
+	serviceContracts.MessagingService
+	serviceContracts.UserService
+	serviceContracts.GroupService
+	serviceContracts.SetupService
+	serviceContracts.NotificationService
+}

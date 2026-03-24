@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package process;
+
+import "entities/user.proto";
+
+option go_package = "github.com/gsoultan/gobpm/api/proto/endpoints;endpoints";
+
+message GetUserRequest {
+  string id = 1;
+}
+
+message GetUserResponse {
+  User user = 1;
+}
+
+message ListUsersRequest {
+  string organization_id = 1;
+}
+
+message ListUsersResponse {
+  repeated User users = 1;
+}
+

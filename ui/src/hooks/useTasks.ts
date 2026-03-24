@@ -1,0 +1,196 @@
+import { notifications } from '@mantine/notifications';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { processService } from '../services/api';
+import { useAppStore } from '../store/useAppStore';
+
+export const useTasks = () => {
+  const { currentProjectId } = useAppStore();
+  return useQuery({
+    queryKey: ['tasks', currentProjectId],
+    queryFn: ({ signal }) =>
+      currentProjectId ? processService.listTasks(currentProjectId, signal) : Promise.resolve({ tasks: [], err: "" }),
+    enabled: !!currentProjectId,
+  });
+};
+
+export const useTasksByAssignee = (assignee: string) => {
+  return useQuery({
+    queryKey: ['tasks', 'assignee', assignee],
+    queryFn: ({ signal }) =>
+      assignee ? processService.listTasksByAssignee(assignee, signal) : Promise.resolve({ tasks: [], err: "" }),
+    enabled: !!assignee,
+  });
+};
+
+export const useTasksByCandidates = (userId: string, groups: string[] = []) => {
+  return useQuery({
+    queryKey: ['tasks', 'candidates', userId, ...groups],
+    queryFn: ({ signal }) =>
+      userId ? processService.listTasksByCandidates(userId, groups, signal) : Promise.resolve({ tasks: [], err: "" }),
+    enabled: !!userId,
+  });
+};
+
+export const useIncidents = (instanceId: string | null) => {
+  return useQuery({
+    queryKey: ['incidents', instanceId],
+    queryFn: ({ signal }) =>
+      instanceId ? processService.listIncidents(instanceId, signal) : Promise.resolve({ incidents: [], err: "" }),
+    enabled: !!instanceId,
+  });
+};
+
+export const useResolveIncident = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => processService.resolveIncident(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['incidents'] });
+    },
+  });
+};
+
+export const useStartProcess = () => {
+  const queryClient = useQueryClient();
+  const { currentProjectId } = useAppStore();
+  return useMutation({
+    mutationFn: ({ definitionKey, variables }: { definitionKey: string; variables?: any }) =>
+      currentProjectId ? processService.startProcess(currentProjectId, definitionKey, variables) : Promise.reject('No project selected'),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tasks', currentProjectId] });
+    },
+  });
+};
+
+export const useCompleteTask = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, userId, variables }: { id: string; userId: string; variables?: any }) => processService.completeTask(id, userId, variables),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      notifications.show({
+        title: 'Task Completed',
+        message: 'The task has been successfully completed.',
+        color: 'green',
+      });
+    },
+    onError: (error: any) => {
+      notifications.show({
+        title: 'Error',
+        message: error.message || 'Failed to complete task',
+        color: 'red',
+      });
+    }
+  });
+};
+
+export const useClaimTask = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, userId }: { id: string; userId: string }) => processService.claimTask(id, userId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      notifications.show({
+        title: 'Task Claimed',
+        message: 'The task has been successfully claimed.',
+        color: 'blue',
+      });
+    },
+    onError: (error: any) => {
+      notifications.show({
+        title: 'Error',
+        message: error.message || 'Failed to claim task',
+        color: 'red',
+      });
+    }
+  });
+};
+
+export const useUnclaimTask = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => processService.unclaimTask(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      notifications.show({
+        title: 'Task Unclaimed',
+        message: 'The task has been successfully unclaimed.',
+        color: 'gray',
+      });
+    },
+    onError: (error: any) => {
+      notifications.show({
+        title: 'Error',
+        message: error.message || 'Failed to unclaim task',
+        color: 'red',
+      });
+    }
+  });
+};
+
+export const useDelegateTask = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, userId }: { id: string; userId: string }) => processService.delegateTask(id, userId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      notifications.show({
+        title: 'Task Delegated',
+        message: 'The task has been successfully delegated.',
+        color: 'yellow',
+      });
+    },
+    onError: (error: any) => {
+      notifications.show({
+        title: 'Error',
+        message: error.message || 'Failed to delegate task',
+        color: 'red',
+      });
+    }
+  });
+};
+
+export const useUpdateTask = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, name, priority, dueDate }: { id: string; name: string; priority: number; dueDate?: string }) =>
+      processService.updateTask(id, name, priority, dueDate),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      notifications.show({
+        title: 'Task Updated',
+        message: 'The task has been successfully updated.',
+        color: 'green',
+      });
+    },
+    onError: (error: any) => {
+      notifications.show({
+        title: 'Error',
+        message: error.message || 'Failed to update task',
+        color: 'red',
+      });
+    }
+  });
+};
+
+export const useAssignTask = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, userId }: { id: string; userId: string }) => processService.assignTask(id, userId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      notifications.show({
+        title: 'Task Assigned',
+        message: 'The task has been successfully assigned.',
+        color: 'blue',
+      });
+    },
+    onError: (error: any) => {
+      notifications.show({
+        title: 'Error',
+        message: error.message || 'Failed to assign task',
+        color: 'red',
+      });
+    }
+  });
+};

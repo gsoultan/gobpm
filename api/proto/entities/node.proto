@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package process;
+
+option go_package = "github.com/gsoultan/gobpm/api/proto/entities;entities";
+
+import "entities/user.proto";
+import "entities/group.proto";
+
+message Node {
+  string id = 1;
+  string name = 2;
+  string type = 3;
+  User assignee = 4;
+  repeated string incoming = 5;
+  repeated string outgoing = 6;
+  repeated User candidate_users = 7;
+  repeated Group candidate_groups = 8;
+}

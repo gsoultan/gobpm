@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package process;
+
+import "endpoints/broadcast_signal.proto";
+import "endpoints/send_message.proto";
+
+option go_package = "github.com/gsoultan/gobpm/api/proto/services;services";
+
+service SignalService { rpc BroadcastSignal(BroadcastSignalRequest) returns (BroadcastSignalResponse) {} rpc SendMessage(SendMessageRequest) returns (SendMessageResponse) {} }

@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package process;
+
+import "google/protobuf/struct.proto";
+import "entities/project.proto";
+import "entities/definition.proto";
+import "entities/node.proto";
+
+option go_package = "github.com/gsoultan/gobpm/api/proto/entities;entities";
+
+message ProcessInstance {
+  string id = 1;
+  Project project = 2;
+  ProcessDefinition definition = 3;
+  string status = 4;
+  google.protobuf.Struct variables = 5;
+  repeated Node active_nodes = 6;
+}

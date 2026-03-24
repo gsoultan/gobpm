@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package process;
+
+import "endpoints/group.proto";
+
+option go_package = "github.com/gsoultan/gobpm/api/proto/services;services";
+
+service GroupService {
+  rpc ListGroups(ListGroupsRequest) returns (ListGroupsResponse) {}
+  rpc ListUserGroups(ListUserGroupsRequest) returns (ListUserGroupsResponse) {}
+}

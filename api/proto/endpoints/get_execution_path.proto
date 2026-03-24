@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package process;
+
+
+option go_package = "github.com/gsoultan/gobpm/api/proto/endpoints;endpoints";
+import "entities/node.proto";
+
+message GetExecutionPathRequest { string instance_id = 1; } 
+message GetExecutionPathResponse { 
+    repeated Node nodes = 1; 
+    string error = 2; 
+    map<string, int32> node_frequencies = 3;
+}

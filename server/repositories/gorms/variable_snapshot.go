@@ -1,0 +1,36 @@
+package gorms
+
+import (
+	"context"
+
+	"github.com/google/uuid"
+	"github.com/gsoultan/gobpm/server/repositories/contracts"
+	"github.com/gsoultan/gobpm/server/repositories/models"
+	"gorm.io/gorm"
+)
+
+type variableSnapshotRepository struct {
+	db *gorm.DB
+}
+
+// NewVariableSnapshotRepository creates a new GORM-backed VariableSnapshotRepository.
+func NewVariableSnapshotRepository(db *gorm.DB) contracts.VariableSnapshotRepository {
+	return &variableSnapshotRepository{db: db}
+}
+
+func (r *variableSnapshotRepository) Create(ctx context.Context, m models.VariableSnapshotModel) (models.VariableSnapshotModel, error) {
+	err := ResolveDB(r.db).WithContext(ctx).Create(&m).Error
+	return m, err
+}
+
+func (r *variableSnapshotRepository) ListByInstance(ctx context.Context, instanceID uuid.UUID) ([]models.VariableSnapshotModel, error) {
+	var ms []models.VariableSnapshotModel
+	err := ResolveDB(r.db).WithContext(ctx).
+		Where("instance_id = ?", instanceID).
+		Order("captured_at ASC").
+		Find(&ms).Error
+	if err != nil {
+		return nil, err
+	}
+	return ms, nil
+}

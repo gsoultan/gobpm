@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package process;
+
+import "google/protobuf/struct.proto";
+import "entities/node.proto";
+import "entities/user.proto";
+import "entities/group.proto";
+import "entities/project.proto";
+import "entities/process_instance.proto";
+
+option go_package = "github.com/gsoultan/gobpm/api/proto/entities;entities";
+
+message Task {
+  string id = 1;
+  Project project = 2;
+  ProcessInstance instance = 3;
+  Node node = 4;
+  string name = 5;
+  string status = 6;
+  User assignee = 7;
+  repeated User candidate_users = 8;
+  repeated Group candidate_groups = 9;
+  int32 priority = 10;
+  string due_date = 11;
+  string created_at = 12;
+  google.protobuf.Struct variables = 13;
+  string form_key = 14;
+  string form_definition = 15;
+}

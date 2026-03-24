@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package process;
+
+import "google/protobuf/struct.proto";
+import "entities/node.proto";
+import "entities/project.proto";
+import "entities/process_instance.proto";
+
+option go_package = "github.com/gsoultan/gobpm/api/proto/entities;entities";
+
+message ExternalTask {
+  string id = 1;
+  Project project = 2;
+  ProcessInstance instance = 3;
+  Node node = 4;
+  string topic = 5;
+  google.protobuf.Struct variables = 6;
+  int32 retries = 7;
+}

@@ -1,0 +1,46 @@
+# ─── Build artefacts ──────────────────────────────────────────────────────────
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go test and coverage output
+*.test
+*.out
+coverage.html
+
+# ─── Databases ────────────────────────────────────────────────────────────────
+# SQLite databases must never be committed.  The application creates them at
+# runtime; committing them leaks data and causes merge conflicts.
+*.db
+*.sqlite
+*.sqlite3
+
+# ─── Secrets and configuration ────────────────────────────────────────────────
+# The config.yaml file stores an encrypted database connection string.
+# It should NOT be committed to version control.
+config.yaml
+
+# Environment variable files
+.env
+.env.*
+!.env.example
+
+# ─── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+err.log
+out.log
+
+# ─── OS / IDE metadata ────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# ─── Node.js / Frontend ───────────────────────────────────────────────────────
+ui/node_modules/
+ui/dist/
+
+# ─── Go tool cache ────────────────────────────────────────────────────────────
+vendor/
+

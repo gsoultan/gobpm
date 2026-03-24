@@ -1,0 +1,91 @@
+package processes
+
+import (
+	"context"
+
+	"connectrpc.com/connect"
+	pbendpoints "github.com/gsoultan/gobpm/api/proto/endpoints"
+	pbentities "github.com/gsoultan/gobpm/api/proto/entities"
+	"github.com/gsoultan/gobpm/server/endpoints/process"
+	"github.com/gsoultan/gobpm/server/transports/adapters"
+	"github.com/gsoultan/gobpm/server/transports/grpcs/common"
+)
+
+type ProcessHandler struct {
+	eps process.Endpoints
+}
+
+func NewHandler(eps process.Endpoints) *ProcessHandler {
+	return &ProcessHandler{eps: eps}
+}
+
+func (h *ProcessHandler) StartProcess(ctx context.Context, req *connect.Request[pbendpoints.StartProcessRequest]) (*connect.Response[pbendpoints.StartProcessResponse], error) {
+	vars := make(map[string]any)
+	if req.Msg.Variables != nil {
+		vars = req.Msg.Variables.AsMap()
+	}
+	response, err := h.eps.StartProcess(ctx, process.StartProcessRequest{
+		ProjectID:     req.Msg.ProjectId,
+		DefinitionKey: req.Msg.DefinitionKey,
+		Variables:     vars,
+	})
+	if err != nil {
+		return nil, err
+	}
+	resp := response.(process.StartProcessResponse)
+	return connect.NewResponse(&pbendpoints.StartProcessResponse{
+		InstanceId: resp.InstanceID.String(),
+		Error:      common.ErrString(resp.Err),
+	}), nil
+}
+
+func (h *ProcessHandler) GetInstance(ctx context.Context, req *connect.Request[pbendpoints.GetInstanceRequest]) (*connect.Response[pbendpoints.GetInstanceResponse], error) {
+	response, err := h.eps.GetInstance(ctx, process.GetInstanceRequest{
+		ID: req.Msg.Id,
+	})
+	if err != nil {
+		return nil, err
+	}
+	resp := response.(process.GetInstanceResponse)
+	return connect.NewResponse(&pbendpoints.GetInstanceResponse{
+		Instance: adapters.ProcessInstancePBAdapter{Instance: resp.Instance}.ToProto(),
+		Error:    common.ErrString(resp.Err),
+	}), nil
+}
+
+func (h *ProcessHandler) ListInstances(ctx context.Context, req *connect.Request[pbendpoints.ListInstancesRequest]) (*connect.Response[pbendpoints.ListInstancesResponse], error) {
+	response, err := h.eps.ListInstances(ctx, process.ListInstancesRequest{
+		ProjectID: req.Msg.ProjectId,
+	})
+	if err != nil {
+		return nil, err
+	}
+	resp := response.(process.ListInstancesResponse)
+	pbInstances := make([]*pbentities.ProcessInstance, len(resp.Instances))
+	for i, inst := range resp.Instances {
+		pbInstances[i] = adapters.ProcessInstancePBAdapter{Instance: inst}.ToProto()
+	}
+	return connect.NewResponse(&pbendpoints.ListInstancesResponse{
+		Instances: pbInstances,
+		Error:     common.ErrString(resp.Err),
+	}), nil
+}
+
+func (h *ProcessHandler) GetExecutionPath(ctx context.Context, req *connect.Request[pbendpoints.GetExecutionPathRequest]) (*connect.Response[pbendpoints.GetExecutionPathResponse], error) {
+	response, err := h.eps.GetExecutionPath(ctx, process.GetExecutionPathRequest{
+		InstanceID: req.Msg.InstanceId,
+	})
+	if err != nil {
+		return nil, err
+	}
+	resp := response.(process.GetExecutionPathResponse)
+	freqs := make(map[string]int32)
+	for k, v := range resp.Frequencies {
+		freqs[k] = int32(v)
+	}
+	return connect.NewResponse(&pbendpoints.GetExecutionPathResponse{
+		Nodes:           adapters.NodesToProto(resp.Nodes),
+		NodeFrequencies: freqs,
+		Error:           resp.Error,
+	}), nil
+}

@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package process;
+
+import "google/protobuf/timestamp.proto";
+import "entities/user.proto";
+import "entities/project.proto";
+import "entities/process_instance.proto";
+
+option go_package = "github.com/gsoultan/gobpm/api/proto/entities;entities";
+
+message Notification {
+  string id = 1;
+  User user = 2;
+  string type = 3;
+  string title = 4;
+  string message = 5;
+  bool is_read = 6;
+  string link = 7;
+  google.protobuf.Timestamp created_at = 8;
+  Project project = 9;
+  ProcessInstance instance = 10;
+}

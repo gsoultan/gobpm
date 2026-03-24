@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package process;
+
+import "endpoints/start_process.proto";
+import "endpoints/get_instance.proto";
+import "endpoints/list_instances.proto";
+import "endpoints/get_execution_path.proto";
+
+option go_package = "github.com/gsoultan/gobpm/api/proto/services;services";
+
+service ProcessService { rpc StartProcess(StartProcessRequest) returns (StartProcessResponse) {} rpc GetInstance(GetInstanceRequest) returns (GetInstanceResponse) {} rpc ListInstances(ListInstancesRequest) returns (ListInstancesResponse) {} rpc GetExecutionPath(GetExecutionPathRequest) returns (GetExecutionPathResponse) {} }

@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package process;
+
+import "entities/definition.proto";
+
+option go_package = "github.com/gsoultan/gobpm/api/proto/endpoints;endpoints";
+
+message ListDefinitionsRequest { string project_id = 1; } message ListDefinitionsResponse { repeated ProcessDefinition definitions = 1; string error = 2; }

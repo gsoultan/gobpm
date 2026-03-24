@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package process;
+
+import "entities/task.proto";
+
+option go_package = "github.com/gsoultan/gobpm/api/proto/endpoints;endpoints";
+
+message ListTasksRequest { string project_id = 1; } message ListTasksResponse { repeated Task tasks = 1; string error = 2; }

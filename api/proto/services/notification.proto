@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package process;
+
+import "entities/notification.proto";
+
+option go_package = "github.com/gsoultan/gobpm/api/proto/services;services";
+
+service NotificationService {
+  rpc ListNotifications(ListNotificationsRequest) returns (ListNotificationsResponse);
+  rpc MarkAsRead(MarkAsReadRequest) returns (MarkAsReadResponse);
+  rpc MarkAllAsRead(MarkAllAsReadRequest) returns (MarkAllAsReadResponse);
+  rpc DeleteNotification(DeleteNotificationRequest) returns (DeleteNotificationResponse);
+}
+
+message ListNotificationsRequest {
+  string user_id = 1;
+}
+
+message ListNotificationsResponse {
+  repeated Notification notifications = 1;
+  string error = 2;
+}
+
+message MarkAsReadRequest {
+  string id = 1;
+}
+
+message MarkAsReadResponse {
+  string error = 1;
+}
+
+message MarkAllAsReadRequest {
+  string user_id = 1;
+}
+
+message MarkAllAsReadResponse {
+  string error = 1;
+}
+
+message DeleteNotificationRequest {
+  string id = 1;
+}
+
+message DeleteNotificationResponse {
+  string error = 1;
+}

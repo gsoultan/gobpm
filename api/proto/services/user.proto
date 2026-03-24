@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package process;
+
+import "endpoints/user.proto";
+
+option go_package = "github.com/gsoultan/gobpm/api/proto/services;services";
+
+service UserService {
+  rpc GetUser(GetUserRequest) returns (GetUserResponse) {}
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse) {}
+}

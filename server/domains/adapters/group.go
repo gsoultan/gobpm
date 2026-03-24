@@ -1,0 +1,47 @@
+package adapters
+
+import (
+	"github.com/google/uuid"
+	"github.com/gsoultan/gobpm/server/domains/entities"
+	"github.com/gsoultan/gobpm/server/repositories/models"
+)
+
+type GroupModelAdapter struct {
+	Group entities.Group
+}
+
+func (a GroupModelAdapter) ToModel() models.GroupModel {
+	var orgID uuid.UUID
+	if a.Group.Organization != nil {
+		orgID = a.Group.Organization.ID
+	}
+	return models.GroupModel{
+		Base: models.Base{
+			ID:        a.Group.ID,
+			CreatedAt: a.Group.CreatedAt,
+		},
+		OrganizationID: orgID,
+		Name:           a.Group.Name,
+		Description:    a.Group.Description,
+		Roles:          a.Group.Roles,
+	}
+}
+
+type GroupEntityAdapter struct {
+	Model models.GroupModel
+}
+
+func (a GroupEntityAdapter) ToEntity() entities.Group {
+	var org *entities.Organization
+	if a.Model.OrganizationID != uuid.Nil {
+		org = &entities.Organization{ID: a.Model.OrganizationID}
+	}
+	return entities.Group{
+		ID:           a.Model.ID,
+		Organization: org,
+		Name:         a.Model.Name,
+		Description:  a.Model.Description,
+		Roles:        a.Model.Roles,
+		CreatedAt:    a.Model.CreatedAt,
+	}
+}

@@ -1,0 +1,57 @@
+.sidebar {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--mantine-color-body);
+}
+
+.scrollArea {
+  flex: 1;
+  overflow-y: auto;
+  margin: 0 calc(var(--mantine-spacing-md) * -1);
+  padding: 0 var(--mantine-spacing-md);
+}
+
+.item {
+  cursor: grab;
+  transition: all 0.15s ease;
+  padding: var(--mantine-spacing-xs);
+  border-radius: var(--mantine-radius-md);
+  width: 100%;
+  display: block;
+  border: 1px solid var(--mantine-color-default-border);
+  background-color: var(--mantine-color-default);
+  margin-bottom: var(--mantine-spacing-xs);
+}
+
+.item:hover {
+  background-color: var(--mantine-color-default-hover);
+  transform: translateX(4px);
+  box-shadow: var(--mantine-shadow-xs);
+  border-color: var(--mantine-color-blue-outline);
+}
+
+.item:active {
+  cursor: grabbing;
+}
+
+.accordionLabel {
+  font-weight: 800;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--mantine-color-dimmed);
+}
+
+.accordionItem {
+  border: none;
+}
+
+.accordionControl {
+  padding: var(--mantine-spacing-xs) 0;
+}
+
+.accordionContent {
+  padding: 0 0 var(--mantine-spacing-md) 0;
+}

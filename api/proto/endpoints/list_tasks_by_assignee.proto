@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package process;
+
+import "endpoints/list_tasks.proto";
+
+option go_package = "github.com/gsoultan/gobpm/api/proto/endpoints;endpoints";
+
+message ListTasksByAssigneeRequest { string assignee = 1; }

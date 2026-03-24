@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package process;
+
+import "entities/project.proto";
+
+option go_package = "github.com/gsoultan/gobpm/api/proto/endpoints;endpoints";
+
+message CreateProjectRequest { 
+  string organization_id = 1;
+  string name = 2; 
+  string description = 3; 
+} 
+message CreateProjectResponse { 
+  Project project = 1; 
+  string error = 2; 
+}

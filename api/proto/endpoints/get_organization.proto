@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package process;
+
+import "entities/organization.proto";
+
+option go_package = "github.com/gsoultan/gobpm/api/proto/endpoints;endpoints";
+
+message GetOrganizationRequest {
+  string id = 1;
+}
+
+message GetOrganizationResponse {
+  Organization organization = 1;
+  string error = 2;
+}

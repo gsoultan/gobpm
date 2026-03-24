@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package process;
+
+import "google/protobuf/timestamp.proto";
+import "entities/organization.proto";
+
+option go_package = "github.com/gsoultan/gobpm/api/proto/entities;entities";
+
+message UserOrganization {
+  string id = 1;
+  string name = 2;
+}
+
+message UserProject {
+  string id = 1;
+  string name = 2;
+}
+
+message User {
+  string id = 1;
+  repeated UserOrganization organizations = 2;
+  repeated UserProject projects = 8;
+  string username = 3;
+  string full_name = 4;
+  string display_name = 9;
+  Organization organization = 10;
+  string email = 5;
+  repeated string roles = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+

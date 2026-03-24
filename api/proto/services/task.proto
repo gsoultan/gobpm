@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package process;
+
+import "endpoints/get_task.proto";
+import "endpoints/list_tasks.proto";
+import "endpoints/complete_task.proto";
+import "endpoints/claim_task.proto";
+import "endpoints/unclaim_task.proto";
+import "endpoints/list_tasks_by_assignee.proto";
+import "endpoints/list_tasks_by_candidates.proto";
+
+option go_package = "github.com/gsoultan/gobpm/api/proto/services;services";
+
+service TaskService { rpc GetTask(GetTaskRequest) returns (GetTaskResponse) {} rpc ListTasks(ListTasksRequest) returns (ListTasksResponse) {} rpc CompleteTask(CompleteTaskRequest) returns (CompleteTaskResponse) {} rpc ClaimTask(ClaimTaskRequest) returns (ClaimTaskResponse) {} rpc UnclaimTask(UnclaimTaskRequest) returns (UnclaimTaskResponse) {} rpc ListTasksByAssignee(ListTasksByAssigneeRequest) returns (ListTasksResponse) {} rpc ListTasksByCandidates(ListTasksByCandidatesRequest) returns (ListTasksResponse) {} }

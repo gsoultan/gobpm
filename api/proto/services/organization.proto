@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package process;
+
+import "endpoints/create_organization.proto";
+import "endpoints/get_organization.proto";
+import "endpoints/list_organizations.proto";
+import "endpoints/update_organization.proto";
+import "endpoints/delete_organization.proto";
+
+option go_package = "github.com/gsoultan/gobpm/api/proto/services;services";
+
+service OrganizationService {
+  rpc CreateOrganization(CreateOrganizationRequest) returns (CreateOrganizationResponse) {}
+  rpc GetOrganization(GetOrganizationRequest) returns (GetOrganizationResponse) {}
+  rpc ListOrganizations(ListOrganizationsRequest) returns (ListOrganizationsResponse) {}
+  rpc UpdateOrganization(UpdateOrganizationRequest) returns (UpdateOrganizationResponse) {}
+  rpc DeleteOrganization(DeleteOrganizationRequest) returns (DeleteOrganizationResponse) {}
+}
