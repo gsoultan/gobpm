@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/gsoultan/gobpm/internal/pkg/auth"
+	"github.com/gsoultan/gobpm/internal/pkg/redaction"
 	"github.com/gsoultan/gobpm/server/endpoints"
 )
 
@@ -26,7 +27,7 @@ func EncodeError(_ context.Context, err error, w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(CodeFrom(err))
 	json.NewEncoder(w).Encode(map[string]any{
-		"error": err.Error(),
+		"error": redaction.RedactError(err),
 	})
 }
 

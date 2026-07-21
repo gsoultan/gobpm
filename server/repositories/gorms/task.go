@@ -30,7 +30,8 @@ func (r *gormTaskRepository) Get(ctx context.Context, id uuid.UUID) (models.Task
 
 func (r *gormTaskRepository) List(ctx context.Context) ([]models.TaskModel, error) {
 	var modelsList []models.TaskModel
-	if err := GetTx(ctx, r.db).Find(&modelsList).Error; err != nil {
+	db := tenantScopeDB(ctx, GetTx(ctx, r.db), "tasks")
+	if err := db.Find(&modelsList).Error; err != nil {
 		return nil, fmt.Errorf("could not list tasks: %w", err)
 	}
 	return modelsList, nil
@@ -46,7 +47,8 @@ func (r *gormTaskRepository) ListByProject(ctx context.Context, projectID uuid.U
 
 func (r *gormTaskRepository) ListByAssignee(ctx context.Context, assignee string) ([]models.TaskModel, error) {
 	var modelsList []models.TaskModel
-	if err := GetTx(ctx, r.db).Where(QueryByAssignee, assignee).Find(&modelsList).Error; err != nil {
+	db := tenantScopeDB(ctx, GetTx(ctx, r.db), "tasks")
+	if err := db.Where(QueryByAssignee, assignee).Find(&modelsList).Error; err != nil {
 		return nil, fmt.Errorf("could not list tasks by assignee: %w", err)
 	}
 	return modelsList, nil
@@ -54,7 +56,7 @@ func (r *gormTaskRepository) ListByAssignee(ctx context.Context, assignee string
 
 func (r *gormTaskRepository) ListByCandidates(ctx context.Context, userID string, groups []string) ([]models.TaskModel, error) {
 	var modelsList []models.TaskModel
-	query := GetTx(ctx, r.db).Where(QueryByStatus, string(models.TaskUnclaimed))
+	query := tenantScopeDB(ctx, GetTx(ctx, r.db), "tasks").Where(QueryByStatus, string(models.TaskUnclaimed))
 
 	// Complex query for candidate users or groups
 	// Use LIKE for JSON string contains

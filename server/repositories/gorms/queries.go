@@ -41,3 +41,8 @@ const QueryByUsername = "username = ?"
 
 // QueryByOrganizationID is used to filter by organization ID.
 const QueryByOrganizationID = "organization_id = ?"
+
+// QueryTenantScopeViaProject is the JOIN clause used to scope list queries by
+// tenant (organization) through the projects table. Apply when a TenantContext
+// is present in the request context.
+const QueryTenantScopeViaProject = "JOIN projects ON projects.id = {table}.project_id AND projects.organization_id = ?"

@@ -96,7 +96,8 @@ func NewServiceFacade(
 	engine := serviceimpl.NewExecutionEngine(repo, dispatcher)
 	varHistorySvc := serviceimpl.NewVariableHistoryService(repo.VariableSnapshot())
 
-	taskSvc := serviceimpl.NewTaskService(repo, engine)
+	auditWriter := serviceimpl.NewAuditWriter(repo.Audit())
+	taskSvc := serviceimpl.NewTaskService(repo, engine, auditWriter)
 	externalTaskSvc := serviceimpl.NewExternalTaskService(repo, engine)
 	decisionSvc := serviceimpl.NewDecisionService(repo, tableEval)
 	userSvc := serviceimpl.NewUserService(repo, jwtSecret)

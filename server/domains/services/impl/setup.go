@@ -9,6 +9,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
 	"github.com/gsoultan/gobpm/internal/pkg/config"
+	"github.com/gsoultan/gobpm/internal/pkg/redaction"
 	"github.com/gsoultan/gobpm/server/domains/services/contracts"
 	"github.com/gsoultan/gobpm/server/repositories/models"
 	"golang.org/x/crypto/bcrypt"
@@ -106,12 +107,12 @@ func (s *setupService) TestConnection(ctx context.Context, req contracts.TestCon
 
 	db, err := gorm.Open(dialector, &gorm.Config{})
 	if err != nil {
-		return contracts.TestConnectionResult{Success: false, Message: fmt.Sprintf("Failed to open connection: %s", err.Error())}
+		return contracts.TestConnectionResult{Success: false, Message: fmt.Sprintf("Failed to open connection: %s", redaction.RedactError(err))}
 	}
 
 	sqlDB, err := db.DB()
 	if err != nil {
-		return contracts.TestConnectionResult{Success: false, Message: fmt.Sprintf("Failed to get database handle: %s", err.Error())}
+		return contracts.TestConnectionResult{Success: false, Message: fmt.Sprintf("Failed to get database handle: %s", redaction.RedactError(err))}
 	}
 	defer sqlDB.Close()
 
@@ -119,7 +120,7 @@ func (s *setupService) TestConnection(ctx context.Context, req contracts.TestCon
 	defer cancel()
 
 	if err := sqlDB.PingContext(pingCtx); err != nil {
-		return contracts.TestConnectionResult{Success: false, Message: fmt.Sprintf("Connection failed: %s", err.Error())}
+		return contracts.TestConnectionResult{Success: false, Message: fmt.Sprintf("Connection failed: %s", redaction.RedactError(err))}
 	}
 
 	return contracts.TestConnectionResult{Success: true, Message: "Connection successful"}

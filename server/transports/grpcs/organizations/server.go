@@ -124,8 +124,11 @@ func decodeGRPCListOrganizationsRequest(_ context.Context, _ any) (any, error) {
 func encodeGRPCListOrganizationsResponse(_ context.Context, response any) (any, error) {
 	resp := response.(organization.ListOrganizationsResponse)
 	var orgs []*entities.Organization
-	for _, o := range resp.Organizations {
-		orgs = append(orgs, adapters.OrganizationPBAdapter{Organization: o}.ToProto())
+	if len(resp.Organizations) > 0 {
+		orgs = make([]*entities.Organization, 0, len(resp.Organizations))
+		for _, o := range resp.Organizations {
+			orgs = append(orgs, adapters.OrganizationPBAdapter{Organization: o}.ToProto())
+		}
 	}
 	return &endpoints.ListOrganizationsResponse{Organizations: orgs, Error: common.ErrString(resp.Err)}, nil
 }

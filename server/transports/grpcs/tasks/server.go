@@ -140,8 +140,11 @@ func decodeGRPCListTasksRequest(_ context.Context, grpcReq any) (any, error) {
 func encodeGRPCListTasksResponse(_ context.Context, response any) (any, error) {
 	resp := response.(task.ListTasksResponse)
 	var tasks []*entities.Task
-	for _, t := range resp.Tasks {
-		tasks = append(tasks, adapters.TaskPBAdapter{Task: t}.ToProto())
+	if len(resp.Tasks) > 0 {
+		tasks = make([]*entities.Task, 0, len(resp.Tasks))
+		for _, t := range resp.Tasks {
+			tasks = append(tasks, adapters.TaskPBAdapter{Task: t}.ToProto())
+		}
 	}
 	return &endpoints.ListTasksResponse{Tasks: tasks, Error: common.ErrString(resp.Err)}, nil
 }

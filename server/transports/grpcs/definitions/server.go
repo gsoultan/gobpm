@@ -127,8 +127,11 @@ func decodeGRPCListDefinitionsRequest(_ context.Context, grpcReq any) (any, erro
 func encodeGRPCListDefinitionsResponse(_ context.Context, response any) (any, error) {
 	resp := response.(definition.ListDefinitionsResponse)
 	var defs []*entities.ProcessDefinition
-	for _, d := range resp.Definitions {
-		defs = append(defs, adapters.ProcessDefinitionPBAdapter{Definition: d}.ToProto())
+	if len(resp.Definitions) > 0 {
+		defs = make([]*entities.ProcessDefinition, 0, len(resp.Definitions))
+		for _, d := range resp.Definitions {
+			defs = append(defs, adapters.ProcessDefinitionPBAdapter{Definition: d}.ToProto())
+		}
 	}
 	return &endpoints.ListDefinitionsResponse{Definitions: defs, Error: common.ErrString(resp.Err)}, nil
 }

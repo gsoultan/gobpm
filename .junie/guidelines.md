@@ -136,3 +136,10 @@
 - **Visual Data Mapper**: MUST favor visual drag-and-drop mapping for service task inputs/outputs instead of manual JSON key entries.
 - **Smart Troubleshooter**: MUST provide plain English error messages with specific "Quick-Fix" suggestions (e.g., "Slack token expired. Click here to refresh").
 - **Progressive Disclosure**: MUST hide advanced technical settings by default and only show them when requested by an "Expert Mode" toggle.
+
+#### 6. Roadmap Execution Governance
+- **Single Source of Truth**: MUST keep `.junie/roadmap.md` updated as the canonical enhancement roadmap.
+- **Execution Discipline**: MUST convert roadmap themes into concrete, testable backlog items with measurable acceptance criteria.
+- **Priority Order**: MUST execute in this order unless explicitly reprioritized: `P0 Security & Reliability` → `P1 Scalability & Performance` → `P2 UX Delight`.
+- **Evidence Requirement**: A recommendation is considered "executed" only if code/config/docs were updated and verification evidence (tests/build/run output) is available.
+- **Incremental Delivery**: MUST prefer small, reversible changes with feature flags/canary strategy for risky behavior changes.

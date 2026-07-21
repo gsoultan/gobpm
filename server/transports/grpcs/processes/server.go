@@ -115,8 +115,11 @@ func decodeGRPCListInstancesRequest(_ context.Context, grpcReq any) (any, error)
 func encodeGRPCListInstancesResponse(_ context.Context, response any) (any, error) {
 	resp := response.(process.ListInstancesResponse)
 	var instances []*entities.ProcessInstance
-	for _, inst := range resp.Instances {
-		instances = append(instances, adapters.ProcessInstancePBAdapter{Instance: inst}.ToProto())
+	if len(resp.Instances) > 0 {
+		instances = make([]*entities.ProcessInstance, 0, len(resp.Instances))
+		for _, inst := range resp.Instances {
+			instances = append(instances, adapters.ProcessInstancePBAdapter{Instance: inst}.ToProto())
+		}
 	}
 	return &endpoints.ListInstancesResponse{Instances: instances, Error: common.ErrString(resp.Err)}, nil
 }

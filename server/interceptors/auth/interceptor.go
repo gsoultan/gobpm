@@ -44,13 +44,13 @@ func (i *httpAuthInterceptor) Wrap(next http.Handler) http.Handler {
 			return
 		}
 
-		parts := strings.Split(authHeader, " ")
-		if len(parts) != 2 || parts[0] != "Bearer" {
+		token, ok := bearerTokenFromHeader(authHeader)
+		if !ok {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		u, err := i.strategy.Authenticate(r.Context(), parts[1])
+		u, err := i.strategy.Authenticate(r.Context(), token)
 		if err != nil {
 			next.ServeHTTP(w, r)
 			return
@@ -63,14 +63,19 @@ func (i *httpAuthInterceptor) Wrap(next http.Handler) http.Handler {
 
 // mandatoryHTTPAuthInterceptor is like httpAuthInterceptor but returns 401 on failure.
 type mandatoryHTTPAuthInterceptor struct {
-	strategy    SecurityStrategy
-	publicPaths []string
+	strategy      SecurityStrategy
+	publicPathSet map[string]struct{}
 }
 
 func NewMandatoryHTTPAuthInterceptor(strategy SecurityStrategy, publicPaths []string) contracts.TransportInterceptor {
+	publicPathSet := make(map[string]struct{}, len(publicPaths))
+	for _, publicPath := range publicPaths {
+		publicPathSet[publicPath] = struct{}{}
+	}
+
 	return &mandatoryHTTPAuthInterceptor{
-		strategy:    strategy,
-		publicPaths: publicPaths,
+		strategy:      strategy,
+		publicPathSet: publicPathSet,
 	}
 }
 
@@ -83,11 +88,9 @@ func (i *mandatoryHTTPAuthInterceptor) Wrap(next http.Handler) http.Handler {
 		}
 
 		// Exclude public API endpoints
-		for _, path := range i.publicPaths {
-			if r.URL.Path == path {
-				next.ServeHTTP(w, r)
-				return
-			}
+		if i.isPublicPath(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
 		}
 
 		authHeader := r.Header.Get("Authorization")
@@ -96,13 +99,13 @@ func (i *mandatoryHTTPAuthInterceptor) Wrap(next http.Handler) http.Handler {
 			return
 		}
 
-		parts := strings.Split(authHeader, " ")
-		if len(parts) != 2 || parts[0] != "Bearer" {
+		token, ok := bearerTokenFromHeader(authHeader)
+		if !ok {
 			http.Error(w, "Invalid auth header", http.StatusUnauthorized)
 			return
 		}
 
-		u, err := i.strategy.Authenticate(r.Context(), parts[1])
+		u, err := i.strategy.Authenticate(r.Context(), token)
 		if err != nil {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
@@ -111,4 +114,18 @@ func (i *mandatoryHTTPAuthInterceptor) Wrap(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), auth.UserContextKey, u)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func (i *mandatoryHTTPAuthInterceptor) isPublicPath(path string) bool {
+	_, ok := i.publicPathSet[path]
+	return ok
+}
+
+func bearerTokenFromHeader(authHeader string) (string, bool) {
+	prefix, token, found := strings.Cut(authHeader, " ")
+	if !found || prefix != "Bearer" || token == "" || strings.ContainsAny(token, " \t") {
+		return "", false
+	}
+
+	return token, true
 }

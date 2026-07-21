@@ -7,18 +7,22 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/google/uuid"
 	pbservices "github.com/gsoultan/gobpm/api/proto/services"
 	"github.com/gsoultan/gobpm/internal/pkg/auth"
 	"github.com/gsoultan/gobpm/internal/pkg/config"
 	"github.com/gsoultan/gobpm/internal/pkg/logger"
+	"github.com/gsoultan/gobpm/internal/pkg/redaction"
 	"github.com/gsoultan/gobpm/server/domains/observers/impl"
 	"github.com/gsoultan/gobpm/server/domains/services"
 	"github.com/gsoultan/gobpm/server/endpoints"
@@ -48,6 +52,72 @@ type App struct {
 	sse        *impl.SSEObserver
 	validator  *auth.TokenValidator
 	initDBOnce func()
+}
+
+const (
+	defaultHTTPMaxBodyBytes        int64 = 2 << 20
+	defaultHTTPMaxRequestsPerLimit       = 240
+	defaultHTTPMaxInFlightRequests       = 128
+	defaultHTTPMaxQueuedRequests         = 256
+	defaultHTTPIdempotencyTTL            = 15 * time.Minute
+	httpShutdownTimeout                  = 5 * time.Second
+	defaultHTTPReadHeaderTimeout         = 2 * time.Second
+	defaultHTTPIdleTimeout               = 120 * time.Second
+	defaultHTTPMaxHeaderBytes            = 1 << 20
+	defaultPprofAddress                  = "127.0.0.1:6060"
+	envPprofEnabled                      = "GOBPM_PPROF_ENABLED"
+	envPprofAddress                      = "GOBPM_PPROF_ADDRESS"
+)
+
+func profilingEnabled() bool {
+	enabledValue, exists := os.LookupEnv(envPprofEnabled)
+	if !exists {
+		return false
+	}
+
+	enabled, err := strconv.ParseBool(enabledValue)
+	if err != nil {
+		log.Warn().
+			Err(err).
+			Str("env", envPprofEnabled).
+			Msg("Ignoring invalid pprof enable value")
+		return false
+	}
+
+	return enabled
+}
+
+func resolvePprofAddress() string {
+	address := strings.TrimSpace(os.Getenv(envPprofAddress))
+	if address == "" {
+		return defaultPprofAddress
+	}
+	return address
+}
+
+func newPprofHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /debug/pprof/", pprof.Index)
+	mux.HandleFunc("GET /debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("GET /debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("GET /debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("GET /debug/pprof/trace", pprof.Trace)
+
+	for _, profile := range []string{"allocs", "block", "goroutine", "heap", "mutex", "threadcreate"} {
+		mux.Handle("GET /debug/pprof/"+profile, pprof.Handler(profile))
+	}
+
+	return mux
+}
+
+func newHTTPServer(address string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              address,
+		Handler:           handler,
+		ReadHeaderTimeout: defaultHTTPReadHeaderTimeout,
+		IdleTimeout:       defaultHTTPIdleTimeout,
+		MaxHeaderBytes:    defaultHTTPMaxHeaderBytes,
+	}
 }
 
 func New() *App {
@@ -169,7 +239,7 @@ func (a *App) setupAuth(ctx context.Context) {
 			log.Error().Err(err).Msg("failed to initialize OIDC validator")
 		} else {
 			a.validator = v
-			log.Info().Str("issuer", oidcIssuer).Msg("OIDC Authentication enabled")
+			log.Info().Str("issuer", redaction.RedactText(oidcIssuer)).Msg("OIDC Authentication enabled")
 		}
 	}
 }
@@ -192,22 +262,63 @@ func (a *App) runServers(ctx context.Context) error {
 		"/api/v1/setup",
 		"/api/v1/setup/test-connection",
 	}
-	httpHandler = f.NewMandatoryHTTPAuth(strategy, publicPaths).Wrap(httpHandler)
+	httpHandler = f.NewBackpressure(defaultHTTPMaxInFlightRequests, defaultHTTPMaxQueuedRequests).Wrap(
+		f.NewRateLimit(defaultHTTPMaxRequestsPerLimit, time.Minute).Wrap(
+			f.NewRequestSize(defaultHTTPMaxBodyBytes).Wrap(
+				f.NewMandatoryHTTPAuth(strategy, publicPaths).Wrap(
+					f.NewIdempotency(defaultHTTPIdempotencyTTL).Wrap(httpHandler),
+				),
+			),
+		),
+	)
 
 	grpcServer := grpcs.NewGRPCServer(endpts)
 
 	g, ctx := errgroup.WithContext(ctx)
 
+	if profilingEnabled() {
+		pprofAddress := resolvePprofAddress()
+		g.Go(func() error {
+			log.Info().Str("addr", pprofAddress).Msg("pprof server listening")
+			server := newHTTPServer(pprofAddress, newPprofHandler())
+
+			go func() {
+				<-ctx.Done()
+				shutdownCtx, cancel := context.WithTimeoutCause(
+					context.Background(),
+					httpShutdownTimeout,
+					errors.New("pprof server shutdown timed out"),
+				)
+				defer cancel()
+
+				if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+					log.Error().Err(err).Msg("pprof server shutdown failed")
+				}
+			}()
+
+			if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				return fmt.Errorf("pprof server crashed: %w", err)
+			}
+			return nil
+		})
+	}
+
 	// HTTP Server
 	g.Go(func() error {
 		log.Info().Msg("HTTP server listening on :8080")
-		server := &http.Server{
-			Addr:    ":8080",
-			Handler: httpHandler,
-		}
+		server := newHTTPServer(":8080", httpHandler)
 		go func() {
 			<-ctx.Done()
-			server.Shutdown(context.Background())
+			shutdownCtx, cancel := context.WithTimeoutCause(
+				context.Background(),
+				httpShutdownTimeout,
+				errors.New("http server shutdown timed out"),
+			)
+			defer cancel()
+
+			if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error().Err(err).Msg("HTTP server shutdown failed")
+			}
 		}()
 		return server.ListenAndServe()
 	})
@@ -321,7 +432,7 @@ func (a *App) dialectorFromConfig(cfg *config.Config) (gorm.Dialector, error) {
 		log.Info().Msg("Using SQL Server database from config...")
 		return sqlserver.Open(dsn), nil
 	default:
-		log.Info().Str("path", dsn).Msg("Using SQLite database from config...")
+		log.Info().Str("path", redaction.RedactText(dsn)).Msg("Using SQLite database from config...")
 		return sqlite.Open(dsn), nil
 	}
 }

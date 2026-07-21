@@ -15,17 +15,20 @@ import (
 )
 
 type taskService struct {
-	repo   repositories.Repository
-	engine servicecontracts.ExecutionEngine
+	repo        repositories.Repository
+	engine      servicecontracts.ExecutionEngine
+	auditWriter servicecontracts.AuditWriter
 }
 
 func NewTaskService(
 	repo repositories.Repository,
 	engine servicecontracts.ExecutionEngine,
+	auditWriter servicecontracts.AuditWriter,
 ) servicecontracts.TaskService {
 	return &taskService{
-		repo:   repo,
-		engine: engine,
+		repo:        repo,
+		engine:      engine,
+		auditWriter: auditWriter,
 	}
 }
 
@@ -117,6 +120,7 @@ func (s *taskService) ClaimTask(ctx context.Context, id uuid.UUID, userID string
 			Variables: map[string]any{"assignee": userID},
 		})
 
+		s.recordAuditEvent(txCtx, task, EventTaskClaimed, userID)
 		return nil
 	})
 }
@@ -146,6 +150,7 @@ func (s *taskService) UnclaimTask(ctx context.Context, id uuid.UUID) error {
 			Variables: task.Variables,
 		})
 
+		s.recordAuditEvent(txCtx, task, EventTaskUnclaimed, "")
 		return nil
 	})
 }
@@ -172,6 +177,7 @@ func (s *taskService) DelegateTask(ctx context.Context, id uuid.UUID, userID str
 			Variables: task.Variables,
 		})
 
+		s.recordAuditEvent(txCtx, task, EventTaskDelegated, userID)
 		return nil
 	})
 }
@@ -217,6 +223,8 @@ func (s *taskService) CompleteTask(ctx context.Context, id uuid.UUID, userID str
 			Timestamp: time.Now().Unix(),
 			Variables: vars,
 		})
+
+		s.recordAuditEvent(txCtx, task, EventTaskCompleted, userID)
 
 		// Better way to get def:
 		fullDef, _ := s.engine.GetProcessDefinition(txCtx, instance.Definition.ID)
@@ -283,6 +291,7 @@ func (s *taskService) CreateTaskForNode(ctx context.Context, instance entities.P
 			Variables: instance.Variables,
 		})
 
+		s.recordAuditEvent(txCtx, task, EventTaskCreated, "")
 		return nil
 	})
 }
@@ -339,6 +348,23 @@ func (s *taskService) AssignTask(ctx context.Context, id uuid.UUID, userID strin
 			Variables: map[string]any{"assignee": userID},
 		})
 
+		s.recordAuditEvent(txCtx, task, EventTaskAssigned, userID)
 		return nil
+	})
+}
+
+// recordAuditEvent writes a Business Timeline narrative audit entry for a task
+// lifecycle event. Errors are intentionally swallowed so audit failures never
+// affect the primary operation outcome.
+func (s *taskService) recordAuditEvent(ctx context.Context, task entities.Task, eventType, actor string) {
+	if s.auditWriter == nil {
+		return
+	}
+	_ = s.auditWriter.RecordEvent(ctx, entities.AuditEntry{
+		Type:     eventType,
+		Project:  task.Project,
+		Instance: task.Instance,
+		Node:     task.Node,
+		Data:     map[string]any{"actor": actor},
 	})
 }

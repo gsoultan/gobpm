@@ -2,6 +2,7 @@ package interceptors
 
 import (
 	"context"
+	"time"
 
 	"github.com/go-kit/kit/endpoint"
 	"github.com/gsoultan/gobpm/internal/pkg/auth"
@@ -9,6 +10,7 @@ import (
 	authinterceptor "github.com/gsoultan/gobpm/server/interceptors/auth"
 	"github.com/gsoultan/gobpm/server/interceptors/contracts"
 	"github.com/gsoultan/gobpm/server/interceptors/logging"
+	"github.com/gsoultan/gobpm/server/interceptors/security"
 )
 
 // InterceptorFactory creates various interceptors.
@@ -34,6 +36,22 @@ func (f *InterceptorFactory) NewHTTPAuth(strategy authinterceptor.SecurityStrate
 
 func (f *InterceptorFactory) NewMandatoryHTTPAuth(strategy authinterceptor.SecurityStrategy, publicPaths []string) contracts.TransportInterceptor {
 	return authinterceptor.NewMandatoryHTTPAuthInterceptor(strategy, publicPaths)
+}
+
+func (f *InterceptorFactory) NewRequestSize(maxBodyBytes int64) contracts.TransportInterceptor {
+	return security.NewRequestSizeInterceptor(maxBodyBytes)
+}
+
+func (f *InterceptorFactory) NewRateLimit(maxRequests int, window time.Duration) contracts.TransportInterceptor {
+	return security.NewRateLimitInterceptor(maxRequests, window)
+}
+
+func (f *InterceptorFactory) NewBackpressure(maxInFlightRequests, maxQueuedRequests int) contracts.TransportInterceptor {
+	return security.NewBackpressureInterceptor(maxInFlightRequests, maxQueuedRequests)
+}
+
+func (f *InterceptorFactory) NewIdempotency(ttl time.Duration) contracts.TransportInterceptor {
+	return security.NewIdempotencyInterceptor(ttl)
 }
 
 func (f *InterceptorFactory) NewJWTStrategy() authinterceptor.SecurityStrategy {

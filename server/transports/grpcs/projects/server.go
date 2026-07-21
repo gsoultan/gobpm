@@ -128,8 +128,11 @@ func decodeGRPCListProjectsRequest(_ context.Context, _ any) (any, error) {
 func encodeGRPCListProjectsResponse(_ context.Context, response any) (any, error) {
 	resp := response.(project.ListProjectsResponse)
 	var projects []*entities.Project
-	for _, p := range resp.Projects {
-		projects = append(projects, adapters.ProjectPBAdapter{Project: p}.ToProto())
+	if len(resp.Projects) > 0 {
+		projects = make([]*entities.Project, 0, len(resp.Projects))
+		for _, p := range resp.Projects {
+			projects = append(projects, adapters.ProjectPBAdapter{Project: p}.ToProto())
+		}
 	}
 	return &endpoints.ListProjectsResponse{Projects: projects, Error: common.ErrString(resp.Err)}, nil
 }

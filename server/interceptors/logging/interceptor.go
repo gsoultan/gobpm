@@ -27,7 +27,7 @@ func (i *loggingInterceptor) Intercept(next endpoint.Endpoint) endpoint.Endpoint
 			var endpointErr error
 			if err != nil {
 				endpointErr = err
-			} else if f, ok := response.(failer); ok && f.Failed() != nil {
+			} else if f, ok := response.(failer); ok {
 				endpointErr = f.Failed()
 			}
 
@@ -38,7 +38,7 @@ func (i *loggingInterceptor) Intercept(next endpoint.Endpoint) endpoint.Endpoint
 
 			event.
 				Str("method", i.method).
-				Str("took", time.Since(begin).String()).
+				Dur("took", time.Since(begin)).
 				Msg("endpoint called")
 		}(time.Now())
 		return next(ctx, request)

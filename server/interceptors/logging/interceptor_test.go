@@ -12,7 +12,17 @@ type mockFailer struct {
 	err error
 }
 
+type countingFailer struct {
+	err   error
+	calls int
+}
+
 func (f mockFailer) Failed() error {
+	return f.err
+}
+
+func (f *countingFailer) Failed() error {
+	f.calls++
 	return f.err
 }
 
@@ -51,6 +61,24 @@ func TestLoggingInterceptor(t *testing.T) {
 		_, err := e(t.Context(), "request")
 		if err != nil {
 			t.Errorf("expected no error from endpoint, got %v", err)
+		}
+	})
+
+	t.Run("failer called once", func(t *testing.T) {
+		expectedErr := errors.New("failer error")
+		f := &countingFailer{err: expectedErr}
+		var e endpoint.Endpoint = func(ctx context.Context, request any) (any, error) {
+			return f, nil
+		}
+
+		e = interceptor.Intercept(e)
+		_, err := e(t.Context(), "request")
+		if err != nil {
+			t.Errorf("expected no error from endpoint, got %v", err)
+		}
+
+		if f.calls != 1 {
+			t.Errorf("expected Failed to be called once, got %d", f.calls)
 		}
 	})
 }

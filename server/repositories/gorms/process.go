@@ -52,7 +52,8 @@ func (r *gormProcessRepository) Update(ctx context.Context, m models.ProcessInst
 
 func (r *gormProcessRepository) List(ctx context.Context) ([]models.ProcessInstanceModel, error) {
 	var modelsList []models.ProcessInstanceModel
-	if err := GetTx(ctx, r.db).Find(&modelsList).Error; err != nil {
+	db := tenantScopeDB(ctx, GetTx(ctx, r.db), "process_instances")
+	if err := db.Find(&modelsList).Error; err != nil {
 		return nil, fmt.Errorf("could not list process instances: %w", err)
 	}
 	return modelsList, nil
