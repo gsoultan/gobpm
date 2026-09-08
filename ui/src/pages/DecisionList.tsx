@@ -1,40 +1,66 @@
 import {
-  Table,
-  Card,
-  Text,
-  Button,
-  Group,
-  Stack,
-  ThemeIcon,
-  TextInput,
   ActionIcon,
+  Alert,
   Badge,
   Box,
-  Tooltip,
+  Button,
+  Card,
+  Group,
+  List,
+  Loader,
+  Modal,
   Skeleton,
+  Stack,
+  Table,
+  Text,
+  TextInput,
+  ThemeIcon,
+  Tooltip,
 } from '@mantine/core';
-import { 
-  Search, 
-  Plus, 
-  Filter, 
-  Table2,
-  Edit2,
-  Trash2,
-} from 'lucide-react';
-import { useDecisions } from '../hooks/useProcess';
-import { PageHeader } from '../components/PageHeader';
-import { DecisionGraphSection } from '../components/DecisionGraphView';
-import { CreationWizard } from '../components/CreationWizard';
-import { useState } from 'react';
+import { notifications } from '@mantine/notifications';
 import { useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
+import relativeTime from 'dayjs/plugin/relativeTime';
+import { AlertTriangle, Edit2, Plus, Search, Table2, Trash2 } from 'lucide-react';
+import { useState, useTransition } from 'react';
+
+import { CreationWizard } from '../components/CreationWizard';
+import { DecisionGraphSection } from '../components/DecisionGraphView';
+import { PageHeader } from '../components/PageHeader';
 import { ErrorState } from '../components/state';
 import { hitPolicyOf } from '../domain/decisionTable';
+import { matchesQuery } from '../domain/textSearch';
+import { useDecisionImpact, useDecisions, useDeleteDecision } from '../hooks/useDecisions';
+import { errorMessage } from '../services/shared/errors';
+import type { ApiDecision } from '../services/types';
+
+dayjs.extend(relativeTime);
+
+const COLUMNS = 5;
 
 export function DecisionList({ onEdit, hideHeader }: { onEdit: (id: string) => void, hideHeader?: boolean }) {
   const navigate = useNavigate();
   const { data, isLoading, error, refetch } = useDecisions();
+  const deleteDecision = useDeleteDecision();
   const [wizardOpened, setWizardOpened] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [, startTransition] = useTransition();
+  // The decision waiting for "yes, delete it", with what depends on it fetched
+  // only once the question is asked.
+  const [pendingDelete, setPendingDelete] = useState<ApiDecision | null>(null);
+  const { data: impact, isLoading: impactLoading } = useDecisionImpact(pendingDelete?.id ?? null);
+
+  const confirmDelete = async () => {
+    if (!pendingDelete) return;
+    const { id, name } = pendingDelete;
+    try {
+      await deleteDecision.mutateAsync(id);
+      notifications.show({ title: 'Deleted', message: `${name} is gone.`, color: 'green' });
+      setPendingDelete(null);
+    } catch (err: unknown) {
+      notifications.show({ title: `Could not delete ${name}`, message: errorMessage(err, 'It was not deleted.'), color: 'red' });
+    }
+  };
 
   if (isLoading) {
     return (
@@ -43,15 +69,7 @@ export function DecisionList({ onEdit, hideHeader }: { onEdit: (id: string) => v
         <Card shadow="sm" radius="lg" withBorder p={0}>
           <Table.ScrollContainer minWidth={800}>
             <Table verticalSpacing="md" horizontalSpacing="xl">
-              <Table.Thead bg="gray.0">
-                <Table.Tr>
-                  <Table.Th>Decision Name</Table.Th>
-                  <Table.Th>Key</Table.Th>
-                  <Table.Th>Hit Policy</Table.Th>
-                  <Table.Th>Last Modified</Table.Th>
-                  <Table.Th ta="right">Actions</Table.Th>
-                </Table.Tr>
-              </Table.Thead>
+              <Table.Thead bg="gray.0"><HeaderRow /></Table.Thead>
               <Table.Tbody>
                 {Array.from({ length: 4 }).map((_, i) => (
                   <Table.Tr key={i}>
@@ -77,20 +95,16 @@ export function DecisionList({ onEdit, hideHeader }: { onEdit: (id: string) => v
   }
 
   const decisions = data?.decisions || [];
+  const shown = decisions.filter((def) => matchesQuery(searchQuery, def.name, def.key));
 
   return (
     <Stack gap="xl">
       {!hideHeader && (
-        <PageHeader 
-          title="Decision Tables" 
+        <PageHeader
+          title="Decision Tables"
           description="Manage your DMN-compatible decision tables and business rules."
           actions={
-            <Button 
-              variant="filled" 
-              color="indigo" 
-              leftSection={<Plus size={16} />}
-              onClick={() => setWizardOpened(true)}
-            >
+            <Button variant="filled" color="indigo" leftSection={<Plus size={16} />} onClick={() => setWizardOpened(true)}>
               Create New
             </Button>
           }
@@ -112,49 +126,45 @@ export function DecisionList({ onEdit, hideHeader }: { onEdit: (id: string) => v
 
       <Card shadow="sm" radius="lg" withBorder p={0}>
         <Box p="md">
-          <Group justify="space-between">
-            <Group flex={1}>
-              <TextInput 
-                placeholder="Search decisions..." 
-                leftSection={<Search size={16} />} 
-                style={{ flex: 1, maxWidth: 400 }}
-                variant="filled"
-                radius="md"
-              />
-              <Button variant="light" leftSection={<Filter size={16} />} radius="md">Filter</Button>
-            </Group>
-          </Group>
+          <TextInput
+            aria-label="Search decisions"
+            placeholder="Search decisions…"
+            leftSection={<Search size={16} />}
+            style={{ maxWidth: 400 }}
+            variant="filled"
+            radius="md"
+            onChange={(e) => {
+              const value = e.currentTarget.value;
+              startTransition(() => setSearchQuery(value));
+            }}
+          />
         </Box>
 
         <Table.ScrollContainer minWidth={800}>
           <Table verticalSpacing="md" horizontalSpacing="xl" highlightOnHover>
-            <Table.Thead bg="gray.0">
-              <Table.Tr>
-                <Table.Th>Decision Name</Table.Th>
-                <Table.Th>Key</Table.Th>
-                <Table.Th>Hit Policy</Table.Th>
-                <Table.Th>Last Modified</Table.Th>
-                <Table.Th ta="right">Actions</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
+            <Table.Thead bg="gray.0"><HeaderRow /></Table.Thead>
             <Table.Tbody>
-              {decisions.length === 0 ? (
+              {shown.length === 0 ? (
                 <Table.Tr>
-                  <Table.Td colSpan={5}>
-                    <Stack align="center" py={60} gap="sm">
-                      <ThemeIcon size={60} radius="xl" variant="light" color="gray">
-                        <Table2 size={32} />
-                      </ThemeIcon>
-                      <Text fw={700} size="lg">No decisions found</Text>
-                      <Text ta="center" c="dimmed" maw={400}>
-                        Define business rules in a tabular format to use them in your process flows.
-                      </Text>
-                      <Button variant="subtle" mt="md" onClick={() => setWizardOpened(true)}>Create your first decision</Button>
-                    </Stack>
+                  <Table.Td colSpan={COLUMNS}>
+                    {searchQuery ? (
+                      <Text ta="center" c="dimmed" py="xl">No decision matches “{searchQuery}”.</Text>
+                    ) : (
+                      <Stack align="center" py={60} gap="sm">
+                        <ThemeIcon size={60} radius="xl" variant="light" color="gray">
+                          <Table2 size={32} />
+                        </ThemeIcon>
+                        <Text fw={700} size="lg">No decisions found</Text>
+                        <Text ta="center" c="dimmed" maw={400}>
+                          Define business rules in a tabular format to use them in your process flows.
+                        </Text>
+                        <Button variant="subtle" mt="md" onClick={() => setWizardOpened(true)}>Create your first decision</Button>
+                      </Stack>
+                    )}
                   </Table.Td>
                 </Table.Tr>
               ) : (
-                decisions.map((def) => (
+                shown.map((def) => (
                   <Table.Tr key={def.id}>
                     <Table.Td>
                       <Group gap="sm">
@@ -165,7 +175,7 @@ export function DecisionList({ onEdit, hideHeader }: { onEdit: (id: string) => v
                       </Group>
                     </Table.Td>
                     <Table.Td>
-                      <Badge variant="outline" color="gray" radius="sm">{def.key}</Badge>
+                      <Badge variant="outline" color="gray" radius="sm" styles={{ label: { textTransform: 'none' } }}>{def.key}</Badge>
                     </Table.Td>
                     <Table.Td>
                       {/* The letter code means nothing to whoever owns the rule;
@@ -181,17 +191,13 @@ export function DecisionList({ onEdit, hideHeader }: { onEdit: (id: string) => v
                     </Table.Td>
                     <Table.Td>
                       <Group gap="xs" justify="flex-end">
-                        <Tooltip label="Edit Decision">
-                          <ActionIcon aria-label="Edit decision table" 
-                            variant="light" 
-                            color="blue" 
-                            onClick={() => onEdit(def.id)}
-                          >
+                        <Tooltip label="Edit decision">
+                          <ActionIcon aria-label={`Edit ${def.name}`} variant="light" color="blue" onClick={() => onEdit(def.id)}>
                             <Edit2 size={16} />
                           </ActionIcon>
                         </Tooltip>
                         <Tooltip label="Delete">
-                          <ActionIcon aria-label="Delete decision table" variant="light" color="red">
+                          <ActionIcon aria-label={`Delete ${def.name}`} variant="light" color="red" onClick={() => setPendingDelete(def)}>
                             <Trash2 size={16} />
                           </ActionIcon>
                         </Tooltip>
@@ -205,17 +211,68 @@ export function DecisionList({ onEdit, hideHeader }: { onEdit: (id: string) => v
         </Table.ScrollContainer>
       </Card>
 
-      <CreationWizard 
+      <Modal
+        opened={pendingDelete !== null}
+        onClose={() => setPendingDelete(null)}
+        title={<Text fw={700}>Delete {pendingDelete?.name}?</Text>}
+        radius="lg"
+      >
+        <Stack gap="md">
+          {impactLoading ? (
+            <Group gap="xs"><Loader size="xs" /><Text size="sm" c="dimmed">Checking what uses it…</Text></Group>
+          ) : impact && impact.running_instances > 0 ? (
+            <Alert color="red" icon={<AlertTriangle size={16} />} title={`${impact.running_instances} running ${impact.running_instances === 1 ? 'instance is' : 'instances are'} on their way to it`}>
+              <Text size="sm">They will fail at the step that evaluates it.</Text>
+              {(impact.processes ?? []).length > 0 && (
+                <List size="sm" mt="xs">
+                  {(impact.processes ?? []).map((p) => (
+                    <List.Item key={`${p.definition_id}-${p.version}`}>
+                      {p.definition_name || p.definition_key} v{p.version}
+                      {p.running_instances > 0 ? ` — ${p.running_instances} running` : ''}
+                    </List.Item>
+                  ))}
+                </List>
+              )}
+            </Alert>
+          ) : (
+            <Text size="sm">No running instance is using it right now.</Text>
+          )}
+          <Text size="sm">
+            Any process step that names <b>{pendingDelete?.key}</b> fails the next time it runs. This cannot be undone.
+          </Text>
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setPendingDelete(null)}>Cancel</Button>
+            <Button color="red" leftSection={<Trash2 size={14} />} onClick={confirmDelete} loading={deleteDecision.isPending} disabled={impactLoading}>
+              Delete
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <CreationWizard
         opened={wizardOpened}
         onClose={() => setWizardOpened(false)}
         initialType="decision"
-        onCreateDecision={(data) => {
-          navigate({ to: '/decision-editor', search: { name: data.name, key: data.key } });
-        }}
-        onCreateProcess={(data) => {
-          navigate({ to: '/designer', search: { name: data.name, key: data.key } });
-        }}
+        onCreateDecision={(data) => navigate({ to: '/decision-editor', search: { name: data.name, key: data.key } })}
+        onCreateProcess={(data) => navigate({ to: '/designer', search: { name: data.name, key: data.key } })}
       />
     </Stack>
+  );
+}
+
+function HeaderRow() {
+  return (
+    <Table.Tr>
+      <Table.Th>Decision</Table.Th>
+      <Table.Th>
+        <Tooltip label="What a process step names to evaluate it">
+          <span>Reference</span>
+        </Tooltip>
+      </Table.Th>
+      <Table.Th>Hit Policy</Table.Th>
+      {/* The column read "Last Modified" and showed created_at. */}
+      <Table.Th>Created</Table.Th>
+      <Table.Th ta="right">Actions</Table.Th>
+    </Table.Tr>
   );
 }

@@ -7,10 +7,12 @@ import { useAppStore } from '../store/useAppStore';
 // so every property access on the result failed once the processService
 // facade stopped being typed `any`. Deriving the fallback from the service's
 // own signature keeps both branches the same shape.
+const NOTIFICATION_POLL_INTERVAL_MS = 60_000;
+
 type NotificationsResult = Awaited<ReturnType<typeof processService.listNotifications>>;
 
 export const useNotifications = () => {
-  const { user } = useAppStore();
+  const user = useAppStore((state) => state.user);
   const queryClient = useQueryClient();
 
   const query = useQuery({
@@ -20,7 +22,9 @@ export const useNotifications = () => {
         ? processService.listNotifications(user.username, signal)
         : Promise.resolve({ notifications: [], error: undefined } as NotificationsResult),
     enabled: !!user,
-    refetchInterval: 30000, // Poll every 30s as a fallback to SSE
+    // A fallback for when the SSE stream is not delivering; a minute is
+    // often enough for that, and half the polling load of the 30s it was.
+    refetchInterval: NOTIFICATION_POLL_INTERVAL_MS,
   });
 
   const markAsRead = useMutation({

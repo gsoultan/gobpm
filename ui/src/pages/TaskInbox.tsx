@@ -27,6 +27,11 @@ import {
   Box,
   Pagination,
 } from '@mantine/core';
+// Imported here rather than at the root: the date-picker stylesheet is only
+// needed where a picker is, and importing it eagerly pulled the whole
+// @mantine/dates chunk (~19 kB gzipped) onto the critical path for every
+// visitor, picker or not.
+import '@mantine/dates/styles.css';
 import { DateInput } from '@mantine/dates';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -58,6 +63,7 @@ import { TableLoadingState, EmptyState } from '../components/state';
 import type { Task } from '../services/types';
 import type { JsonObject } from '@bufbuild/protobuf';
 import { StatusBadge } from '../components/StatusBadge';
+import { taskReference } from '../domain/taskReference';
 import { urgencyOf } from '../domain/taskUrgency';
 import { VirtualRows } from '../components/VirtualRows';
 import { useRef } from 'react';
@@ -100,7 +106,7 @@ interface TaskRowProps {
   task: Task;
   isSelected: boolean;
   onToggleSelection: (id: string) => void;
-  onClaim: (id: string) => void;
+  onClaim: (id: string, taskName?: string) => void;
   onUnclaim: (id: string) => void;
   onComplete: (task: Task) => void;
   onEdit: (task: Task) => void;
@@ -118,7 +124,7 @@ interface KanbanViewProps {
   tasks: Task[];
   selectedTaskIds: string[];
   onToggleSelection: (id: string) => void;
-  onClaim: (id: string) => void;
+  onClaim: (id: string, taskName?: string) => void;
   onUnclaim: (id: string) => void;
   onComplete: (task: Task) => void;
   onEdit: (task: Task) => void;
@@ -128,6 +134,8 @@ interface KanbanViewProps {
 }
 
 function TaskRow({ task, isSelected, onToggleSelection, onClaim, onUnclaim, onComplete, onEdit, onReassign, navigate }: TaskRowProps) {
+  const reference = taskReference(task.variables as Record<string, unknown> | undefined, task.instance?.id);
+
   return (
     <Table.Tr bg={isSelected ? 'blue.0' : undefined}>
       <Table.Td>
@@ -206,10 +214,20 @@ function TaskRow({ task, isSelected, onToggleSelection, onClaim, onUnclaim, onCo
       </Table.Td>
       <Table.Td>
         <Stack gap={0}>
-          <Group gap={4}>
-            <Text size="sm" fw={600}>{(task.instance?.id ?? '').substring(0, 8)}</Text>
-            <Tooltip label="View Process Instance Path">
-              <ActionIcon aria-label="Open task" 
+          <Group gap={4} wrap="nowrap">
+            {/*
+              What this piece of work *is*, not which row of a table it came
+              from. This showed the first eight characters of the instance
+              identifier — and those are time-ordered, so every approval created
+              in the same period read the same eight characters. The code that
+              remains is taken from the end, where they differ, and is there for
+              quoting to somebody rather than for recognising the work.
+            */}
+            <Text size="sm" fw={600} lineClamp={2}>
+              {reference.label || `Reference ${reference.code}`}
+            </Text>
+            <Tooltip label="See this on the diagram">
+              <ActionIcon aria-label={`See ${task.name} on the process diagram`}
                 variant="subtle" 
                 size="xs"
                 onClick={() => navigate({
@@ -221,6 +239,9 @@ function TaskRow({ task, isSelected, onToggleSelection, onClaim, onUnclaim, onCo
               </ActionIcon>
             </Tooltip>
           </Group>
+          {reference.label && reference.code && (
+            <Text size="xs" c="dimmed">Reference {reference.code}</Text>
+          )}
           <Text size="xs" c="dimmed">Created: {new Date(task.createdAt).toLocaleDateString()}</Text>
         </Stack>
       </Table.Td>
@@ -251,7 +272,7 @@ function TaskRow({ task, isSelected, onToggleSelection, onClaim, onUnclaim, onCo
               size="xs" 
               variant="filled" 
               color="blue"
-              onClick={() => onClaim(task.id)}
+              onClick={() => onClaim(task.id, task.name)}
             >
               Claim Task
             </Button>
@@ -401,7 +422,7 @@ function TaskCard({ task, isSelected, onToggleSelection, onClaim, onComplete, on
 
       <Group grow mt="md">
         {task.status === 'unclaimed' ? (
-          <Button size="compact-xs" variant="light" color="blue" onClick={() => onClaim(task.id)}>
+          <Button size="compact-xs" variant="light" color="blue" onClick={() => onClaim(task.id, task.name)}>
             Claim
           </Button>
         ) : (
@@ -478,7 +499,6 @@ export function TaskInbox() {
   const tableScrollRef = useRef<HTMLDivElement>(null);
   const {
     currentUser,
-    setCurrentUser,
     activeTab,
     setActiveTab,
     searchQuery,
@@ -527,13 +547,13 @@ export function TaskInbox() {
 
   const onFormSubmit = (values: Record<string, unknown>) => {
     if (selectedTask) {
-      handleComplete(selectedTask.id, values as JsonObject);
+      handleComplete(selectedTask.id, values as JsonObject, selectedTask.name);
     }
   };
 
   const onCompleteClick = (task: Task) => {
     if (task.type === 'manualTask') {
-      handleComplete(task.id, {});
+      handleComplete(task.id, {}, task.name);
     } else {
       setSelectedTask(task);
     }
@@ -561,16 +581,6 @@ export function TaskInbox() {
                 { label: <Center><LayoutGrid size={14} /><Box ml={4}>Kanban</Box></Center>, value: 'kanban' },
               ]}
               radius="md"
-            />
-            <Select
-              size="xs" 
-              data={availableUsers} 
-              value={currentUser} 
-              onChange={(val: string | null) => val && setCurrentUser(val)} 
-              leftSection={<User size={14} />}
-              placeholder="Switch User"
-              w={150}
-              searchable
             />
             <TextInput 
               placeholder="Search tasks..." 
@@ -705,7 +715,11 @@ export function TaskInbox() {
                     </Table.Th>
                     <Table.Th style={{ cursor: 'pointer' }} onClick={() => handleSort('name')}>Task Info</Table.Th>
                     <Table.Th>Assignment</Table.Th>
-                    <Table.Th style={{ cursor: 'pointer' }} onClick={() => handleSort('instanceId')}>Process Instance</Table.Th>
+                    {/* The widest column, deliberately: it is the one that says which piece
+                        of work a row is. Clamped to one line in a narrow column it
+                        truncated to "Expense…", which distinguishes no better than the
+                        identifier it replaced. */}
+                    <Table.Th miw={220} style={{ cursor: 'pointer' }} onClick={() => handleSort('instanceId')}>What it is about</Table.Th>
                     <Table.Th style={{ cursor: 'pointer' }} onClick={() => handleSort('dueDate')}>Timeline</Table.Th>
                     <Table.Th style={{ cursor: 'pointer' }} onClick={() => handleSort('status')}>Status</Table.Th>
                     <Table.Th ta="right">Actions</Table.Th>

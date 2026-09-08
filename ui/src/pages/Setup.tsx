@@ -42,6 +42,7 @@ import {
 } from 'lucide-react';
 import { processService } from '../services/api';
 import { useAppStore } from '../store/useAppStore';
+import { MIN_PASSWORD_LENGTH } from '../domain/password';
 import { useEffect } from 'react';
 
 const DATABASE_DRIVERS = [
@@ -59,7 +60,6 @@ const DEFAULT_PORTS: Record<string, number> = {
 
 const MIN_ENCRYPTION_KEY_LENGTH = 16;
 const GENERATED_KEY_LENGTH = 32;
-const MIN_PASSWORD_LENGTH = 6;
 const GENERATED_PASSWORD_LENGTH = 16;
 
 const CRYPTO_CHARSET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+';
@@ -408,7 +408,7 @@ export function Setup({ onComplete }: { onComplete: () => void }) {
                         {...form.getInputProps('encryption_key')}
                       />
                       <Tooltip label="Generate secure key">
-                        <ActionIcon aria-label="Refresh"
+                        <ActionIcon aria-label="Generate encryption key"
                           variant="light"
                           color="blue"
                           size="lg"
@@ -421,7 +421,7 @@ export function Setup({ onComplete }: { onComplete: () => void }) {
                       <CopyButton value={form.values.encryption_key} timeout={2000}>
                         {({ copied, copy }) => (
                           <Tooltip label={copied ? 'Copied' : 'Copy to clipboard'}>
-                            <ActionIcon aria-label="Confirm"
+                            <ActionIcon aria-label="Copy encryption key"
                               variant="light"
                               color={copied ? 'green' : 'gray'}
                               size="lg"
@@ -446,7 +446,7 @@ export function Setup({ onComplete }: { onComplete: () => void }) {
                         {...form.getInputProps('jwt_secret')}
                       />
                       <Tooltip label="Generate secure secret">
-                        <ActionIcon aria-label="Refresh"
+                        <ActionIcon aria-label="Generate JWT secret"
                           variant="light"
                           color="blue"
                           size="lg"
@@ -459,7 +459,7 @@ export function Setup({ onComplete }: { onComplete: () => void }) {
                       <CopyButton value={form.values.jwt_secret} timeout={2000}>
                         {({ copied, copy }) => (
                           <Tooltip label={copied ? 'Copied' : 'Copy to clipboard'}>
-                            <ActionIcon aria-label="Confirm"
+                            <ActionIcon aria-label="Copy JWT secret"
                               variant="light"
                               color={copied ? 'green' : 'gray'}
                               size="lg"
@@ -525,7 +525,7 @@ export function Setup({ onComplete }: { onComplete: () => void }) {
                         {...form.getInputProps('admin_password')}
                       />
                       <Tooltip label="Generate secure password">
-                        <ActionIcon aria-label="Refresh"
+                        <ActionIcon aria-label="Generate administrator password"
                           variant="light"
                           color="blue"
                           size="lg"
@@ -538,7 +538,7 @@ export function Setup({ onComplete }: { onComplete: () => void }) {
                       <CopyButton value={form.values.admin_password} timeout={2000}>
                         {({ copied, copy }) => (
                           <Tooltip label={copied ? 'Copied' : 'Copy to clipboard'}>
-                            <ActionIcon aria-label="Confirm"
+                            <ActionIcon aria-label="Copy administrator password"
                               variant="light"
                               color={copied ? 'green' : 'gray'}
                               size="lg"

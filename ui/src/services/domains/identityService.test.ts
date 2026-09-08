@@ -1,0 +1,65 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { identityService } from "./identityService";
+import { stubFetch } from "../shared/stubbedFetch";
+
+const newUser = {
+  organization_id: "org-1",
+  username: "dana",
+  password: "correct horse battery",
+  full_name: "Dana Scully",
+  display_name: "Dana",
+  organization: "",
+  email: "dana@example.com",
+  roles: ["USER"],
+};
+
+describe("identityService writes", () => {
+  let restore = () => {};
+  afterEach(() => restore());
+
+  test("createUser raises the refusal instead of returning it", async () => {
+    ({ restore } = stubFetch({ err: "username already taken" }));
+    await expect(identityService.createUser(newUser)).rejects.toThrow("username already taken");
+  });
+
+  test("createUser sends the organization as a membership the server reads", async () => {
+    const stub = stubFetch({ user: { id: "u-1" } });
+    restore = stub.restore;
+    await identityService.createUser(newUser);
+
+    const body = stub.sent[0].body as { user: Record<string, unknown>; password: string };
+    expect(body.user.organizations).toEqual([{ id: "org-1" }]);
+    // Neither is read by the server; the free-text one broke the decode.
+    expect(body.user).not.toHaveProperty("organization_id");
+    expect(body.user).not.toHaveProperty("organization");
+    expect(body.password).toBe("correct horse battery");
+  });
+
+  test("updateUser omits roles when the caller did not set them", async () => {
+    const stub = stubFetch({});
+    restore = stub.restore;
+    await identityService.updateUser("u-1", { full_name: "Dana Scully", display_name: "Dana", email: "dana@example.com" });
+
+    const body = stub.sent[0].body as { user: Record<string, unknown> };
+    expect(body.user).not.toHaveProperty("roles");
+    expect(body.user).not.toHaveProperty("organization");
+    expect(body.user.id).toBe("u-1");
+  });
+
+  test("createGroup raises the refusal instead of returning it", async () => {
+    ({ restore } = stubFetch({ err: "group name in use" }));
+    await expect(
+      identityService.createGroup({ organization_id: "org-1", name: "Approvers", description: "", roles: ["USER"] }),
+    ).rejects.toThrow("group name in use");
+  });
+
+  test("createGroup and updateGroup send the group's roles", async () => {
+    const stub = stubFetch({ group: { id: "g-1" } });
+    restore = stub.restore;
+    await identityService.createGroup({ organization_id: "org-1", name: "Approvers", description: "", roles: ["OPERATOR"] });
+    await identityService.updateGroup("g-1", { name: "Approvers", description: "", roles: ["OPERATOR", "USER"] });
+
+    expect((stub.sent[0].body as { group: { roles: string[] } }).group.roles).toEqual(["OPERATOR"]);
+    expect((stub.sent[1].body as { group: { roles: string[] } }).group.roles).toEqual(["OPERATOR", "USER"]);
+  });
+});

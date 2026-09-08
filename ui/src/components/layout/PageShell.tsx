@@ -49,7 +49,9 @@ interface PageHeaderProps {
 export function PageHeader({ title, description, actions, meta }: PageHeaderProps) {
   return (
     <Box
-      component="header"
+      // Deliberately not a <header>: this is the title block of a page, not the
+      // banner of the site. Rendering it as one put a second banner landmark on
+      // every screen, inside the shell's own.
       pb="lg"
       style={{
         // light-dark() works now that postcss-preset-mantine is installed;

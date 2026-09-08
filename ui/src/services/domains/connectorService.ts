@@ -28,6 +28,8 @@ type ConnectorResultResponse = {
   err?: string;
 };
 
+type ManifestListResponse = { manifests?: ApiConnectorManifest[]; err?: string };
+
 export const connectorService = {
   async listConnectors(signal?: AbortSignal) {
     const data = await requestJSON<ConnectorListResponse>("/connectors", { signal });
@@ -40,7 +42,7 @@ export const connectorService = {
       body: { connector },
       signal,
     });
-    return { connector: data.connector, err: data.err };
+    return { connector: raiseIfRefused(data).connector, err: data.err };
   },
 
   async updateConnector(connector: ApiConnector, signal?: AbortSignal) {
@@ -71,7 +73,7 @@ export const connectorService = {
       body: { instance },
       signal,
     });
-    return { instance: data.instance, err: data.err };
+    return { instance: raiseIfRefused(data).instance, err: data.err };
   },
 
   async updateConnectorInstance(instance: ApiConnectorInstance, signal?: AbortSignal) {
@@ -102,12 +104,7 @@ export const connectorService = {
       body: { connector_key: connectorKey, config, payload },
       signal,
     });
-
-    if (data.err) {
-      throw new Error(data.err);
-    }
-
-    return data.result;
+    return raiseIfRefused(data).result;
   },
 
   async executeScript(
@@ -121,20 +118,12 @@ export const connectorService = {
       body: { script, script_format: scriptFormat, variables },
       signal,
     });
-
-    if (data.err) {
-      throw new Error(data.err);
-    }
-
-    return data.variables;
+    return raiseIfRefused(data).variables;
   },
 
   /** The connectors installed as documents rather than compiled in. */
   async listConnectorManifests(signal?: AbortSignal) {
-    const data = await requestJSON<{ manifests?: ApiConnectorManifest[]; err?: string }>(
-      "/connector-manifests",
-      { signal },
-    );
+    const data = await requestJSON<ManifestListResponse>("/connector-manifests", { signal });
     return data.manifests ?? [];
   },
 
@@ -144,25 +133,33 @@ export const connectorService = {
    * `format` is "manifest" or "openapi" — one endpoint for both, because what a
    * person has in front of them is "a file the vendor published" and being asked
    * which upload button it belongs to is a question about our implementation.
+   *
+   * The body is passed as an object: `requestJSON` serialises it. Pre-serialising
+   * here sent the server a JSON string literal, which its struct decoder
+   * refuses, and the refusal arrived as `err` — which was then dropped, so the
+   * screen reported "0 connectors installed" in green.
    */
   async installConnectorManifest(document: string, format: "manifest" | "openapi", signal?: AbortSignal) {
-    const data = await requestJSON<{ manifests?: ApiConnectorManifest[]; err?: string }>(
-      "/connector-manifests",
-      { method: "POST", body: JSON.stringify({ document, format }), signal },
-    );
-    return data.manifests ?? [];
+    const data = await requestJSON<ManifestListResponse>("/connector-manifests", {
+      method: "POST",
+      body: { document, format },
+      signal,
+    });
+    return raiseIfRefused(data).manifests ?? [];
   },
 
   async setConnectorManifestEnabled(id: string, enabled: boolean, signal?: AbortSignal) {
-    return requestJSON<{ err?: string }>(`/connector-manifests/${id}/enabled`, {
+    const data = await requestJSON<{ err?: string }>(`/connector-manifests/${id}/enabled`, {
       method: "POST",
-      body: JSON.stringify({ enabled }),
+      body: { enabled },
       signal,
     });
+    return { err: raiseIfRefused(data).err };
   },
 
   async deleteConnectorManifest(id: string, signal?: AbortSignal) {
-    return requestJSON<{ err?: string }>(`/connector-manifests/${id}`, { method: "DELETE", signal });
+    const data = await requestJSON<{ err?: string }>(`/connector-manifests/${id}`, { method: "DELETE", signal });
+    return { err: raiseIfRefused(data).err };
   },
 };
 

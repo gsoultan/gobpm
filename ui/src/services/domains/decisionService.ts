@@ -68,7 +68,7 @@ export const decisionService = {
       method: "POST",
       body: { decision: params },
     });
-    return { id: data.id, err: data.err };
+    return { id: raiseIfRefused(data).id };
   },
 
   async updateDecision(id: string, params: CreateDecisionPayload) {

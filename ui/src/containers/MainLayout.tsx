@@ -6,6 +6,7 @@ import { BookOpen, ExternalLink, FolderGit2, Lightbulb } from 'lucide-react';
 import React from 'react';
 import { AppHeader, Sidebar } from '../components/shell';
 import { EmptyState } from '../components/state';
+import { selectionNeedsUpdate, resolveSelection } from '../domain/activeSelection';
 import { useOrganizations } from '../hooks/useOrganization';
 import { useProjects } from '../hooks/useProcess';
 import { useAppStore } from '../store/useAppStore';
@@ -48,18 +49,39 @@ export function MainLayout({ children }: MainLayoutProps) {
     () => organizationsData?.organizations ?? user?.organizations ?? [],
     [organizationsData, user],
   );
-  const projects = projectsData?.projects ?? [];
+  const projects = useMemo(() => projectsData?.projects ?? [], [projectsData]);
 
-  // Fall back to the first organization the caller belongs to when the stored
-  // one is no longer among them.
+  /*
+   * Nobody should have to choose a project before the app will show them
+   * anything.
+   *
+   * Signing in left both of these unset, so the first thing after entering a
+   * password was "Choose a project to continue" on every screen — even for
+   * somebody who belongs to exactly one. The rules live in
+   * domain/activeSelection.ts: keep what is selected if it is still available,
+   * otherwise take the first, and only answer "none" when there really is
+   * nothing.
+   *
+   * Both effects wait for the list to have *loaded*. An empty array means
+   * "there are none", so acting on one that is merely in flight would clear a
+   * good selection and flash the empty state on every reload.
+   */
+  const organizationsLoaded = organizations.length > 0;
   React.useEffect(() => {
-    if (organizations.length === 0) return;
-    const stillAMember = organizations.some((o: { id: string }) => o.id === currentOrganizationId);
-    if (!stillAMember) {
-      setCurrentOrganizationId(organizations[0].id);
-      setCurrentProjectId(null);
-    }
-  }, [organizations, currentOrganizationId, setCurrentOrganizationId, setCurrentProjectId]);
+    if (!organizationsLoaded) return;
+    if (!selectionNeedsUpdate(organizations, currentOrganizationId)) return;
+    setCurrentOrganizationId(resolveSelection(organizations, currentOrganizationId));
+    // The projects belong to the old organization, so the stored one cannot be
+    // right; the effect below picks the new organization's first.
+    setCurrentProjectId(null);
+  }, [organizationsLoaded, organizations, currentOrganizationId, setCurrentOrganizationId, setCurrentProjectId]);
+
+  const projectsLoaded = projectsData !== undefined;
+  React.useEffect(() => {
+    if (!projectsLoaded) return;
+    if (!selectionNeedsUpdate(projects, currentProjectId)) return;
+    setCurrentProjectId(resolveSelection(projects, currentProjectId));
+  }, [projectsLoaded, projects, currentProjectId, setCurrentProjectId]);
 
   const isDesigner = location.pathname.includes('/designer');
   const worksWithoutProject =
@@ -89,7 +111,7 @@ export function MainLayout({ children }: MainLayoutProps) {
         />
       </AppShell.Header>
 
-      <AppShell.Navbar withBorder={false}>
+      <AppShell.Navbar withBorder={false} aria-label="Main navigation">
         <Sidebar />
       </AppShell.Navbar>
 
@@ -105,18 +127,27 @@ export function MainLayout({ children }: MainLayoutProps) {
           on the way across. The designer is exempt: a canvas wants every pixel.
         */}
         <Box p={isDesigner ? 0 : 'xl'} maw={isDesigner ? undefined : 1440} mx="auto">
-          {!currentProjectId && !worksWithoutProject ? (
+          {!currentProjectId && !worksWithoutProject && projectsLoaded ? (
+            /*
+              A project is chosen automatically, so reaching this means there
+              is none to choose — a brand new account, or one whose access was
+              withdrawn. It used to say "pick one from the header" even when the
+              header had nothing in it to pick.
+
+              Gated on projectsLoaded so a reload does not flash this while the
+              list is still on its way.
+            */
             <EmptyState
               icon={FolderGit2}
-              title="Choose a project to continue"
-              description="Processes, tasks and instances all belong to a project. Pick one from the header, or create your first."
+              title="You are not in a project yet"
+              description="Processes, tasks and instances all belong to a project. Create one to get started, or ask an administrator to add you to theirs."
               action={
                 <Button component={Link} to="/projects">
                   Go to projects
                 </Button>
               }
             />
-          ) : (
+          ) : !currentProjectId && !worksWithoutProject ? null : (
             children
           )}
         </Box>

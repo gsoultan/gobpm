@@ -1,4 +1,5 @@
 import { requestJSON } from "../shared/rest";
+import { raiseIfRefused } from "../raise";
 
 /** Mirrors entities.Webhook. */
 export interface ApiWebhook {
@@ -37,24 +38,29 @@ export const webhookService = {
     return { webhooks: data.webhooks ?? [], err: data.err };
   },
 
+  // requestJSON serialises the body itself. These used to hand it a string
+  // that was already JSON, so the server received a quoted string where it
+  // expected an object and refused every create and every enable/disable.
   async createWebhook(payload: CreateWebhookPayload, signal?: AbortSignal) {
     const data = await requestJSON<CreateWebhookResponse>("/webhooks", {
       method: "POST",
-      body: JSON.stringify(payload),
+      body: payload,
       signal,
     });
-    return data.webhook;
+    return raiseIfRefused(data).webhook;
   },
 
   async setWebhookEnabled(id: string, enabled: boolean, signal?: AbortSignal) {
-    return requestJSON<{ err?: string }>(`/webhooks/${id}/enabled`, {
+    const data = await requestJSON<{ err?: string }>(`/webhooks/${id}/enabled`, {
       method: "POST",
-      body: JSON.stringify({ enabled }),
+      body: { enabled },
       signal,
     });
+    return { err: raiseIfRefused(data).err };
   },
 
   async deleteWebhook(id: string, signal?: AbortSignal) {
-    return requestJSON<{ err?: string }>(`/webhooks/${id}`, { method: "DELETE", signal });
+    const data = await requestJSON<{ err?: string }>(`/webhooks/${id}`, { method: "DELETE", signal });
+    return { err: raiseIfRefused(data).err };
   },
 };

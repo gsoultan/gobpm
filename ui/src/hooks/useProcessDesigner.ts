@@ -14,9 +14,10 @@ import { notifications } from '@mantine/notifications';
 import { useDisclosure, useHotkeys } from '@mantine/hooks';
 import { v7 as uuidv7 } from 'uuid';
 import { DECIDE_GROUP_KIND, buildDecideGroup } from '../domain/decideGroup';
-import { isEndingNode } from '../domain/bpmnVocabulary';
+import { shouldAskRollout } from '../domain/versionRollout';
 import {
   useCreateDefinition,
+  useDefinitionVersions,
   useDefinition,
   useExecutionPath,
   useExportDefinition,
@@ -25,57 +26,26 @@ import {
 } from './useProcess';
 import { useAppStore } from '../store/useAppStore';
 import { buildDefinitionPayload, mapLoadedEdges, mapLoadedNodes } from '../mappers/definitionMapper';
+import { hasBlockingIssues, validateProcess } from '../domain/processValidation';
+import {
+  buildDraft,
+  describeDraftAge,
+  draftKey,
+  isWorthSaving,
+  parseDraft,
+  shouldOfferDraft,
+  type DesignerDraft,
+} from '../domain/designerDraft';
 import { useDesignerHistory } from './useDesignerHistory';
 import { useDesignerCollaboration } from './useDesignerCollaboration';
 import type { BPMNNodeData, BPMNEdgeData } from '../types/bpmn';
 import type { ApiNode, ApiFlow } from '../services/types';
-export type ValidationIssue = {
-  message: string;
-  severity: 'error' | 'warning';
-  id?: string;
-  /** What to do about it, when the check knows. */
-  suggestion?: string;
-};
+// The issue shape lives beside the checks that produce it. Re-exported here
+// because the designer page and the checklist modal import it from the hook.
+export type { ValidationIssue } from '../domain/processValidation';
 
 // mapLoadedNodes, mapLoadedEdges, and buildDefinitionPayload have been moved to
 // src/mappers/definitionMapper.ts (FE-ARCH-4, FE-ARCH-6).
-
-function validateProcessModel(nodes: Node<BPMNNodeData>[], edges: Edge<BPMNEdgeData>[]): ValidationIssue[] {
-  if (nodes.length === 0) {
-    return [{ message: 'Process is empty', severity: 'warning' }];
-  }
-
-  const issues: ValidationIssue[] = [];
-  const hasStart = nodes.some((node) => node.type === 'startEvent');
-  const hasEnd = nodes.some((node) => isEndingNode(node.type));
-
-  if (!hasStart) {
-    issues.push({ message: 'Missing Start Event', severity: 'error' });
-  }
-
-  if (!hasEnd) {
-    issues.push({ message: 'Missing End Event', severity: 'error' });
-  }
-
-  nodes.forEach((node) => {
-    const incoming = edges.filter((edge) => edge.target === node.id);
-    const outgoing = edges.filter((edge) => edge.source === node.id);
-
-    if (node.type !== 'startEvent' && incoming.length === 0) {
-      issues.push({ message: `Node "${node.data.label}" has no incoming flows`, severity: 'warning', id: node.id });
-    }
-
-    if (!isEndingNode(node.type) && outgoing.length === 0) {
-      issues.push({ message: `Node "${node.data.label}" has no outgoing flows`, severity: 'warning', id: node.id });
-    }
-
-    if (node.type === 'exclusiveGateway' && outgoing.length < 2) {
-      issues.push({ message: 'Gateway should have at least 2 outgoing flows', severity: 'warning', id: node.id });
-    }
-  });
-
-  return issues;
-}
 
 function autoLayoutNodes(nodes: Node<BPMNNodeData>[], edges: Edge<BPMNEdgeData>[]): Node<BPMNNodeData>[] {
   const nextNodes = [...nodes];
@@ -174,8 +144,12 @@ export function useProcessDesigner({ definitionId, instanceId, initialName, init
   const [spotlightOpened, { toggle: toggleSpotlight, close: closeSpotlight }] = useDisclosure(false);
   const [checklistOpened, { open: openChecklist, close: closeChecklist }] = useDisclosure(false);
   const [clearCanvasOpened, { open: openClearCanvas, close: closeClearCanvas }] = useDisclosure(false);
+  const [rolloutOpened, { open: openRollout, close: closeRollout }] = useDisclosure(false);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
-  const [isAutosaving, setIsAutosaving] = useState(false);
+  // A draft found in storage that is newer than what the server returned. Held
+  // until the person says whether to restore it; nothing is applied behind
+  // their back, because the draft may be a colleague's abandoned experiment.
+  const [offeredDraft, setOfferedDraft] = useState<DesignerDraft | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { currentProjectId } = useAppStore();
@@ -183,9 +157,12 @@ export function useProcessDesigner({ definitionId, instanceId, initialName, init
   const { data: pathData } = useExecutionPath(instanceId || null);
   const { data: instanceData } = useInstance(instanceId || null);
   const createDefinition = useCreateDefinition();
+  // What is already deployed under this key, so the deploy dialog can say which
+  // version stays live and how much work is still running on it.
+  const { data: versionData } = useDefinitionVersions(processKey || null);
   const exportMutation = useExportDefinition();
   const importMutation = useImportDefinition();
-  const issues = useMemo(() => validateProcessModel(nodes, edges), [nodes, edges]);
+  const issues = useMemo(() => validateProcess(nodes, edges), [nodes, edges]);
 
   // FE-ARCH-5: Sub-hook for undo/redo history management.
   const { history, historyIndex, pushToHistory, undo: undoHistory, redo: redoHistory } =
@@ -201,33 +178,59 @@ export function useProcessDesigner({ definitionId, instanceId, initialName, init
   const undo = useCallback(() => undoHistory(setNodes, setEdges), [undoHistory, setNodes, setEdges]);
   const redo = useCallback(() => redoHistory(setNodes, setEdges), [redoHistory, setNodes, setEdges]);
 
-  const proceedWithSave = useCallback(() => {
+  const versions = useMemo(() => versionData?.versions ?? [], [versionData]);
+
+  /**
+   * Deploys, either live or staged.
+   *
+   * The distinction only reaches the wire; what it means for work in flight is
+   * the same either way, and the success message says so. Instances that are
+   * already running finish on the version they started on — that is the engine's
+   * rule, not a setting — so the only thing this decides is where the next
+   * instance begins.
+   */
+  const proceedWithSave = useCallback((stage = false) => {
     const definition = buildDefinitionPayload(processName, processKey, nodes, edges);
 
-    createDefinition.mutate(definition, {
-      onSuccess: () => {
+    createDefinition.mutate({ definition, stage }, {
+      onSuccess: (result) => {
         closeChecklist();
+        closeRollout();
+        // The draft has been published, so keeping it would offer the same work
+        // back on the next open as though it were unsaved.
+        try {
+          localStorage.removeItem(draftKey(definitionId));
+        } catch {
+          // Storage being unavailable does not make the deploy less successful.
+        }
+        setOfferedDraft(null);
+        const version = result?.version ? `v${result.version}` : 'This version';
         notifications.show({
-          title: 'Deployment Successful',
-          message: `Process model "${processName}" has been deployed.`,
-          color: 'green',
+          title: stage ? 'Staged' : 'Deployed',
+          message: stage
+            ? `${version} of "${processName}" is saved but not live. Promote it from Version history when you are ready.`
+            : `${version} of "${processName}" is live. New instances run it; anything already running finishes on its own version.`,
+          color: stage ? 'blue' : 'green',
         });
       },
       onError: (error) => {
         notifications.show({
-          title: 'Deployment Failed',
+          title: stage ? 'Could not stage this version' : 'Deployment Failed',
           message: error.message,
           color: 'red',
         });
       },
     });
-  }, [closeChecklist, createDefinition, edges, nodes, processKey, processName]);
+  }, [closeChecklist, closeRollout, createDefinition, definitionId, edges, nodes, processKey, processName]);
 
   const onSave = useCallback(() => {
-    if (issues.some((issue) => issue.severity === 'error')) {
+    if (hasBlockingIssues(issues)) {
+      // The checklist lists each problem and what to do about it; a toast that
+      // only says "fix the errors" leaves the person hunting for them.
+      openChecklist();
       notifications.show({
-        title: 'Validation Failed',
-        message: 'Please fix the errors before deploying.',
+        title: 'This process would not run',
+        message: 'Deploy is held until the problems listed are fixed.',
         color: 'red',
       });
       return;
@@ -236,8 +239,14 @@ export function useProcessDesigner({ definitionId, instanceId, initialName, init
       openChecklist();
       return;
     }
+    // Only ask when there is a version that could stay live. The first deploy of
+    // a process has no incumbent, so the question would have one answer.
+    if (shouldAskRollout(versions)) {
+      openRollout();
+      return;
+    }
     proceedWithSave();
-  }, [issues, openChecklist, proceedWithSave]);
+  }, [issues, openChecklist, openRollout, proceedWithSave, versions]);
 
   const onExport = useCallback(() => {
     if (!definitionId) {
@@ -497,7 +506,16 @@ export function useProcessDesigner({ definitionId, instanceId, initialName, init
           return edge;
         }
 
-        const updatedEdge = { ...edge, label, data: { ...edge.data, ...data } };
+        const mergedData = { ...edge.data, ...data };
+        // The arrow's caption is the condition it carries, never a separate
+        // string somebody typed: a sequence flow has no name on the server, so
+        // a typed caption could not be saved, and the save mapper used to
+        // deploy it as the condition instead. Deriving it here keeps the canvas
+        // honest wherever the condition is edited from.
+        const caption = typeof mergedData.condition === 'string' && mergedData.condition !== ''
+          ? mergedData.condition
+          : '';
+        const updatedEdge = { ...edge, label: caption || label, data: mergedData };
         setSelectedEdge((currentSelectedEdge) => {
           if (currentSelectedEdge?.id !== id) {
             return currentSelectedEdge;
@@ -535,7 +553,7 @@ export function useProcessDesigner({ definitionId, instanceId, initialName, init
 
   useHotkeys([
     ['mod+K', () => toggleSpotlight()],
-    ['mod+S', () => onSave()],
+    ['mod+S', () => onSaveDraft()],
     ['mod+I', () => onImport()],
     ['mod+E', () => onExport()],
     ['mod+Z', () => undo()],
@@ -625,23 +643,95 @@ export function useProcessDesigner({ definitionId, instanceId, initialName, init
     }, 100);
   }, [loadedData, reactFlowInstance]);
 
-  // FE-ARCH-12: Autosave draft to localStorage on a 3-second debounce.
-  // Uses a typed DraftDefinition shape to ensure the saved data is readable.
+  // Offer back anything this browser autosaved after the version that was
+  // deployed. Runs once per definition; the answer is the person's to give.
+  const draftChecked = useRef<string | null>(null);
   useEffect(() => {
-    if (nodes.length === 0) {
+    const key = draftKey(definitionId);
+    if (draftChecked.current === key) {
       return;
     }
+    // For a saved process, wait until the server's copy has arrived so the two
+    // timestamps can be compared; a new process has nothing to wait for.
+    if (definitionId && !loadedData?.definition) {
+      return;
+    }
+    draftChecked.current = key;
 
-    const timer = setTimeout(() => {
-      setIsAutosaving(true);
-      const draft = { nodes, edges, processName, processKey, timestamp: new Date().toISOString() };
-      localStorage.setItem(`metis_draft_${definitionId ?? 'new'}`, JSON.stringify(draft));
-      setLastSaved(new Date());
-      setIsAutosaving(false);
-    }, 3000);
+    let stored: string | null = null;
+    try {
+      stored = localStorage.getItem(key);
+    } catch {
+      return;
+    }
+    const draft = parseDraft(stored);
+    const deployedAt = (loadedData?.definition as unknown as { created_at?: string } | undefined)?.created_at;
+    if (shouldOfferDraft(draft, deployedAt)) {
+      /* eslint-disable-next-line react-hooks/set-state-in-effect */
+      setOfferedDraft(draft);
+    }
+  }, [definitionId, loadedData]);
 
+  // Autosave the working copy to this browser on a 3-second debounce.
+  //
+  // This is a crash net, not a save: the draft lives in localStorage and only
+  // this browser can see it. It is offered back on open (see below) — for a
+  // long time it was written and never read, so the header claimed "last saved"
+  // while a closed tab threw the work away.
+  const saveDraft = useCallback(() => {
+    if (!isWorthSaving(nodes)) {
+      return false;
+    }
+    const draft = buildDraft({ definitionId, processName, processKey, nodes, edges });
+    try {
+      localStorage.setItem(draftKey(definitionId), JSON.stringify(draft));
+    } catch {
+      // A full or unavailable storage must not break editing; the draft is a
+      // convenience, and deploying is what actually saves.
+      return false;
+    }
+    setLastSaved(new Date());
+    return true;
+  }, [definitionId, edges, nodes, processKey, processName]);
+
+  useEffect(() => {
+    if (!isWorthSaving(nodes)) {
+      return;
+    }
+    const timer = setTimeout(saveDraft, 3000);
     return () => clearTimeout(timer);
-  }, [nodes, edges, processName, processKey, definitionId]);
+  }, [nodes, edges, processName, processKey, saveDraft]);
+
+  /** Ctrl/Cmd-S keeps the work; it does not publish it. */
+  const onSaveDraft = useCallback(() => {
+    if (saveDraft()) {
+      notifications.show({
+        title: 'Draft kept in this browser',
+        message: 'Your changes are safe if this tab closes. Deploy when you want the process to run.',
+        color: 'blue',
+      });
+    }
+  }, [saveDraft]);
+
+  /** Applies the draft the person chose to restore. */
+  const restoreDraft = useCallback(() => {
+    if (!offeredDraft) return;
+    setNodes(offeredDraft.nodes as typeof nodes);
+    setEdges(offeredDraft.edges as typeof edges);
+    if (offeredDraft.processName) setProcessName(offeredDraft.processName);
+    if (offeredDraft.processKey) setProcessKey(offeredDraft.processKey);
+    setOfferedDraft(null);
+  }, [offeredDraft, setEdges, setNodes]);
+
+  /** Throws the draft away and keeps what the server returned. */
+  const discardDraft = useCallback(() => {
+    try {
+      localStorage.removeItem(draftKey(definitionId));
+    } catch {
+      // Nothing to do: the draft is already not being applied.
+    }
+    setOfferedDraft(null);
+  }, [definitionId]);
 
   return {
     nodes,
@@ -659,12 +749,16 @@ export function useProcessDesigner({ definitionId, instanceId, initialName, init
     closeSpotlight,
     checklistOpened,
     openChecklist,
+    rolloutOpened,
+    openRollout,
+    closeRollout,
+    versions,
+    deploying: createDefinition.isPending,
     closeChecklist,
     clearCanvasOpened,
     closeClearCanvas,
     confirmClearCanvas,
     lastSaved,
-    isAutosaving,
     history,
     historyIndex,
     issues,
@@ -689,6 +783,11 @@ export function useProcessDesigner({ definitionId, instanceId, initialName, init
     onAutoLayout,
     updateNodeData,
     updateEdgeData,
+    offeredDraft,
+    offeredDraftAge: offeredDraft ? describeDraftAge(offeredDraft) : '',
+    restoreDraft,
+    discardDraft,
+    onSaveDraft,
     proceedWithSave,
     onSave,
     onExport,

@@ -1,4 +1,5 @@
 import { processClient } from "../shared/connect";
+import { raiseIfRefused } from "../raise";
 import { requestJSON } from "../shared/rest";
 import type { ApiAuditEntry, ApiSubProcess, ProcessVariables } from "../types";
 
@@ -13,9 +14,22 @@ type ListSubProcessesResponse = {
 };
 
 export const processRuntimeService = {
-  async startProcess(projectId: string, definitionKey: string, variables: ProcessVariables = {}, signal?: AbortSignal) {
-    const response = await processClient.startProcess({ projectId, definitionKey, variables }, { signal });
-    return { instance_id: response.instanceId, err: response.error };
+  /**
+   * Starts an instance.
+   *
+   * `version` names one deliberately; omitted, the live version runs. Naming one
+   * is how a staged version gets tried before it is promoted — the alternative
+   * was to make it live for everybody and find out.
+   */
+  async startProcess(
+    projectId: string,
+    definitionKey: string,
+    variables: ProcessVariables = {},
+    version = 0,
+    signal?: AbortSignal,
+  ) {
+    const response = await processClient.startProcess({ projectId, definitionKey, variables, version }, { signal });
+    return { instance_id: raiseIfRefused(response).instanceId };
   },
 
   /**

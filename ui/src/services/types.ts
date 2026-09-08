@@ -154,6 +154,131 @@ export interface CreateDefinitionPayload {
   flows: CreateFlowPayload[];
 }
 
+/**
+ * One deployed version of a process, with what it is still carrying.
+ *
+ * `running_instances` is the part that matters when replacing a version.
+ * Instances never move between versions — each one finishes on the graph it
+ * started on — so a version that has stopped being live keeps executing until
+ * this reaches zero. That is what `draining` names.
+ */
+export interface ApiDefinitionVersion {
+  id: string;
+  key: string;
+  name: string;
+  version: number;
+  created_at?: string;
+  /** The single version new instances start on. */
+  live: boolean;
+  running_instances: number;
+  total_instances: number;
+  /**
+   * When this version is arranged to take over, if a cutover naming it is still
+   * in the future. Absent when none is.
+   *
+   * Nothing runs at that moment: the server resolves the live version from the
+   * release timeline and the clock on every read, so the cutover happens by the
+   * time arriving.
+   */
+  scheduled_for?: string;
+  /** The timeline entry behind `scheduled_for`, which is what cancelling names. */
+  scheduled_release_id?: string;
+}
+
+export interface ListDefinitionVersionsResponse {
+  versions?: ApiDefinitionVersion[];
+  err?: string;
+}
+
+export interface PromoteDefinitionResponse {
+  err?: string;
+}
+
+export interface ScheduleDefinitionResponse {
+  err?: string;
+}
+
+export interface CancelScheduledDefinitionResponse {
+  err?: string;
+}
+
+/** One node's worth of a migration plan: where work sits, and where it lands. */
+export interface ApiNodeMove {
+  from: string;
+  to: string;
+  tokens: number;
+  tasks: number;
+  jobs: number;
+  /** False when the node keeps its id and is carried over without a mapping. */
+  mapped: boolean;
+}
+
+/** What moving running instances onto another version would do. */
+export interface ApiMigrationPlan {
+  source_key: string;
+  source_version: number;
+  target_version: number;
+  target_id: string;
+  instances: number;
+  moves?: ApiNodeMove[];
+  /** Non-empty means the apply would be refused, and why. */
+  refusals?: string[];
+}
+
+export interface MigrateInstancesResponse {
+  plan: ApiMigrationPlan;
+  applied?: boolean;
+  err?: string;
+}
+
+/**
+ * Which version of each process key new instances start on.
+ *
+ * A key that nobody has promoted is absent rather than zero, and the reader
+ * resolves it the way the engine does: the highest version deployed.
+ */
+/**
+ * One runtime a project deploys into, and the database it owns.
+ *
+ * `connection.password` is never the real one: the API returns a sentinel, and
+ * sending it back means "keep what is stored". See internal/pkg/configsecret.
+ */
+export interface ApiEnvironment {
+  id: string;
+  project?: { id: string };
+  name: string;
+  port: number;
+  driver: string;
+  connection?: Record<string, unknown>;
+  enabled: boolean;
+  created_at?: string;
+}
+
+export interface ListEnvironmentsResponse {
+  environments?: ApiEnvironment[];
+  err?: string;
+}
+
+export interface SaveEnvironmentResponse {
+  id?: string;
+  err?: string;
+}
+
+export interface TestEnvironmentConnectionResponse {
+  reachable?: boolean;
+  detail?: string;
+  err?: string;
+}
+
+export interface DeleteEnvironmentResponse {
+  err?: string;
+}
+
+export interface ListLiveVersionsResponse {
+  live?: Record<string, number>;
+  err?: string;
+}
+
 // ─── Connectors ──────────────────────────────────────────────────────────────
 
 /**

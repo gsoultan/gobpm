@@ -93,6 +93,9 @@ export function mapLoadedEdges(rawFlows: ApiFlow[] = []): Edge<BPMNEdgeData>[] {
     id: flow.id,
     source: flow.source_ref,
     target: flow.target_ref,
+    // A flow has no name of its own on the server, so the arrow is captioned
+    // with the condition it carries. Keeping the two in step in both directions
+    // is what stops a caption and a condition from drifting apart.
     label: flow.condition,
     animated: true,
     style: { strokeWidth: 2 },
@@ -206,7 +209,12 @@ function mapEdgeToPayload(edge: Edge<BPMNEdgeData>): CreateFlowPayload {
     id: edge.id,
     source_ref: edge.source,
     target_ref: edge.target,
-    condition: (edge.data?.condition as string) ?? (edge.label as string) ?? '',
+    // The condition comes only from the condition field. It used to fall back
+    // to the arrow's label, so a path a user labelled "Yes" was deployed with
+    // the condition `Yes` — an unbound name that evaluates false, so the path
+    // was never taken and the process stopped at the first gateway with no
+    // warning anywhere. A label is a caption; it is not executable.
+    condition: (edge.data?.condition as string) ?? '',
     documentation: (edge.data?.documentation as string) ?? '',
   };
 }

@@ -9,6 +9,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
+  Alert,
   Button,
   Group,
   Stack,
@@ -40,6 +41,7 @@ import {
 } from 'lucide-react';
 import { PropertyPanel } from '../components/PropertyPanel';
 import { DesignerModals } from '../components/DesignerModals';
+import { DeployVersionModal } from '../components/DeployVersionModal';
 import { nodeTypes } from '../components/bpmnNodeTypes';
 import { useSearch } from '@tanstack/react-router';
 import { useProcessDesigner } from '../hooks/useProcessDesigner';
@@ -71,8 +73,9 @@ export function ProcessDesigner({
     componentsOpened, openComponents, closeComponents,
     spotlightOpened, closeSpotlight,
     checklistOpened, closeChecklist,
+    rolloutOpened, closeRollout, versions, deploying,
     clearCanvasOpened, closeClearCanvas, confirmClearCanvas,
-    lastSaved, isAutosaving,
+    lastSaved,
     history, historyIndex,
     issues,
     remoteCursors,
@@ -85,6 +88,7 @@ export function ProcessDesigner({
     deleteSelected, clearCanvas, onAutoLayout,
     updateNodeData, updateEdgeData,
     proceedWithSave, onSave, onExport, onImport,
+    offeredDraft, offeredDraftAge, restoreDraft, discardDraft,
     handleFileChange,
     undo, redo,
   } = designer;
@@ -101,16 +105,53 @@ export function ProcessDesigner({
           borderBottom: '1px solid light-dark(var(--mantine-color-gray-2), var(--mantine-color-dark-4))',
         }}
       >
+        {offeredDraft && (
+          /*
+            Unsaved work this browser kept after the last deploy. It is offered
+            rather than applied: the draft could be an abandoned experiment, and
+            silently replacing what the server returned would be worse than
+            losing it.
+          */
+          <Alert
+            color="blue"
+            variant="light"
+            mb="sm"
+            title="You have unsaved changes to this process"
+            icon={<Save size={18} />}
+          >
+            <Group justify="space-between" align="center" wrap="nowrap">
+              <Text size="sm">
+                This browser kept changes {offeredDraftAge} that were never deployed.
+              </Text>
+              <Group gap="xs" wrap="nowrap">
+                <Button size="xs" variant="filled" onClick={restoreDraft}>
+                  Restore them
+                </Button>
+                <Button size="xs" variant="subtle" color="gray" onClick={discardDraft}>
+                  Discard
+                </Button>
+              </Group>
+            </Group>
+          </Alert>
+        )}
         <Group justify="space-between" align="center">
           <Stack gap={0}>
             <Title order={3} fw={800}>{processName || 'Process Designer'}</Title>
             <Group gap="xs">
-              <Text size="xs" c="dimmed">Key: {processKey} • Status: Drafting</Text>
-              {isAutosaving ? (
-                <Badge variant="dot" color="blue" size="xs">Autosaving...</Badge>
-              ) : lastSaved ? (
-                <Text size="xs" c="dimmed">Last saved: {lastSaved.toLocaleTimeString()}</Text>
-              ) : null}
+              <Text size="xs" c="dimmed">Key: {processKey}</Text>
+              {/*
+                "Last saved" used to sit next to an "Autosaving…" badge that
+                could never paint, and both described a localStorage write the
+                app then never read. It now says plainly where the draft is and
+                that deploying is what publishes it.
+              */}
+              {lastSaved ? (
+                <Text size="xs" c="dimmed">
+                  Draft kept in this browser at {lastSaved.toLocaleTimeString()} • Deploy to publish
+                </Text>
+              ) : (
+                <Text size="xs" c="dimmed">Not deployed yet</Text>
+              )}
             </Group>
           </Stack>
           <Group>
@@ -372,6 +413,20 @@ export function ProcessDesigner({
         onAutoLayout={onAutoLayout}
         undo={undo}
         clearCanvas={clearCanvas}
+      />
+
+      {/*
+        Asked before a redeploy, never before the first deploy: the choice is
+        which version new instances start on, and until one is already live
+        there is nothing to choose between.
+      */}
+      <DeployVersionModal
+        opened={rolloutOpened}
+        onClose={closeRollout}
+        processName={processName}
+        versions={versions}
+        deploying={deploying}
+        onDeploy={proceedWithSave}
       />
 
       {createDefinition.isSuccess && (

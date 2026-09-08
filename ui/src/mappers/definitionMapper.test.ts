@@ -147,6 +147,56 @@ describe('the arrows between steps', () => {
     expect(edge.target).toBe('end');
     expect(edge.data?.condition).toBe('approvalLevel = director');
   });
+
+  /**
+   * The arrow's caption is not executable.
+   *
+   * Labelling a path "Yes" used to deploy it with the condition `Yes` — an
+   * unbound name, so the gateway found no matching flow, the path was never
+   * taken, and (with the implicit-default flag off, which is the default) the
+   * instance raised an incident at the first decision. Nothing in the designer
+   * said so.
+   */
+  it('never turns a caption into a condition', () => {
+    const payload = buildDefinitionPayload(
+      'A process',
+      'a-process',
+      [] as Nodes,
+      [{ id: 'f1', source: 'start', target: 'end', label: 'Yes' }] as Edges,
+    );
+
+    expect(payload.flows[0].condition).toBe('');
+  });
+
+  it('keeps the condition when a caption is also present', () => {
+    const payload = buildDefinitionPayload(
+      'A process',
+      'a-process',
+      [] as Nodes,
+      [{ id: 'f1', source: 'start', target: 'end', label: 'Approved', data: { condition: 'amount > 1000' } }] as Edges,
+    );
+
+    expect(payload.flows[0].condition).toBe('amount > 1000');
+  });
+});
+
+/**
+ * Two service-task settings the engine reads under names the panel did not
+ * write. The panel wrote `url` and `topic`; the engine reads the `http_url`
+ * property and the external topic column, which the mapper fills from `httpUrl`
+ * and `externalTopic`. So a "call a web address" step deployed and did nothing
+ * at all, and the canvas showed no sign of it.
+ */
+describe('service task wiring', () => {
+  it('sends the web address under the name the engine reads', () => {
+    const saved = payloadFor({ httpUrl: 'https://api.example.com/hook' }, 'serviceTask');
+    expect(saved.properties?.http_url).toBe('https://api.example.com/hook');
+  });
+
+  it('sends the external topic as its own field, not a setting', () => {
+    const saved = payloadFor({ externalTopic: 'process-invoice' }, 'serviceTask');
+    expect(saved.external_topic).toBe('process-invoice');
+  });
 });
 
 /**

@@ -1,9 +1,10 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { processService } from '../services/api';
+import type { UserUpdate } from '../services/domains/identityService';
 import { useAppStore } from '../store/useAppStore';
 
 export const useUsers = () => {
-  const { currentOrganizationId } = useAppStore();
+  const currentOrganizationId = useAppStore((state) => state.currentOrganizationId);
   const organizationId = currentOrganizationId || '';
   return useQuery({
     queryKey: ['users', organizationId],
@@ -26,7 +27,9 @@ export const useCreateUser = () => {
 export const useUpdateUser = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, ...user }: { id: string; full_name: string; display_name: string; organization: string; email: string; roles: string[] }) =>
+    // `organization` is accepted because the user list's edit dialog still
+    // collects it, and not sent: the server reads memberships, not a name.
+    mutationFn: ({ id, organization: _organization, ...user }: { id: string; organization?: string } & UserUpdate) =>
       processService.updateUser(id, user),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
@@ -55,7 +58,7 @@ export const useDeleteUser = () => {
 };
 
 export const useGroups = () => {
-  const { currentOrganizationId } = useAppStore();
+  const currentOrganizationId = useAppStore((state) => state.currentOrganizationId);
   const organizationId = currentOrganizationId || '';
   return useQuery({
     queryKey: ['groups', organizationId],

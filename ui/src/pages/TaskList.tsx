@@ -31,6 +31,7 @@ import { useTasks, useCompleteTask } from '../hooks/useProcess';
 import { PageHeader } from '../components/PageHeader';
 import { StatusBadge } from '../components/StatusBadge';
 import { TableLoadingState, ErrorState, EmptyState } from '../components/state';
+import { shortCode, taskReference } from '../domain/taskReference';
 
 const getTaskIcon = (type: string) => {
   switch (type) {
@@ -136,7 +137,12 @@ export function TaskList() {
                         </ThemeIcon>
                         <Stack gap={0}>
                           <Text fw={700} size="sm">{task.name}</Text>
-                          <Text size="xs" c="dimmed">ID: {task.id.slice(0, 8)}...</Text>
+                          {/* What the work is about, not a fragment of its
+                              identifier. See domain/taskReference.ts. */}
+                          <Text size="xs" c="dimmed" lineClamp={1}>
+                            {taskReference(task.variables as Record<string, unknown> | undefined, task.instance?.id).label
+                              || `Reference ${shortCode(task.instance?.id)}`}
+                          </Text>
                         </Stack>
                       </Group>
                     </Table.Td>
@@ -179,7 +185,7 @@ export function TaskList() {
                           size="xs" 
                           variant="light"
                           color="indigo"
-                          onClick={() => completeTask.mutate({ id: task.id, userId: task.assignee?.username ?? '' })}
+                          onClick={() => completeTask.mutate({ id: task.id })}
                           loading={completeTask.isPending}
                           disabled={task.status === 'completed'}
                           leftSection={<CheckCircle size={14} />}

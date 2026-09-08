@@ -270,14 +270,16 @@ export function PropertyPanel({
 
                         {selectedEdge && (
                           <Stack gap="md">
-                            <TextInput
-                              label="Label"
-                              placeholder="e.g. Yes / No"
-                              description="Text displayed on the flow arrow"
-                              size="md"
-                              value={selectedEdge.label as string || ''}
-                              onChange={(e) => updateEdgeData(selectedEdge.id, e.target.value)}
-                            />
+                            {/*
+                              There is no separate "label" field here any more.
+                              A sequence flow has no name on the server, so a
+                              typed caption could never be saved — and the save
+                              mapper used to fall back to it as the *condition*,
+                              which deployed a path captioned "Yes" with the
+                              unbound condition `Yes`: never true, never taken,
+                              no warning. The arrow is captioned with its
+                              condition instead.
+                            */}
                             <TextInput
                               label="Take this path when"
                               placeholder="e.g. approvalLevel = director"
@@ -285,10 +287,11 @@ export function PropertyPanel({
                               description={
                                 'One "=" and no quotes: approvalLevel = director. ' +
                                 'Writing == looks more like code and never matches, ' +
-                                'so the path is silently never taken. Leave empty to always take it.'
+                                'so the path is silently never taken. Leave empty to always take it. ' +
+                                'This text is what the arrow shows on the canvas.'
                               }
                               value={selectedEdge.data?.condition as string || ''}
-                              onChange={(e) => updateEdgeData(selectedEdge.id, selectedEdge.label as string, { ...selectedEdge.data, condition: e.target.value })}
+                              onChange={(e) => updateEdgeData(selectedEdge.id, e.target.value, { ...selectedEdge.data, condition: e.target.value })}
                             />
                             <Textarea
                               label="Documentation"
@@ -532,14 +535,10 @@ function EdgeConfigSection({
           <Text fw={700} size="md">Sequence Flow Properties</Text>
         </Group>
 
-        <TextInput
-          label="Label"
-          placeholder="e.g. Yes / No / Approved"
-          description="Name displayed on the connection"
-          size="md"
-          value={label}
-          onChange={(e) => updateEdgeData(selectedEdge.id, e.target.value, data)}
-        />
+        <Text size="sm" c="dimmed">
+          The arrow shows the condition below, so the canvas always says what
+          decides this path. A flow has no separate name to save.
+        </Text>
       </Stack>
 
       <Divider variant="dashed" />

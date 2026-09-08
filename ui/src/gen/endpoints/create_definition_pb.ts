@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file endpoints/create_definition.proto.
  */
 export const file_endpoints_create_definition: GenFile = /*@__PURE__*/
-  fileDesc("CiFlbmRwb2ludHMvY3JlYXRlX2RlZmluaXRpb24ucHJvdG8SB3Byb2Nlc3MihAEKF0NyZWF0ZURlZmluaXRpb25SZXF1ZXN0EhIKCnByb2plY3RfaWQYASABKAkSCwoDa2V5GAIgASgJEgwKBG5hbWUYAyABKAkSHAoFbm9kZXMYBCADKAsyDS5wcm9jZXNzLk5vZGUSHAoFZmxvd3MYBSADKAsyDS5wcm9jZXNzLkZsb3ciNQoYQ3JlYXRlRGVmaW5pdGlvblJlc3BvbnNlEgoKAmlkGAEgASgJEg0KBWVycm9yGAIgASgJQpkBCgtjb20ucHJvY2Vzc0IVQ3JlYXRlRGVmaW5pdGlvblByb3RvUAFaN2dpdGh1Yi5jb20vZ3NvdWx0YW4vbWV0aXMvYXBpL3Byb3RvL2VuZHBvaW50cztlbmRwb2ludHOiAgNQWFiqAgdQcm9jZXNzygIHUHJvY2Vzc+ICE1Byb2Nlc3NcR1BCTWV0YWRhdGHqAgdQcm9jZXNzYgZwcm90bzM", [file_entities_node, file_entities_flow]);
+  fileDesc("CiFlbmRwb2ludHMvY3JlYXRlX2RlZmluaXRpb24ucHJvdG8SB3Byb2Nlc3MikwEKF0NyZWF0ZURlZmluaXRpb25SZXF1ZXN0EhIKCnByb2plY3RfaWQYASABKAkSCwoDa2V5GAIgASgJEgwKBG5hbWUYAyABKAkSHAoFbm9kZXMYBCADKAsyDS5wcm9jZXNzLk5vZGUSHAoFZmxvd3MYBSADKAsyDS5wcm9jZXNzLkZsb3cSDQoFc3RhZ2UYBiABKAgiVAoYQ3JlYXRlRGVmaW5pdGlvblJlc3BvbnNlEgoKAmlkGAEgASgJEg0KBWVycm9yGAIgASgJEg8KB3ZlcnNpb24YAyABKAUSDAoEbGl2ZRgEIAEoCEKZAQoLY29tLnByb2Nlc3NCFUNyZWF0ZURlZmluaXRpb25Qcm90b1ABWjdnaXRodWIuY29tL2dzb3VsdGFuL21ldGlzL2FwaS9wcm90by9lbmRwb2ludHM7ZW5kcG9pbnRzogIDUFhYqgIHUHJvY2Vzc8oCB1Byb2Nlc3PiAhNQcm9jZXNzXEdQQk1ldGFkYXRh6gIHUHJvY2Vzc2IGcHJvdG8z", [file_entities_node, file_entities_flow]);
 
 /**
  * @generated from message process.CreateDefinitionRequest
@@ -44,6 +44,18 @@ export type CreateDefinitionRequest = Message<"process.CreateDefinitionRequest">
    * @generated from field: repeated process.Flow flows = 5;
    */
   flows: Flow[];
+
+  /**
+   * Deploy the version without making it live: new instances keep starting on
+   * whichever version is live now, and this one waits to be promoted.
+   *
+   * Negative ("stage") rather than positive ("promote") so a client that
+   * predates staging — which is every client written before this field — keeps
+   * getting a deploy that goes live.
+   *
+   * @generated from field: bool stage = 6;
+   */
+  stage: boolean;
 };
 
 /**
@@ -66,6 +78,19 @@ export type CreateDefinitionResponse = Message<"process.CreateDefinitionResponse
    * @generated from field: string error = 2;
    */
   error: string;
+
+  /**
+   * What the deploy actually did, so a caller can say "v4 deployed and live" or
+   * "v4 staged, v3 still live" without a second round trip.
+   *
+   * @generated from field: int32 version = 3;
+   */
+  version: number;
+
+  /**
+   * @generated from field: bool live = 4;
+   */
+  live: boolean;
 };
 
 /**

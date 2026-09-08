@@ -11,7 +11,7 @@ import type { JsonObject, Message } from "@bufbuild/protobuf";
  * Describes the file endpoints/start_process.proto.
  */
 export const file_endpoints_start_process: GenFile = /*@__PURE__*/
-  fileDesc("Ch1lbmRwb2ludHMvc3RhcnRfcHJvY2Vzcy5wcm90bxIHcHJvY2VzcyJtChNTdGFydFByb2Nlc3NSZXF1ZXN0EhIKCnByb2plY3RfaWQYASABKAkSFgoOZGVmaW5pdGlvbl9rZXkYAiABKAkSKgoJdmFyaWFibGVzGAMgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdCI6ChRTdGFydFByb2Nlc3NSZXNwb25zZRITCgtpbnN0YW5jZV9pZBgBIAEoCRINCgVlcnJvchgCIAEoCUKVAQoLY29tLnByb2Nlc3NCEVN0YXJ0UHJvY2Vzc1Byb3RvUAFaN2dpdGh1Yi5jb20vZ3NvdWx0YW4vbWV0aXMvYXBpL3Byb3RvL2VuZHBvaW50cztlbmRwb2ludHOiAgNQWFiqAgdQcm9jZXNzygIHUHJvY2Vzc+ICE1Byb2Nlc3NcR1BCTWV0YWRhdGHqAgdQcm9jZXNzYgZwcm90bzM", [file_google_protobuf_struct]);
+  fileDesc("Ch1lbmRwb2ludHMvc3RhcnRfcHJvY2Vzcy5wcm90bxIHcHJvY2VzcyJ+ChNTdGFydFByb2Nlc3NSZXF1ZXN0EhIKCnByb2plY3RfaWQYASABKAkSFgoOZGVmaW5pdGlvbl9rZXkYAiABKAkSKgoJdmFyaWFibGVzGAMgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdBIPCgd2ZXJzaW9uGAQgASgFIjoKFFN0YXJ0UHJvY2Vzc1Jlc3BvbnNlEhMKC2luc3RhbmNlX2lkGAEgASgJEg0KBWVycm9yGAIgASgJQpUBCgtjb20ucHJvY2Vzc0IRU3RhcnRQcm9jZXNzUHJvdG9QAVo3Z2l0aHViLmNvbS9nc291bHRhbi9tZXRpcy9hcGkvcHJvdG8vZW5kcG9pbnRzO2VuZHBvaW50c6ICA1BYWKoCB1Byb2Nlc3PKAgdQcm9jZXNz4gITUHJvY2Vzc1xHUEJNZXRhZGF0YeoCB1Byb2Nlc3NiBnByb3RvMw", [file_google_protobuf_struct]);
 
 /**
  * @generated from message process.StartProcessRequest
@@ -31,6 +31,16 @@ export type StartProcessRequest = Message<"process.StartProcessRequest"> & {
    * @generated from field: google.protobuf.Struct variables = 3;
    */
   variables?: JsonObject | undefined;
+
+  /**
+   * Start a named version instead of the live one. Zero means the live one,
+   * which is what every client written before this field sends.
+   *
+   * The use it exists for is trying a staged version before promoting it.
+   *
+   * @generated from field: int32 version = 4;
+   */
+  version: number;
 };
 
 /**

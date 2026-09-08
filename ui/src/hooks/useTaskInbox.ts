@@ -14,7 +14,6 @@ import {
   useUpdateTask,
   useAssignTask,
   useUsers,
-  useUserGroups,
 } from './useProcess';
 import { useAppStore } from '../store/useAppStore';
 import type { Task } from '../services/types';
@@ -55,19 +54,12 @@ function sortValue(task: Task, field: string): string | number | undefined {
 
 export function useTaskInbox() {
   const { currentOrganizationId, user } = useAppStore();
-  const [currentUser, setCurrentUser] = useState(user?.username || 'manager');
+  // The inbox is always the signed-in user's own. There is no switching:
+  // the server takes the actor from the token and ignores any client claim.
+  const currentUser = user?.username ?? '';
   
-  const { data: userGroupsData } = useUserGroups(user?.id || null);
-  const userGroups = useMemo(() => {
-    if (!userGroupsData?.groups) return [];
-    return userGroupsData.groups
-      // The API sends the owning organization as an object. Comparing against
-      // a non-existent `organization_id` was always false, so this list came
-      // back empty and the inbox never showed a task offered to your groups —
-      // only ones naming you personally.
-      .filter((g) => g.organization?.id === currentOrganizationId)
-      .map((g) => g.name);
-  }, [userGroupsData, currentOrganizationId]);
+  // Candidate groups are resolved on the server from the caller's real
+  // memberships; the browser no longer asserts them.
   
   const [activeTab, setActiveTab] = useState<string | null>('assigned');
   const [viewMode, setViewMode] = useState<'table' | 'kanban'>('table');
@@ -130,7 +122,7 @@ export function useTaskInbox() {
     setAppliedFilterKey(filterKey);
     setPage(1);
   }
-  const { data: candidateData, isLoading: candidateLoading } = useTasksByCandidates(currentUser, userGroups, page, pageSize);
+  const { data: candidateData, isLoading: candidateLoading } = useTasksByCandidates(page, pageSize);
   const { data: allTasksData, isLoading: allTasksLoading } = useTasks();
   
   const completeTaskMutation = useCompleteTask();
@@ -151,19 +143,22 @@ export function useTaskInbox() {
   const assignedCount = assignedPageInfo?.total ?? assignedTasks.length;
   const candidateCount = candidatePageInfo?.total ?? candidateTasks.length;
 
-  const handleClaim = useCallback((id: string) => {
-    claimTaskMutation.mutate({ id, userId: currentUser });
-  }, [claimTaskMutation, currentUser]);
+  const handleClaim = useCallback((id: string, taskName?: string) => {
+    // The name travels with it so a queued claim can say which task it was.
+    claimTaskMutation.mutate({ id, taskName });
+  }, [claimTaskMutation]);
 
   const handleUnclaim = useCallback((id: string) => {
     unclaimTaskMutation.mutate(id);
   }, [unclaimTaskMutation]);
 
-  const handleComplete = useCallback((id: string, variables: ProcessVariables) => {
-    completeTaskMutation.mutate({ id, userId: currentUser, variables }, {
+  const handleComplete = useCallback((id: string, variables: ProcessVariables, taskName?: string) => {
+    // The name travels with it so that, if this ends up queued offline, the
+    // pending list can say which task it was rather than "a task".
+    completeTaskMutation.mutate({ id, variables, taskName }, {
       onSuccess: () => setSelectedTask(null)
     });
-  }, [completeTaskMutation, currentUser]);
+  }, [completeTaskMutation]);
 
   const handleAssign = useCallback((id: string, userId: string) => {
     assignTaskMutation.mutate({ id, userId }, {
@@ -263,8 +258,8 @@ export function useTaskInbox() {
   }, [selectedTaskIds, queryClient]);
 
   const handleBulkClaim = useCallback(
-    () => runBulkAction(id => processService.claimTask(id, currentUser), 'task', 'claimed'),
-    [runBulkAction, currentUser],
+    () => runBulkAction(id => processService.claimTask(id), 'task', 'claimed'),
+    [runBulkAction],
   );
 
   const handleBulkUnclaim = useCallback(
@@ -275,7 +270,6 @@ export function useTaskInbox() {
   return {
     bulkInFlight,
     currentUser,
-    setCurrentUser,
     activeTab,
     setActiveTab,
     searchQuery,

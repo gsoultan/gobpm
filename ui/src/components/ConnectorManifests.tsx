@@ -41,6 +41,7 @@ import {
   useInstallConnectorManifest,
   useSetConnectorManifestEnabled,
 } from '../hooks/useConnectorManifests';
+import type { ApiConnectorManifest } from '../services/domains/connectorService';
 
 const EXAMPLE = `key: crm.create-lead
 version: 1
@@ -91,6 +92,30 @@ export function ConnectorManifests() {
   };
 
   const installed = manifests ?? [];
+
+  const toggle = (manifest: ApiConnectorManifest, enabled: boolean) =>
+    setEnabled.mutate(
+      { id: manifest.id, enabled },
+      {
+        onError: (err) =>
+          notifications.show({
+            title: `Could not switch ${manifest.key} ${enabled ? 'on' : 'off'}`,
+            message: err.message,
+            color: 'red',
+          }),
+      },
+    );
+
+  const removeManifest = (manifest: ApiConnectorManifest) => {
+    const consequence =
+      `Remove the ${manifest.key} connector? Every process step that names this key fails the next time it runs, ` +
+      'until the document is installed again.';
+    if (!window.confirm(consequence)) return;
+    remove.mutate(manifest.id, {
+      onSuccess: () => notifications.show({ title: 'Removed', message: `${manifest.key} is gone.`, color: 'blue' }),
+      onError: (err) => notifications.show({ title: `Could not remove ${manifest.key}`, message: err.message, color: 'red' }),
+    });
+  };
 
   return (
     <Card withBorder radius="lg" p="xl">
@@ -147,9 +172,7 @@ export function ConnectorManifests() {
                         size="xs"
                         aria-label={`Switch ${manifest.key} ${manifest.enabled ? 'off' : 'on'}`}
                         checked={manifest.enabled}
-                        onChange={(event) =>
-                          setEnabled.mutate({ id: manifest.id, enabled: event.currentTarget.checked })
-                        }
+                        onChange={(event) => toggle(manifest, event.currentTarget.checked)}
                       />
                     </Tooltip>
                   </Table.Td>
@@ -160,7 +183,7 @@ export function ConnectorManifests() {
                         variant="subtle"
                         color="red"
                         size="sm"
-                        onClick={() => remove.mutate(manifest.id)}
+                        onClick={() => removeManifest(manifest)}
                       >
                         <Trash2 size={14} />
                       </ActionIcon>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { processService } from '../services/api';
 import { useAppStore } from '../store/useAppStore';
+import { subscribeToEvents } from './useEventStream';
 
 export interface CollaborationEvent {
   type: 'cursor' | 'node_move' | 'node_update' | 'presence';
@@ -11,6 +12,16 @@ export interface CollaborationEvent {
   timestamp: string;
 }
 
+const COLLABORATION_EVENT_TYPES: CollaborationEvent['type'][] = ['cursor', 'node_move', 'node_update', 'presence'];
+
+/**
+ * How many remote edits are kept. The list was appended to for as long as the
+ * designer stayed open — every node move by every collaborator, forever — and
+ * the consumer re-walks the whole list on each change. The last few hundred is
+ * what "recent activity" means; anything older has already been applied.
+ */
+export const MAX_REMOTE_EVENTS = 200;
+
 export function useCollaboration(projectId: string | undefined) {
   const { user } = useAppStore();
   const [remoteCursors, setRemoteCursors] = useState<Record<string, { x: number, y: number, name: string }>>({});
@@ -19,33 +30,26 @@ export function useCollaboration(projectId: string | undefined) {
   useEffect(() => {
     if (!projectId) return;
 
-    // Use existing SSE endpoint from ProcessDesigner or similar
-    const eventSource = new EventSource(`${import.meta.env.VITE_API_BASE_URL || ''}/api/v1/sse`);
+    // Collaboration broadcasts travel on the same authenticated stream as the
+    // engine's events; `/api/v1/sse`, which this used to open, never existed.
+    return subscribeToEvents(COLLABORATION_EVENT_TYPES, (event) => {
+      const data = event as unknown as CollaborationEvent;
+      if (data.projectId !== projectId || data.userId === user?.id) return;
 
-    eventSource.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.projectId === projectId && data.userId !== user?.id) {
-          if (data.type === 'cursor') {
-            setRemoteCursors(prev => ({
-              ...prev,
-              [data.userId]: { ...data.data, name: data.userName }
-            }));
-          } else {
-            setRemoteEvents(prev => [...prev, data]);
-          }
-        }
-      } catch {
-        // Not a collaboration event or parse error
+      if (data.type === 'cursor') {
+        setRemoteCursors(prev => ({
+          ...prev,
+          [data.userId]: { ...(data.data as { x: number; y: number }), name: data.userName }
+        }));
+        return;
       }
-    };
-
-    return () => eventSource.close();
+      setRemoteEvents(prev => [...prev, data].slice(-MAX_REMOTE_EVENTS));
+    });
   }, [projectId, user?.id]);
 
   const broadcast = async (type: CollaborationEvent['type'], data: Record<string, unknown>) => {
     if (!projectId || !user) return;
-    
+
     await processService.broadcastCollaboration({
       type,
       projectId,
