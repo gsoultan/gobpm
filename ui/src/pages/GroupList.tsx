@@ -1,171 +1,94 @@
 import {
-  Table,
-  Card,
-  Text,
-  Button,
-  Group,
-  Stack,
-  ThemeIcon,
-  TextInput,
   ActionIcon,
-  Modal,
-  Box,
-  Tooltip,
-  Textarea,
-  Select,
-  MultiSelect,
   Badge,
+  Box,
+  Button,
+  Card,
+  Group,
+  Modal,
+  MultiSelect,
+  Stack,
+  Table,
+  Text,
+  Textarea,
+  TextInput,
+  ThemeIcon,
+  Tooltip,
 } from '@mantine/core';
-import {
-  Search,
-  Plus,
-  ShieldCheck,
-  Edit2,
-  Trash2,
-  Filter,
-  UserPlus,
-  UserMinus, Users
-} from 'lucide-react';
-import {
-  useGroups,
-  useCreateGroup,
-  useUpdateGroup,
-  useDeleteGroup,
-  useGroupMembers,
-  useAddMembership,
-  useRemoveMembership,
-  useUsers,
-} from '../hooks/useUser';
-import { PageHeader } from '../components/PageHeader';
-import { useState, useTransition } from 'react';
 import { notifications } from '@mantine/notifications';
-import { useAppStore } from '../store/useAppStore';
-import { TableLoadingState, ErrorState, EmptyState } from '../components/state';
+import { Edit2, Plus, Search, ShieldCheck, Trash2, UserPlus, Users } from 'lucide-react';
+import { useState, useTransition } from 'react';
+
+import { PageHeader } from '../components/PageHeader';
+import { MembersModal } from '../components/groups/MembersModal';
+import { EmptyState, ErrorState, TableLoadingState } from '../components/state';
+import { ROLE_OPTIONS, roleLabel } from '../domain/roles';
+import { matchesQuery } from '../domain/textSearch';
+import { useCreateGroup, useDeleteGroup, useGroups, useUpdateGroup } from '../hooks/useUser';
+import { errorMessage } from '../services/shared/errors';
 import type { ApiGroup } from '../services/types';
+import { useAppStore } from '../store/useAppStore';
 
-/** A caught value is `unknown`; take its message when it has one. */
-function errorMessage(err: unknown, fallback: string): string {
-  return err instanceof Error && err.message ? err.message : fallback;
-}
-
-const AVAILABLE_ROLES = ['admin', 'user', 'manager', 'developer', 'viewer'];
+const COLUMNS = 4;
 
 export function GroupList() {
   const { data, isLoading, error, refetch } = useGroups();
-  const { data: usersData } = useUsers();
   const createGroup = useCreateGroup();
   const updateGroup = useUpdateGroup();
   const deleteGroup = useDeleteGroup();
-  const addMembership = useAddMembership();
-  const removeMembership = useRemoveMembership();
   const { currentOrganizationId } = useAppStore();
 
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isMembersModalOpen, setIsMembersModalOpen] = useState(false);
   const [editingGroup, setEditingGroup] = useState<ApiGroup | null>(null);
-  const [selectedGroup, setSelectedGroup] = useState<ApiGroup | null>(null);
+  const [membersOf, setMembersOf] = useState<ApiGroup | null>(null);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [roles, setRoles] = useState<string[]>([]);
-  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [, startTransition] = useTransition();
 
-  const { data: membersData, isLoading: membersLoading } = useGroupMembers(selectedGroup?.id || '');
-
-
   const allGroups = data?.groups || [];
-  const groups = searchQuery
-    ? allGroups.filter((g) =>
-        g.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        g.description?.toLowerCase().includes(searchQuery.toLowerCase())
-      )
-    : allGroups;
-
-  const allUsers = usersData?.users || [];
-  const members = membersData?.users || [];
-  const memberIds = new Set(members.map((m) => m.id));
-  const availableUsers = allUsers
-    .filter((u) => !memberIds.has(u.id))
-    .map((u) => ({ value: u.id, label: `${u.full_name || u.username} (@${u.username})` }));
+  const groups = allGroups.filter((g) => matchesQuery(searchQuery, g.name, g.description));
 
   const handleOpenModal = (group?: ApiGroup) => {
-    if (group) {
-      setEditingGroup(group);
-      setName(group.name || '');
-      setDescription(group.description || '');
-      setRoles(group.roles || []);
-    } else {
-      setEditingGroup(null);
-      setName('');
-      setDescription('');
-      setRoles([]);
-    }
+    setEditingGroup(group ?? null);
+    setName(group?.name ?? '');
+    setDescription(group?.description ?? '');
+    setRoles(group?.roles ?? []);
     setIsModalOpen(true);
   };
 
-  const handleOpenMembers = (group: ApiGroup) => {
-    setSelectedGroup(group);
-    setSelectedUserId(null);
-    setIsMembersModalOpen(true);
-  };
-
   const handleSubmit = async () => {
+    if (!name.trim()) return;
     try {
       if (editingGroup) {
         await updateGroup.mutateAsync({ id: editingGroup.id, name, description, roles });
-        notifications.show({ title: 'Success', message: 'Group updated successfully', color: 'green' });
+        notifications.show({ title: 'Saved', message: `${name} was updated.`, color: 'green' });
       } else {
-        await createGroup.mutateAsync({
-          organization_id: currentOrganizationId || '',
-          name,
-          description,
-          roles,
-        });
-        notifications.show({ title: 'Success', message: 'Group created successfully', color: 'green' });
+        await createGroup.mutateAsync({ organization_id: currentOrganizationId || '', name, description, roles });
+        notifications.show({ title: 'Created', message: `${name} is ready for members.`, color: 'green' });
       }
       setIsModalOpen(false);
     } catch (error: unknown) {
-      notifications.show({ title: 'Error', message: errorMessage(error, 'Failed to save group'), color: 'red' });
+      notifications.show({ title: 'Could not save it', message: errorMessage(error, 'Failed to save group'), color: 'red' });
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (window.confirm('Are you sure you want to delete this group? All memberships will be removed.')) {
-      try {
-        await deleteGroup.mutateAsync(id);
-        notifications.show({ title: 'Success', message: 'Group deleted successfully', color: 'green' });
-      } catch (error: unknown) {
-        notifications.show({ title: 'Error', message: errorMessage(error, 'Failed to delete group'), color: 'red' });
-      }
-    }
-  };
-
-  const handleAddMember = async () => {
-    if (!selectedUserId || !selectedGroup) return;
+  const handleDelete = async (group: ApiGroup) => {
+    const consequence =
+      `Delete ${group.name}? Its members lose the roles it gave them, and tasks routed to this group have nowhere to go. ` +
+      'This cannot be undone.';
+    if (!window.confirm(consequence)) return;
     try {
-      await addMembership.mutateAsync({ groupId: selectedGroup.id, userId: selectedUserId });
-      setSelectedUserId(null);
-      notifications.show({ title: 'Success', message: 'Member added successfully', color: 'green' });
+      await deleteGroup.mutateAsync(group.id);
+      notifications.show({ title: 'Deleted', message: `${group.name} is gone.`, color: 'green' });
     } catch (error: unknown) {
-      notifications.show({ title: 'Error', message: errorMessage(error, 'Failed to add member'), color: 'red' });
-    }
-  };
-
-  const handleRemoveMember = async (userId: string) => {
-    if (!selectedGroup) return;
-    try {
-      await removeMembership.mutateAsync({ groupId: selectedGroup.id, userId });
-      notifications.show({ title: 'Success', message: 'Member removed successfully', color: 'green' });
-    } catch (error: unknown) {
-      notifications.show({ title: 'Error', message: errorMessage(error, 'Failed to remove member'), color: 'red' });
+      notifications.show({ title: 'Could not delete it', message: errorMessage(error, 'Failed to delete group'), color: 'red' });
     }
   };
 
   const handleSearchChange = (value: string) => {
-    startTransition(() => {
-      setSearchQuery(value);
-    });
+    startTransition(() => setSearchQuery(value));
   };
 
   return (
@@ -174,12 +97,7 @@ export function GroupList() {
         title="Groups"
         description="Manage user groups and memberships."
         actions={
-          <Button
-            variant="filled"
-            color="indigo"
-            leftSection={<Plus size={16} />}
-            onClick={() => handleOpenModal()}
-          >
+          <Button variant="filled" color="indigo" leftSection={<Plus size={16} />} onClick={() => handleOpenModal()}>
             New Group
           </Button>
         }
@@ -187,29 +105,19 @@ export function GroupList() {
 
       <Card shadow="sm" radius="lg" withBorder p={0}>
         <Box p="md">
-          <Group justify="space-between">
-            <Group flex={1}>
-              <TextInput
-                placeholder="Search groups..."
-                leftSection={<Search size={16} />}
-                style={{ flex: 1, maxWidth: 400 }}
-                variant="filled"
-                radius="md"
-                onChange={(e) => handleSearchChange(e.currentTarget.value)}
-              />
-              <Button variant="light" leftSection={<Filter size={16} />} radius="md">Filter</Button>
-            </Group>
-          </Group>
+          <TextInput
+            aria-label="Search groups"
+            placeholder="Search groups…"
+            leftSection={<Search size={16} />}
+            style={{ maxWidth: 400 }}
+            variant="filled"
+            radius="md"
+            onChange={(e) => handleSearchChange(e.currentTarget.value)}
+          />
         </Box>
 
-        {/*
-          Loading and error render inside the page rather than replacing it.
-          The previous early return swapped the whole page — title, filters,
-          actions — for one line of text, so the layout jumped when data
-          arrived and a failed request looked identical to an empty list.
-        */}
         {isLoading ? (
-          <TableLoadingState rows={5} columns={4} />
+          <TableLoadingState rows={5} columns={COLUMNS} />
         ) : error ? (
           <ErrorState error={error} action="load your groups" onRetry={() => refetch()} />
         ) : (
@@ -217,17 +125,21 @@ export function GroupList() {
           <Table verticalSpacing="md" horizontalSpacing="xl" highlightOnHover>
             <Table.Thead bg="gray.0">
               <Table.Tr>
-                <Table.Th>Group Name</Table.Th>
+                <Table.Th>Group</Table.Th>
                 <Table.Th>Description</Table.Th>
-                <Table.Th>Assigned Roles</Table.Th>
+                <Table.Th>Roles its members get</Table.Th>
                 <Table.Th ta="right">Actions</Table.Th>
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
               {groups.length === 0 ? (
                 <Table.Tr>
-                  <Table.Td colSpan={4}>
-                    <EmptyState icon={Users} title="No groups yet" description="Groups let you route work to a team rather than to one named person." />
+                  <Table.Td colSpan={COLUMNS}>
+                    {searchQuery ? (
+                      <Text ta="center" c="dimmed" py="xl">No group matches “{searchQuery}”.</Text>
+                    ) : (
+                      <EmptyState icon={Users} title="No groups yet" description="Groups let you route work to a team rather than to one named person." />
+                    )}
                   </Table.Td>
                 </Table.Tr>
               ) : (
@@ -238,10 +150,7 @@ export function GroupList() {
                         <ThemeIcon color="indigo" variant="light" radius="md">
                           <ShieldCheck size={16} />
                         </ThemeIcon>
-                        <Stack gap={0}>
-                          <Text fw={700} size="sm">{g.name}</Text>
-                          <Text size="xs" c="dimmed">ID: {g.id}</Text>
-                        </Stack>
+                        <Text fw={700} size="sm">{g.name}</Text>
                       </Group>
                     </Table.Td>
                     <Table.Td>
@@ -249,40 +158,26 @@ export function GroupList() {
                     </Table.Td>
                     <Table.Td>
                       <Group gap={4}>
-                        {(g.roles || []).map((role: string) => (
-                          <Badge key={role} variant="light" size="sm" color="cyan">
-                            {role}
-                          </Badge>
+                        {(g.roles ?? []).map((role) => (
+                          <Badge key={role} variant="light" size="sm" color="cyan">{roleLabel(role)}</Badge>
                         ))}
-                        {(g.roles || []).length === 0 && <Text size="xs" c="dimmed">No roles</Text>}
+                        {(g.roles ?? []).length === 0 && <Text size="xs" c="dimmed">None</Text>}
                       </Group>
                     </Table.Td>
                     <Table.Td>
                       <Group gap="xs" justify="flex-end">
-                        <Tooltip label="Manage Members">
-                          <ActionIcon aria-label="Add member to group"
-                            variant="light"
-                            color="teal"
-                            onClick={() => handleOpenMembers(g)}
-                          >
+                        <Tooltip label="Manage members">
+                          <ActionIcon aria-label={`Manage members of ${g.name}`} variant="light" color="teal" onClick={() => setMembersOf(g)}>
                             <UserPlus size={16} />
                           </ActionIcon>
                         </Tooltip>
-                        <Tooltip label="Edit Group">
-                          <ActionIcon aria-label="Edit group"
-                            variant="light"
-                            color="indigo"
-                            onClick={() => handleOpenModal(g)}
-                          >
+                        <Tooltip label="Edit group">
+                          <ActionIcon aria-label={`Edit ${g.name}`} variant="light" color="indigo" onClick={() => handleOpenModal(g)}>
                             <Edit2 size={16} />
                           </ActionIcon>
                         </Tooltip>
-                        <Tooltip label="Delete Group">
-                          <ActionIcon aria-label="Delete group"
-                            variant="light"
-                            color="red"
-                            onClick={() => handleDelete(g.id)}
-                          >
+                        <Tooltip label="Delete group">
+                          <ActionIcon aria-label={`Delete ${g.name}`} variant="light" color="red" onClick={() => handleDelete(g)}>
                             <Trash2 size={16} />
                           </ActionIcon>
                         </Tooltip>
@@ -297,7 +192,6 @@ export function GroupList() {
         )}
       </Card>
 
-      {/* Create/Edit Group Modal */}
       <Modal
         opened={isModalOpen}
         onClose={() => setIsModalOpen(false)}
@@ -320,10 +214,13 @@ export function GroupList() {
             onChange={(e) => setDescription(e.currentTarget.value)}
           />
           <MultiSelect
-            label="Group Roles"
-            description="Users in this group will inherit these roles."
+            label="Roles its members get"
+            description="Everyone in this group holds these roles as well as their own."
             placeholder="Select roles"
-            data={AVAILABLE_ROLES}
+            data={ROLE_OPTIONS.map((option) => ({
+              value: option.value,
+              label: `${option.label} — ${option.description}`,
+            }))}
             value={roles}
             onChange={setRoles}
             clearable
@@ -331,86 +228,14 @@ export function GroupList() {
           />
           <Group justify="flex-end" mt="md">
             <Button variant="light" onClick={() => setIsModalOpen(false)}>Cancel</Button>
-            <Button onClick={handleSubmit} loading={createGroup.isPending || updateGroup.isPending}>
+            <Button onClick={handleSubmit} loading={createGroup.isPending || updateGroup.isPending} disabled={!name.trim()}>
               {editingGroup ? 'Update' : 'Create'}
             </Button>
           </Group>
         </Stack>
       </Modal>
 
-      {/* Members Modal */}
-      <Modal
-        opened={isMembersModalOpen}
-        onClose={() => setIsMembersModalOpen(false)}
-        title={<Text fw={700}>Members of {selectedGroup?.name}</Text>}
-        radius="lg"
-        size="lg"
-      >
-        <Stack gap="md">
-          <Group>
-            <Select
-              placeholder="Select a user to add"
-              data={availableUsers}
-              value={selectedUserId}
-              onChange={setSelectedUserId}
-              searchable
-              style={{ flex: 1 }}
-            />
-            <Button
-              leftSection={<UserPlus size={16} />}
-              onClick={handleAddMember}
-              disabled={!selectedUserId}
-              loading={addMembership.isPending}
-            >
-              Add
-            </Button>
-          </Group>
-
-          {membersLoading ? (
-            <Text c="dimmed">Loading members...</Text>
-          ) : members.length === 0 ? (
-            <Text c="dimmed" ta="center" py="md">No members in this group yet.</Text>
-          ) : (
-            <Table verticalSpacing="sm" highlightOnHover>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th>User</Table.Th>
-                  <Table.Th>Email</Table.Th>
-                  <Table.Th ta="right">Actions</Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {members.map((m) => (
-                  <Table.Tr key={m.id}>
-                    <Table.Td>
-                      <Stack gap={0}>
-                        <Text fw={600} size="sm">{m.full_name || m.username}</Text>
-                        <Text size="xs" c="dimmed">@{m.username}</Text>
-                      </Stack>
-                    </Table.Td>
-                    <Table.Td>
-                      <Text size="sm">{m.email || '—'}</Text>
-                    </Table.Td>
-                    <Table.Td>
-                      <Group justify="flex-end">
-                        <Tooltip label="Remove Member">
-                          <ActionIcon aria-label="Remove member from group"
-                            variant="light"
-                            color="red"
-                            onClick={() => handleRemoveMember(m.id)}
-                          >
-                            <UserMinus size={16} />
-                          </ActionIcon>
-                        </Tooltip>
-                      </Group>
-                    </Table.Td>
-                  </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
-          )}
-        </Stack>
-      </Modal>
+      <MembersModal group={membersOf} opened={membersOf !== null} onClose={() => setMembersOf(null)} />
     </Stack>
   );
 }
