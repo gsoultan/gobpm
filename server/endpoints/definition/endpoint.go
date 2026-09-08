@@ -3,6 +3,7 @@ package definition
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/go-kit/kit/endpoint"
 	"github.com/google/uuid"
@@ -12,24 +13,36 @@ import (
 )
 
 type Endpoints struct {
-	ListDefinitions          endpoint.Endpoint
-	CreateDefinition         endpoint.Endpoint
-	GetDefinition            endpoint.Endpoint
-	DeleteDefinition         endpoint.Endpoint
-	ExportDefinition         endpoint.Endpoint
-	ImportDefinition         endpoint.Endpoint
-	ListJavaScriptConditions endpoint.Endpoint
+	ListDefinitions           endpoint.Endpoint
+	CreateDefinition          endpoint.Endpoint
+	GetDefinition             endpoint.Endpoint
+	DeleteDefinition          endpoint.Endpoint
+	ExportDefinition          endpoint.Endpoint
+	ImportDefinition          endpoint.Endpoint
+	ListJavaScriptConditions  endpoint.Endpoint
+	PromoteDefinition         endpoint.Endpoint
+	ListDefinitionVersions    endpoint.Endpoint
+	ListLiveVersions          endpoint.Endpoint
+	ScheduleDefinition        endpoint.Endpoint
+	CancelScheduledDefinition endpoint.Endpoint
+	MigrateInstances          endpoint.Endpoint
 }
 
 func MakeEndpoints(s services.ServiceFacade) Endpoints {
 	return Endpoints{
-		ListDefinitions:          MakeListDefinitionsEndpoint(s),
-		CreateDefinition:         MakeCreateDefinitionEndpoint(s),
-		GetDefinition:            MakeGetDefinitionEndpoint(s),
-		DeleteDefinition:         MakeDeleteDefinitionEndpoint(s),
-		ExportDefinition:         MakeExportDefinitionEndpoint(s),
-		ImportDefinition:         MakeImportDefinitionEndpoint(s),
-		ListJavaScriptConditions: MakeListJavaScriptConditionsEndpoint(s),
+		ListDefinitions:           MakeListDefinitionsEndpoint(s),
+		CreateDefinition:          MakeCreateDefinitionEndpoint(s),
+		GetDefinition:             MakeGetDefinitionEndpoint(s),
+		DeleteDefinition:          MakeDeleteDefinitionEndpoint(s),
+		ExportDefinition:          MakeExportDefinitionEndpoint(s),
+		ImportDefinition:          MakeImportDefinitionEndpoint(s),
+		ListJavaScriptConditions:  MakeListJavaScriptConditionsEndpoint(s),
+		PromoteDefinition:         MakePromoteDefinitionEndpoint(s),
+		ListDefinitionVersions:    MakeListDefinitionVersionsEndpoint(s),
+		ListLiveVersions:          MakeListLiveVersionsEndpoint(s),
+		ScheduleDefinition:        MakeScheduleDefinitionEndpoint(s),
+		CancelScheduledDefinition: MakeCancelScheduledDefinitionEndpoint(s),
+		MigrateInstances:          MakeMigrateInstancesEndpoint(s),
 	}
 }
 
@@ -90,8 +103,60 @@ func MakeCreateDefinitionEndpoint(s services.ServiceFacade) endpoint.Endpoint {
 		if !ok {
 			return nil, fmt.Errorf("definition: expected a CreateDefinitionRequest, got %T", request)
 		}
-		id, err := s.CreateDefinition(ctx, req.Definition)
-		return CreateDefinitionResponse{ID: id, Err: err}, nil
+		if req.Definition == nil {
+			return CreateDefinitionResponse{Err: apierr.Invalidf("a definition is required")}, nil
+		}
+		id, err := s.DeployDefinition(ctx, req.Definition, !req.Stage)
+		if err != nil {
+			return CreateDefinitionResponse{Err: err}, nil
+		}
+		// Version is read back off the definition rather than recomputed: the
+		// allocator may have retried past a competing deploy, so the number the
+		// caller ends up with is not always the one that was first proposed.
+		return CreateDefinitionResponse{
+			ID:      id,
+			Version: req.Definition.Version,
+			Live:    !req.Stage,
+		}, nil
+	}
+}
+
+// MakePromoteDefinitionEndpoint makes one deployed version the one new
+// instances start on.
+func MakePromoteDefinitionEndpoint(s services.ServiceFacade) endpoint.Endpoint {
+	return func(ctx context.Context, request any) (any, error) {
+		req, ok := request.(PromoteDefinitionRequest)
+		if !ok {
+			return nil, fmt.Errorf("definition: expected a PromoteDefinitionRequest, got %T", request)
+		}
+		projectID, err := uuid.Parse(req.ProjectID)
+		if err != nil {
+			return PromoteDefinitionResponse{Err: apierr.Invalidf("project_id %q is not a valid identifier: %v", req.ProjectID, err)}, nil
+		}
+		if req.Key == "" {
+			return PromoteDefinitionResponse{Err: apierr.Invalidf("a process key is required")}, nil
+		}
+		return PromoteDefinitionResponse{Err: s.PromoteDefinitionVersion(ctx, projectID, req.Key, req.Version)}, nil
+	}
+}
+
+// MakeListDefinitionVersionsEndpoint returns one process key's version history
+// with its live flag and instance counts.
+func MakeListDefinitionVersionsEndpoint(s services.ServiceFacade) endpoint.Endpoint {
+	return func(ctx context.Context, request any) (any, error) {
+		req, ok := request.(ListDefinitionVersionsRequest)
+		if !ok {
+			return nil, fmt.Errorf("definition: expected a ListDefinitionVersionsRequest, got %T", request)
+		}
+		projectID, err := uuid.Parse(req.ProjectID)
+		if err != nil {
+			return ListDefinitionVersionsResponse{Err: apierr.Invalidf("project_id %q is not a valid identifier: %v", req.ProjectID, err)}, nil
+		}
+		if req.Key == "" {
+			return ListDefinitionVersionsResponse{Err: apierr.Invalidf("a process key is required")}, nil
+		}
+		versions, err := s.ListDefinitionVersions(ctx, projectID, req.Key)
+		return ListDefinitionVersionsResponse{Versions: versions, Err: err}, nil
 	}
 }
 
@@ -151,5 +216,102 @@ func MakeImportDefinitionEndpoint(s services.ServiceFacade) endpoint.Endpoint {
 		}
 		id, err := s.ImportDefinition(ctx, projectID, req.XML)
 		return ImportDefinitionResponse{ID: id, Err: err}, nil
+	}
+}
+
+// MakeListLiveVersionsEndpoint reports which version of each process key in a
+// project new instances start on.
+func MakeListLiveVersionsEndpoint(s services.ServiceFacade) endpoint.Endpoint {
+	return func(ctx context.Context, request any) (any, error) {
+		req, ok := request.(ListLiveVersionsRequest)
+		if !ok {
+			return nil, fmt.Errorf("definition: expected a ListLiveVersionsRequest, got %T", request)
+		}
+		projectID, err := uuid.Parse(req.ProjectID)
+		if err != nil {
+			return ListLiveVersionsResponse{Err: apierr.Invalidf("project_id %q is not a valid identifier: %v", req.ProjectID, err)}, nil
+		}
+		live, err := s.ListLiveVersions(ctx, projectID)
+		return ListLiveVersionsResponse{Live: live, Err: err}, nil
+	}
+}
+
+// MakeScheduleDefinitionEndpoint arranges for a version to take over at a time.
+func MakeScheduleDefinitionEndpoint(s services.ServiceFacade) endpoint.Endpoint {
+	return func(ctx context.Context, request any) (any, error) {
+		req, ok := request.(ScheduleDefinitionRequest)
+		if !ok {
+			return nil, fmt.Errorf("definition: expected a ScheduleDefinitionRequest, got %T", request)
+		}
+		projectID, err := uuid.Parse(req.ProjectID)
+		if err != nil {
+			return ScheduleDefinitionResponse{Err: apierr.Invalidf("project_id %q is not a valid identifier: %v", req.ProjectID, err)}, nil
+		}
+		if req.Key == "" {
+			return ScheduleDefinitionResponse{Err: apierr.Invalidf("a process key is required")}, nil
+		}
+		activateAt, err := time.Parse(time.RFC3339, req.ActivateAt)
+		if err != nil {
+			return ScheduleDefinitionResponse{Err: apierr.Invalidf("activate_at %q is not an RFC 3339 timestamp: %v", req.ActivateAt, err)}, nil
+		}
+		return ScheduleDefinitionResponse{Err: s.ScheduleDefinitionVersion(ctx, projectID, req.Key, req.Version, activateAt)}, nil
+	}
+}
+
+// MakeCancelScheduledDefinitionEndpoint drops a cutover that has not happened.
+func MakeCancelScheduledDefinitionEndpoint(s services.ServiceFacade) endpoint.Endpoint {
+	return func(ctx context.Context, request any) (any, error) {
+		req, ok := request.(CancelScheduledDefinitionRequest)
+		if !ok {
+			return nil, fmt.Errorf("definition: expected a CancelScheduledDefinitionRequest, got %T", request)
+		}
+		projectID, err := uuid.Parse(req.ProjectID)
+		if err != nil {
+			return CancelScheduledDefinitionResponse{Err: apierr.Invalidf("project_id %q is not a valid identifier: %v", req.ProjectID, err)}, nil
+		}
+		releaseID, err := uuid.Parse(req.ReleaseID)
+		if err != nil {
+			return CancelScheduledDefinitionResponse{Err: apierr.Invalidf("release_id %q is not a valid identifier: %v", req.ReleaseID, err)}, nil
+		}
+		return CancelScheduledDefinitionResponse{Err: s.CancelScheduledVersion(ctx, projectID, releaseID)}, nil
+	}
+}
+
+// MakeMigrateInstancesEndpoint moves running instances onto another version.
+//
+// Reachable for the first time here. It was written, hardened and left
+// unreachable, which meant the one situation drain cannot cover — work in
+// flight on a version that must not continue — had no answer in the product at
+// all. It is administrative and it defaults to a dry run: this rewrites durable
+// business commitments, so seeing the plan is the default and committing is the
+// thing you ask for.
+func MakeMigrateInstancesEndpoint(s services.ServiceFacade) endpoint.Endpoint {
+	return func(ctx context.Context, request any) (any, error) {
+		req, ok := request.(MigrateInstancesRequest)
+		if !ok {
+			return nil, fmt.Errorf("definition: expected a MigrateInstancesRequest, got %T", request)
+		}
+		source, err := uuid.Parse(req.SourceDefinitionID)
+		if err != nil {
+			return MigrateInstancesResponse{Err: apierr.Invalidf("source_definition_id %q is not a valid identifier: %v", req.SourceDefinitionID, err)}, nil
+		}
+		target, err := uuid.Parse(req.TargetDefinitionID)
+		if err != nil {
+			return MigrateInstancesResponse{Err: apierr.Invalidf("target_definition_id %q is not a valid identifier: %v", req.TargetDefinitionID, err)}, nil
+		}
+
+		plan, err := s.PlanInstanceMigration(ctx, source, target, req.NodeMapping)
+		if err != nil {
+			return MigrateInstancesResponse{Err: err}, nil
+		}
+		if req.DryRun {
+			return MigrateInstancesResponse{Plan: plan}, nil
+		}
+		if err := s.MigrateInstances(ctx, source, target, req.NodeMapping); err != nil {
+			// The plan comes back with the refusal so the caller sees both what
+			// they asked for and why it was declined, in one reply.
+			return MigrateInstancesResponse{Plan: plan, Err: err}, nil
+		}
+		return MigrateInstancesResponse{Plan: plan, Applied: true}, nil
 	}
 }

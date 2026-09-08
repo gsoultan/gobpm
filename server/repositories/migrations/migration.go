@@ -246,6 +246,186 @@ func Schema(models []any) []Migration {
 				return nil
 			},
 		},
+		{
+			Version: 13,
+			Name:    "index the job claim query",
+			// The job worker asks for pending jobs whose time has come, oldest
+			// first, several times a second forever. The table has single-column
+			// indexes on status and next_run_at, which is not the same thing: the
+			// planner picks one and filters the rest, so the scan grows with every
+			// completed job ever written. A composite matching the predicate and
+			// the order keeps it flat.
+			Run: func(_ context.Context, db *gorm.DB) error {
+				model, err := modelForTable(db, models, "jobs")
+				if err != nil {
+					return err
+				}
+				const index = "ix_jobs_claim"
+				if db.Migrator().HasIndex(model, index) {
+					return nil
+				}
+				if err := db.Exec(
+					"CREATE INDEX " + index + " ON jobs (status, next_run_at)",
+				).Error; err != nil {
+					return fmt.Errorf("create %s: %w", index, err)
+				}
+				return nil
+			},
+		},
+		{
+			Version: 12,
+			Name:    "signed webhook receiver tables",
+			// The signed-webhook feature shipped its models and repository but
+			// no migration, so `webhooks` and `webhook_deliveries` existed only
+			// on installations old enough to predate versioning (where the
+			// baseline AutoMigrate had made them). Every newer install answered
+			// the feature's endpoints with "no such table" and a 500, while
+			// /readyz stayed green because it only pings the database — a broken
+			// feature that never paged anyone.
+			Run: func(_ context.Context, db *gorm.DB) error {
+				for _, table := range []string{"webhooks", "webhook_deliveries"} {
+					model, err := modelForTable(db, models, table)
+					if err != nil {
+						return err
+					}
+					if db.Migrator().HasTable(model) {
+						continue
+					}
+					if err := db.AutoMigrate(model); err != nil {
+						return fmt.Errorf("create %s: %w", table, err)
+					}
+				}
+				return nil
+			},
+		},
+		{
+			Version: 14,
+			Name:    "which version of a process is live",
+			// Deploying a process used to promote it in the same act that saved it,
+			// because "the live version" was defined as whichever sorted highest.
+			// This table makes the choice explicit, and reversible.
+			//
+			// Deliberately not backfilled. An installation that has never promoted
+			// anything has no rows here, and the reader treats an absent row as "the
+			// highest version" — which is exactly what it did before. The first
+			// deploy or promotion after the upgrade writes the row.
+			Run: func(_ context.Context, db *gorm.DB) error {
+				model, err := modelForTable(db, models, "process_definition_releases")
+				if err != nil {
+					return err
+				}
+				if db.Migrator().HasTable(model) {
+					return nil
+				}
+				if err := db.AutoMigrate(model); err != nil {
+					return fmt.Errorf("create process_definition_releases: %w", err)
+				}
+				return nil
+			},
+		},
+		{
+			Version: 16,
+			Name:    "the runtimes a project deploys into",
+			// A project can have a development, staging and production runtime,
+			// each with its own database and its own port. This table is the
+			// registry of them; the data they hold is in the databases they name,
+			// not here.
+			Run: func(_ context.Context, db *gorm.DB) error {
+				model, err := modelForTable(db, models, "environments")
+				if err != nil {
+					return err
+				}
+				if db.Migrator().HasTable(model) {
+					return nil
+				}
+				if err := db.AutoMigrate(model); err != nil {
+					return fmt.Errorf("create environments: %w", err)
+				}
+				return nil
+			},
+		},
+		{
+			Version: 15,
+			Name:    "releases are a timeline, not a single current version",
+			// A release row said only "this version is live". Arranging a cutover
+			// in advance needs it to say "live from this moment", so the answer
+			// becomes a function of the rows and the clock and nothing has to
+			// wake up to apply it.
+			//
+			// Written to be safe in both directions: on a fresh database
+			// migration 14 already created the table from the current model, so
+			// the column and the new index are there and every step below is a
+			// no-op. On a database that ran 14 in its first form, this adds them.
+			Run: func(_ context.Context, db *gorm.DB) error {
+				model, err := modelForTable(db, models, "process_definition_releases")
+				if err != nil {
+					return err
+				}
+				if !db.Migrator().HasColumn(model, "activate_at") {
+					if err := db.Migrator().AddColumn(model, "activate_at"); err != nil {
+						return fmt.Errorf("add process_definition_releases.activate_at: %w", err)
+					}
+				}
+				// Rows written before the column existed are already in force, so
+				// they take the time they were created. Guarded on IS NULL so it
+				// does nothing when the dialect gave the new column a default.
+				if err := db.Model(model).
+					Where("activate_at IS NULL").
+					UpdateColumn("activate_at", gorm.Expr("created_at")).Error; err != nil {
+					return fmt.Errorf("backfill process_definition_releases.activate_at: %w", err)
+				}
+				// The old index made (key, project) unique, which a timeline must
+				// not be — the same key changes version more than once.
+				const oldIndex = "idx_definition_release_key"
+				if db.Migrator().HasIndex(model, oldIndex) {
+					if err := db.Migrator().DropIndex(model, oldIndex); err != nil {
+						return fmt.Errorf("drop %s: %w", oldIndex, err)
+					}
+				}
+				const newIndex = "idx_definition_release_timeline"
+				if !db.Migrator().HasIndex(model, newIndex) {
+					if err := db.Migrator().CreateIndex(model, newIndex); err != nil {
+						return fmt.Errorf("create %s: %w", newIndex, err)
+					}
+				}
+				return nil
+			},
+		},
+		{
+			Version: 17,
+			Name:    "an SSE event says who it is for",
+			// The live event stream carries process variables. The bus that
+			// moves events between replicas carried only the payload, so a
+			// replica reading one back had no way to know whose it was and
+			// delivered it to every browser it held — every tenant's business
+			// data, live, to anybody signed in.
+			//
+			// These two columns are the audience. Rows written before them are
+			// left null and dropped on delivery rather than broadcast: the bus
+			// prunes within minutes, and an event whose audience is unknown has
+			// no safe audience.
+			Run: func(_ context.Context, db *gorm.DB) error {
+				model, err := modelForTable(db, models, "broadcast_events")
+				if err != nil {
+					return err
+				}
+				for _, column := range []string{"organization_id", "environment_id"} {
+					if db.Migrator().HasColumn(model, column) {
+						continue
+					}
+					if err := db.Migrator().AddColumn(model, column); err != nil {
+						return fmt.Errorf("add broadcast_events.%s: %w", column, err)
+					}
+				}
+				const index = "ix_broadcast_events_org"
+				if !db.Migrator().HasIndex(model, index) {
+					if err := db.Migrator().CreateIndex(model, index); err != nil {
+						return fmt.Errorf("create %s: %w", index, err)
+					}
+				}
+				return nil
+			},
+		},
 	}
 }
 
