@@ -13,6 +13,10 @@ interface ImportParticipantsResponse extends ImportSummary {
   err?: string;
 }
 
+interface RemoveParticipantResponse {
+  err?: string;
+}
+
 export const participantService = {
   async listParticipants(projectId: string, signal?: AbortSignal) {
     const response = await requestJSON<ListParticipantsResponse>(
@@ -56,5 +60,20 @@ export const participantService = {
       signal,
     });
     return raiseIfRefused(body) as ImportSummary;
+  },
+
+  /**
+   * Takes somebody out of a project's directory.
+   *
+   * The project goes with the id rather than being inferred from it, because the
+   * server checks the two agree — an id on its own would let somebody who
+   * manages one project's directory remove a person from another's.
+   */
+  async removeParticipant(projectId: string, id: string, signal?: AbortSignal) {
+    const response = await requestJSON<RemoveParticipantResponse>(
+      `/participants/${encodeURIComponent(id)}?project_id=${encodeURIComponent(projectId)}`,
+      { method: "DELETE", signal },
+    );
+    return { err: raiseIfRefused(response).err };
   },
 };

@@ -15,12 +15,14 @@ import (
 type Endpoints struct {
 	ListParticipants   endpoint.Endpoint
 	ImportParticipants endpoint.Endpoint
+	RemoveParticipant  endpoint.Endpoint
 }
 
 func MakeEndpoints(s services.ServiceFacade) Endpoints {
 	return Endpoints{
 		ListParticipants:   MakeListParticipantsEndpoint(s),
 		ImportParticipants: MakeImportParticipantsEndpoint(s),
+		RemoveParticipant:  MakeRemoveParticipantEndpoint(s),
 	}
 }
 
@@ -78,5 +80,29 @@ func MakeImportParticipantsEndpoint(s services.ServiceFacade) endpoint.Endpoint 
 			Problems: summary.Problems,
 			Err:      err,
 		}, nil
+	}
+}
+
+// MakeRemoveParticipantEndpoint takes somebody out of a project's directory.
+//
+// A removal is reversible: the row is marked rather than destroyed and keeps
+// its key, so an import naming them again brings back the same person with
+// their group memberships intact. That is what makes this safe to offer beside
+// a bulk import — the two are the same act in opposite directions.
+func MakeRemoveParticipantEndpoint(s services.ServiceFacade) endpoint.Endpoint {
+	return func(ctx context.Context, request any) (any, error) {
+		req, ok := request.(RemoveParticipantRequest)
+		if !ok {
+			return nil, fmt.Errorf("participant: expected a RemoveParticipantRequest, got %T", request)
+		}
+		projectID, err := uuid.Parse(req.ProjectID)
+		if err != nil {
+			return RemoveParticipantResponse{Err: apierr.Invalidf("project_id %q is not a valid identifier: %v", req.ProjectID, err)}, nil
+		}
+		id, err := uuid.Parse(req.ID)
+		if err != nil {
+			return RemoveParticipantResponse{Err: apierr.Invalidf("id %q is not a valid identifier: %v", req.ID, err)}, nil
+		}
+		return RemoveParticipantResponse{Err: s.RemoveWorkflowUser(ctx, projectID, id)}, nil
 	}
 }

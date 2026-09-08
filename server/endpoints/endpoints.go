@@ -135,6 +135,9 @@ func MakeEndpoints(s services.ServiceFacade) Endpoints {
 	participantEndpoints := participant.MakeEndpoints(s)
 	participantEndpoints.ListParticipants = protected("ListParticipants")(participantEndpoints.ListParticipants)
 	participantEndpoints.ImportParticipants = designer("ImportParticipants")(participantEndpoints.ImportParticipants)
+	// Removing somebody takes the same role importing does — they are the same
+	// act in opposite directions, and the removal is reversible by an import.
+	participantEndpoints.RemoveParticipant = designer("RemoveParticipant")(participantEndpoints.RemoveParticipant)
 
 	// A directory source holds a connection string or an endpoint token, so
 	// every operation on one is administrative — reading the list included,

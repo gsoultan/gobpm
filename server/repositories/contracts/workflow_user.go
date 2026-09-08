@@ -33,4 +33,16 @@ type WorkflowUserRepository interface {
 	// in it is not an error — an import that runs twice must not fail the
 	// second time.
 	AddToGroup(ctx context.Context, participantID, groupID uuid.UUID) error
+
+	// Delete removes somebody from a project's directory.
+	//
+	// The row is marked, not destroyed, and it keeps its key: an import naming
+	// them again reinstates the same person rather than creating a second one,
+	// so the tasks they completed and the groups they were in are still theirs.
+	//
+	// Their open tasks are untouched, because a task names its assignee rather
+	// than referencing them — see TestATaskNamesItsAssigneeWithoutReferencingThem.
+	// That is deliberate: work in somebody's inbox does not evaporate because
+	// they left, it stays for whoever picks it up.
+	Delete(ctx context.Context, id uuid.UUID) error
 }

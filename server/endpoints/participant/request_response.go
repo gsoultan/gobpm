@@ -48,3 +48,19 @@ type ImportParticipantsResponse struct {
 }
 
 func (r ImportParticipantsResponse) Failed() error { return r.Err }
+
+// RemoveParticipantRequest names somebody to take out of a project's directory.
+//
+// The project comes with it rather than being inferred from the id, so the
+// service can check the two agree — an id on its own would let somebody who
+// manages one project's directory remove a person from another's.
+type RemoveParticipantRequest struct {
+	ProjectID string `json:"project_id"`
+	ID        string `json:"id"`
+}
+
+type RemoveParticipantResponse struct {
+	Err error `json:"err,omitzero"`
+}
+
+func (r RemoveParticipantResponse) Failed() error { return r.Err }

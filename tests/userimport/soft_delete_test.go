@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/gsoultan/metis/server/repositories/pg"
 )
 
@@ -103,5 +105,86 @@ func TestARemovedParticipantsUsernameIsNotFreeForSomebodyElse(t *testing.T) {
 		"INSERT INTO workflow_users (project_id, username, active) VALUES ($1, 'ada', true)", projectID)
 	if err == nil {
 		t.Fatal("a second row claimed a removed participant's username; their history would be split between two ids")
+	}
+}
+
+// TestRemovingSomebodyTakesThemOutOfTheDirectory covers the operation the
+// product was missing: the column, the index and the key were all in place and
+// nothing could remove anybody.
+func TestRemovingSomebodyTakesThemOutOfTheDirectory(t *testing.T) {
+	ctx, svc, projectID := fixture(t)
+	conn := connOf(t)
+
+	if _, err := svc.ImportWorkflowUsers(ctx, projectID,
+		strings.NewReader("username,email\nada,ada@example.com\ngrace,grace@example.com\n")); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	directory := pg.NewWorkflowUserRepository(conn)
+	ada, err := directory.GetByUsername(ctx, projectID, "ada")
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+
+	if err := svc.RemoveWorkflowUser(ctx, projectID, ada.ID); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+
+	people, err := svc.ListWorkflowUsers(ctx, projectID)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(people) != 1 || people[0].Username != "grace" {
+		t.Fatalf("after removing ada the directory holds %d people (%v); it should hold grace alone", len(people), people)
+	}
+
+	// Removing again is not found, not a second success: the caller asked to
+	// remove somebody who is not there.
+	if err := svc.RemoveWorkflowUser(ctx, projectID, ada.ID); err == nil {
+		t.Fatal("removing the same participant twice succeeded the second time")
+	}
+
+	// And an import naming them brings back the same person, not a new one.
+	if _, err := svc.ImportWorkflowUsers(ctx, projectID,
+		strings.NewReader("username,email\nada,ada@example.com\n")); err != nil {
+		t.Fatalf("reimport: %v", err)
+	}
+	back, err := directory.GetByUsername(ctx, projectID, "ada")
+	if err != nil {
+		t.Fatalf("ada was not reinstated: %v", err)
+	}
+	if back.ID != ada.ID {
+		t.Fatalf("reinstating gave a new id %s (was %s)", back.ID, ada.ID)
+	}
+}
+
+// TestSomebodyElsesParticipantCannotBeRemoved is the check that makes the id in
+// the path safe: on its own it would let a caller who manages one project's
+// directory remove a person from another's.
+func TestSomebodyElsesParticipantCannotBeRemoved(t *testing.T) {
+	ctx, svc, projectID := fixture(t)
+	conn := connOf(t)
+
+	if _, err := svc.ImportWorkflowUsers(ctx, projectID, strings.NewReader("username\nada\n")); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	directory := pg.NewWorkflowUserRepository(conn)
+	ada, err := directory.GetByUsername(ctx, projectID, "ada")
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+
+	var otherProject uuid.UUID
+	if err := conn.Main().QueryRow(ctx,
+		`INSERT INTO projects (organization_id, name)
+		 SELECT organization_id, 'Elsewhere' FROM projects WHERE id = $1 RETURNING id`,
+		projectID).Scan(&otherProject); err != nil {
+		t.Fatalf("seed a second project: %v", err)
+	}
+
+	if err := svc.RemoveWorkflowUser(ctx, otherProject, ada.ID); err == nil {
+		t.Fatal("a participant was removed by naming a project they do not belong to")
+	}
+	if _, err := directory.GetByUsername(ctx, projectID, "ada"); err != nil {
+		t.Fatalf("the refused removal took them out anyway: %v", err)
 	}
 }

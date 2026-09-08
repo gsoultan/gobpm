@@ -211,3 +211,31 @@ func WorkflowUserServiceFor(svc servicecontracts.WorkflowUserService) *workflowU
 	}
 	return concrete
 }
+
+// RemoveWorkflowUser takes somebody out of a project's directory.
+//
+// The project is checked against the participant rather than trusted from the
+// path: the id alone would let a caller who can manage one project's directory
+// remove somebody from another's, and the reply would look identical either way.
+func (s *workflowUserService) RemoveWorkflowUser(ctx context.Context, projectID, id uuid.UUID) error {
+	if projectID == uuid.Nil {
+		return apierr.Invalidf("a project is required")
+	}
+	if id == uuid.Nil {
+		return apierr.Invalidf("a participant is required")
+	}
+
+	people, err := s.participants.ListByProject(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	for _, person := range people {
+		if person.ID == id {
+			return s.participants.Delete(ctx, id)
+		}
+	}
+	// Not found rather than refused: from this caller's point of view there is
+	// no such participant, which is also the honest answer when there is one and
+	// they belong to somebody else.
+	return fmt.Errorf("%w: no such participant in this project", apierr.ErrNotFound)
+}

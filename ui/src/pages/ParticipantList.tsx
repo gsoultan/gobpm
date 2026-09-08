@@ -1,7 +1,9 @@
 import {
+  ActionIcon,
   Badge,
   Button,
   Card,
+  Modal,
   Group,
   Stack,
   Table,
@@ -10,7 +12,7 @@ import {
   ThemeIcon,
   Tooltip,
 } from '@mantine/core';
-import { KeyRound, Search, Upload, UserCircle, Users } from 'lucide-react';
+import { KeyRound, Search, Trash2, Upload, UserCircle, Users } from 'lucide-react';
 import { useState, useTransition } from 'react';
 
 import { PageHeader } from '../components/PageHeader';
@@ -28,6 +30,7 @@ import { useAppStore } from '../store/useAppStore';
 import {
   useImportParticipants,
   useParticipants,
+  useRemoveParticipant,
 } from '../hooks/useParticipants';
 
 const COLUMNS = 4;
@@ -53,6 +56,11 @@ const STANDING_COLOURS: Record<string, string> = {
 export function ParticipantList() {
   const isAdmin = useAppStore((state) => state.user?.role === 'ADMIN');
   const { data, isLoading, error, refetch } = useParticipants();
+  const removeParticipant = useRemoveParticipant();
+  // The person being removed, held while the confirmation is open. Removal is
+  // reversible, so this asks rather than warns — but it still asks, because the
+  // row it hides is somebody a running process may be about to assign work to.
+  const [removing, setRemoving] = useState<string | null>(null);
   const importParticipants = useImportParticipants();
   const [query, setQuery] = useState('');
   const [importOpen, setImportOpen] = useState(false);
@@ -60,6 +68,9 @@ export function ParticipantList() {
   const [, startTransition] = useTransition();
 
   const everyone: Participant[] = data?.participants ?? [];
+  // Held for the confirmation's wording: it names the person rather than saying
+  // "this participant", because the row it is about has already scrolled.
+  const removedPerson = everyone.find((person) => person.id === removing) ?? null;
   const people = query
     ? everyone.filter((p) => matchesQuery(query, p.username, p.display_name ?? '', p.email ?? ''))
     : everyone;
@@ -132,6 +143,7 @@ export function ParticipantList() {
                   <Table.Th>Email</Table.Th>
                   <Table.Th>Teams</Table.Th>
                   <Table.Th>Standing</Table.Th>
+                  <Table.Th ta="right">Actions</Table.Th>
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
@@ -173,6 +185,19 @@ export function ParticipantList() {
                           </Badge>
                         </Tooltip>
                       </Table.Td>
+                      <Table.Td ta="right">
+                        <Tooltip label="Take them out of this project's directory">
+                          <ActionIcon
+                            variant="subtle"
+                            color="red"
+                            aria-label={`Remove ${person.display_name || person.username}`}
+                            loading={removeParticipant.isPending && removing === person.id}
+                            onClick={() => setRemoving(person.id)}
+                          >
+                            <Trash2 size={16} />
+                          </ActionIcon>
+                        </Tooltip>
+                      </Table.Td>
                     </Table.Tr>
                   );
                 })}
@@ -189,6 +214,39 @@ export function ParticipantList() {
         control that will only ever say no.
       */}
       {isAdmin && <ParticipantSources />}
+
+      <Modal
+        opened={removing !== null}
+        onClose={() => setRemoving(null)}
+        radius="md"
+        title={<Text fw={700}>Remove from the directory</Text>}
+      >
+        <Stack gap="md">
+          <Text size="sm">
+            {removedPerson
+              ? `${removedPerson.display_name || removedPerson.username} will no longer appear in this project's directory.`
+              : 'They will no longer appear in this project\'s directory.'}
+          </Text>
+          <Text size="sm" c="dimmed">
+            Any task already in their inbox stays where it is — a task names its assignee rather
+            than pointing at them, so work does not disappear when somebody leaves. Importing a
+            directory that names them again brings them back with their teams.
+          </Text>
+          <Group justify="flex-end">
+            <Button variant="subtle" color="gray" onClick={() => setRemoving(null)}>Cancel</Button>
+            <Button
+              color="red"
+              loading={removeParticipant.isPending}
+              onClick={() => {
+                if (!removing) return;
+                removeParticipant.mutate(removing, { onSettled: () => setRemoving(null) });
+              }}
+            >
+              Remove
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
 
       <ParticipantImportModal
         opened={importOpen}

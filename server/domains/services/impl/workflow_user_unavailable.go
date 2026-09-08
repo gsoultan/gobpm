@@ -41,3 +41,7 @@ func (unavailableWorkflowUsers) SyncWorkflowUsersFromHTTP(context.Context, uuid.
 func (unavailableWorkflowUsers) SyncWorkflowUsersFromPostgres(context.Context, uuid.UUID, string, string) (entities.ImportSummary, error) {
 	return entities.ImportSummary{}, apierr.Invalidf("%s", unavailableReason)
 }
+
+func (unavailableWorkflowUsers) RemoveWorkflowUser(context.Context, uuid.UUID, uuid.UUID) error {
+	return apierr.Invalidf("%s", unavailableReason)
+}

@@ -231,3 +231,25 @@ func setOrNullString(set func(string), setNull func(), value string) {
 	}
 	set(value)
 }
+
+// Delete removes somebody from a project's directory.
+//
+// The generated Delete marks the row. The key is declared across the deleted
+// rows, so the marked row goes on holding this project's spelling of their
+// username — which is what makes a later import reinstate them rather than
+// create a second person with the same name and none of their history.
+func (r *workflowUserRepository) Delete(ctx context.Context, id uuid.UUID) error {
+	ex, err := r.conn.Executor(ctx)
+	if err != nil {
+		return err
+	}
+	if err := workflowuser.Delete(ctx, ex, id); err != nil {
+		if errors.Is(err, runtime.ErrNoRow) {
+			// Already gone, or never there. Both are the same answer to the
+			// caller and neither is a server fault.
+			return fmt.Errorf("%w: no such participant", apierr.ErrNotFound)
+		}
+		return fmt.Errorf("could not remove the participant: %w", err)
+	}
+	return nil
+}

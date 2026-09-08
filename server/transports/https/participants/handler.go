@@ -33,6 +33,24 @@ func RegisterHandlers(m *http.ServeMux, eps participant.Endpoints, options []htt
 		common.EncodeResponse,
 		options...,
 	))
+	// DELETE rather than another POST under /participants/, and no conflict with
+	// the import route above: ServeMux matches on method as well as path, and
+	// the two patterns never both match a request.
+	m.Handle("DELETE /api/v1/participants/{id}", httptransport.NewServer(
+		eps.RemoveParticipant,
+		decodeRemoveParticipantRequest,
+		common.EncodeResponse,
+		options...,
+	))
+}
+
+// decodeRemoveParticipantRequest takes the person from the path and the project
+// from the query, so the service can check the two agree.
+func decodeRemoveParticipantRequest(_ context.Context, r *http.Request) (any, error) {
+	return participant.RemoveParticipantRequest{
+		ProjectID: r.URL.Query().Get("project_id"),
+		ID:        r.PathValue("id"),
+	}, nil
 }
 
 func decodeListParticipantsRequest(_ context.Context, r *http.Request) (any, error) {

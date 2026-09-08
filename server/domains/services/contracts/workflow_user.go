@@ -35,4 +35,12 @@ type WorkflowUserService interface {
 	// caller-supplied database. Validating the query cannot make that safe, so
 	// the control is that reaching this is administrative.
 	SyncWorkflowUsersFromPostgres(ctx context.Context, projectID uuid.UUID, dsn, query string) (entities.ImportSummary, error)
+
+	// RemoveWorkflowUser takes somebody out of a project's directory.
+	//
+	// Their open tasks stay where they are. A task names its assignee rather
+	// than referencing them, so work in an inbox does not disappear because the
+	// person left — it stays for whoever picks it up, which is what an operator
+	// needs when somebody leaves mid-approval.
+	RemoveWorkflowUser(ctx context.Context, projectID, id uuid.UUID) error
 }

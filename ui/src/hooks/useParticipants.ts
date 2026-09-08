@@ -48,3 +48,33 @@ export const useImportParticipants = () => {
     },
   });
 };
+
+/**
+ * Takes somebody out of a project's directory.
+ *
+ * Reversible, and the confirmation says so: the row is marked rather than
+ * destroyed and keeps its key, so importing a directory that names them again
+ * brings back the same person with their group memberships. Their open tasks
+ * are untouched either way — a task names its assignee rather than referencing
+ * them, so work in an inbox does not disappear because somebody left.
+ */
+export const useRemoveParticipant = () => {
+  const queryClient = useQueryClient();
+  const { currentProjectId } = useAppStore();
+  return useMutation<void, Error, string>({
+    mutationFn: async (id) => {
+      if (!currentProjectId) throw new Error('No project selected');
+      await processService.removeParticipant(currentProjectId, id);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['participants', currentProjectId] });
+    },
+    onError: (error: unknown) => {
+      notifications.show({
+        title: 'They could not be removed',
+        message: errorMessage(error, 'The directory is unchanged.'),
+        color: 'red',
+      });
+    },
+  });
+};
