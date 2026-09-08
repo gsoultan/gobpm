@@ -46,6 +46,11 @@ func (r *jobRepository) GetPending(ctx context.Context, limit int) ([]models.Job
 	now := time.Now()
 	err := GetTx(ctx, r.db).
 		Where("status = ? AND next_run_at <= ? AND (lock_expires IS NULL OR lock_expires < ?)", models.JobPending, now, now).
+		// Oldest due first. Without an order the database returns whatever is
+		// convenient, so under load a job whose time came could be passed over
+		// indefinitely while newer ones were served — starvation that looks
+		// like one stuck instance rather than like a scheduling problem.
+		Order("next_run_at ASC").
 		Limit(limit).
 		Find(&modelsList).Error
 	if err != nil {

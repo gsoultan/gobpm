@@ -9,6 +9,16 @@ type StartProcessRequest struct {
 	ProjectID     string         `json:"project_id"`
 	DefinitionKey string         `json:"definition_key"`
 	Variables     map[string]any `json:"variables,omitzero"`
+
+	// Version starts a named version instead of the live one. Zero means the
+	// live one, which is what a caller who does not care about versions gets —
+	// and what every caller written before this field existed sends.
+	//
+	// The use it exists for is trying a staged version: deploy without promoting,
+	// start one instance on it deliberately, then promote once it behaves.
+	// Without this the only way to exercise a new version was to make it live for
+	// everybody first.
+	Version int `json:"version,omitzero"`
 }
 
 type StartProcessResponse struct {

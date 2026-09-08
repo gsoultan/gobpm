@@ -7,6 +7,14 @@ import (
 	"github.com/gsoultan/metis/server/repositories/models"
 )
 
+// DefinitionInstanceCount is how much work one version of a process still
+// holds. Running is what has to finish before that version has fully drained;
+// Total is every instance it has ever had.
+type DefinitionInstanceCount struct {
+	Running int64
+	Total   int64
+}
+
 // ProcessRepository defines the BPM process instance operations.
 type ProcessRepository interface {
 	Create(ctx context.Context, instance models.ProcessInstanceModel) (uuid.UUID, error)
@@ -22,4 +30,13 @@ type ProcessRepository interface {
 	ListByDefinition(ctx context.Context, definitionID uuid.UUID) ([]models.ProcessInstanceModel, error)
 	ListByParent(ctx context.Context, parentInstanceID uuid.UUID) ([]models.ProcessInstanceModel, error)
 	CountByStatus(ctx context.Context, projectID uuid.UUID, status models.ProcessStatus) (int64, error)
+
+	// CountInstancesByDefinitions reports how many instances each of the given
+	// definition versions holds, in one grouped query rather than one per
+	// version.
+	//
+	// It takes IDs rather than a process key because the caller has just listed
+	// the versions, and because `key` is reserved on MySQL — keeping it out of
+	// the predicate keeps this a plain IN over an indexed column.
+	CountInstancesByDefinitions(ctx context.Context, definitionIDs []uuid.UUID) (map[uuid.UUID]DefinitionInstanceCount, error)
 }

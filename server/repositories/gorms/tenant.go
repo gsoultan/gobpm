@@ -216,6 +216,27 @@ func tenantScopeOrganization(ctx context.Context, db *gorm.DB, table string) *go
 	return db.Where(condition, tc.TenantID)
 }
 
+// tenantScopeMembership scopes a table whose tenant is a many-to-many membership
+// rather than a column — users, who belong to organizations through
+// user_organizations and can belong to more than one.
+//
+// A subquery rather than a join, because joining the membership table would
+// return one row per membership: a user in two of the caller's organizations
+// would appear twice in a list that is supposed to be of users.
+func tenantScopeMembership(ctx context.Context, db *gorm.DB, table, joinTable, foreignKey string) *gorm.DB {
+	tc, ok := entities.TenantContextFrom(ctx)
+	if !ok || tc.TenantID == "" {
+		if unscopedAccessAllowed(ctx) {
+			return db
+		}
+		return denyAll(db)
+	}
+
+	return db.Where(
+		table+".id IN (SELECT "+foreignKey+" FROM "+joinTable+" WHERE organization_model_id = ?)",
+		tc.TenantID)
+}
+
 // requireOwnOrganization refuses a write that names an organization other than
 // the caller's. It is the create-side counterpart of the read scope: the scope
 // stops a caller reading another tenant's rows, this stops them writing rows

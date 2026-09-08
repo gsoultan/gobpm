@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/gsoultan/metis/server/domains/entities"
 	handlersimpl "github.com/gsoultan/metis/server/domains/handlers/impl"
 	"github.com/gsoultan/metis/server/domains/observers/impl"
@@ -214,10 +216,19 @@ func TestExclusiveGatewayFlow(t *testing.T) {
 		t.Errorf("expected taskA to be created, got %v", tasks)
 	}
 
-	// Case 2: Rejected (I'll use another project to isolate)
+	// Case 2: Rejected, in a second project so the two cases cannot see each
+	// other's tasks.
+	//
+	// def.ID has to be cleared: it was assigned by the deploy above, and reusing
+	// it makes the second deploy a duplicate primary key. That error used to be
+	// discarded, so no definition existed in proj2 at all — and the start below
+	// passed only because the key lookup ignored the project and found proj1's.
 	proj2, _ := svc.CreateProject(ctx, org.ID, "Exclusive Project 2", "")
+	def.ID = uuid.Nil
 	def.Project = &entities.Project{ID: proj2.ID}
-	_, _ = svc.CreateDefinition(ctx, &def)
+	if _, err := svc.CreateDefinition(ctx, &def); err != nil {
+		t.Fatalf("failed to deploy into the second project: %v", err)
+	}
 
 	_, err = svc.StartProcess(ctx, proj2.ID, "exclusive-process", map[string]any{"rejected": true})
 	if err != nil {

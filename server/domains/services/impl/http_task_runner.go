@@ -139,9 +139,9 @@ func (r *HTTPServiceTaskRunner) applyAuth(req *http.Request, node entities.Node)
 
 // parseResponse reads the response body and applies output mapping.
 func (r *HTTPServiceTaskRunner) parseResponse(body io.Reader, node entities.Node) (map[string]any, error) {
-	raw, err := io.ReadAll(body)
+	raw, err := httpclient.ReadResponseBody(body)
 	if err != nil {
-		return nil, fmt.Errorf("the service task's reply was cut short after %d bytes: %w", len(raw), err)
+		return nil, fmt.Errorf("the service task's reply could not be read in full: %w", err)
 	}
 	if len(raw) == 0 {
 		// An empty body is a legitimate reply — there is simply nothing to map.

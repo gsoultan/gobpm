@@ -10,6 +10,7 @@ import (
 	"github.com/go-kit/kit/endpoint"
 	"github.com/google/uuid"
 	"github.com/gsoultan/metis/internal/pkg/apierr"
+	"github.com/gsoultan/metis/internal/pkg/configsecret"
 	"github.com/gsoultan/metis/server/domains/services"
 )
 
@@ -104,7 +105,7 @@ func MakeListConnectorInstancesEndpoint(s services.ServiceFacade) endpoint.Endpo
 			return ListConnectorInstancesResponse{Err: apierr.Invalidf("project_id %q is not a valid identifier: %v", req.ProjectID, err)}, nil
 		}
 		res, err := s.ListConnectorInstances(ctx, projectID)
-		return ListConnectorInstancesResponse{Instances: res, Err: err}, nil
+		return ListConnectorInstancesResponse{Instances: maskInstances(res), Err: err}, nil
 	}
 }
 
@@ -115,6 +116,9 @@ func MakeCreateConnectorInstanceEndpoint(s services.ServiceFacade) endpoint.Endp
 			return nil, fmt.Errorf("connector: expected a CreateConnectorInstanceRequest, got %T", request)
 		}
 		res, err := s.CreateConnectorInstance(ctx, req.Instance)
+		if err == nil {
+			res.Config = configsecret.Mask(res.Config)
+		}
 		return CreateConnectorInstanceResponse{Instance: res, Err: err}, nil
 	}
 }
@@ -125,7 +129,22 @@ func MakeUpdateConnectorInstanceEndpoint(s services.ServiceFacade) endpoint.Endp
 		if !ok {
 			return nil, fmt.Errorf("connector: expected a UpdateConnectorInstanceRequest, got %T", request)
 		}
-		err := s.UpdateConnectorInstance(ctx, req.Instance)
+		// The form was shown placeholders in place of the stored credentials, so
+		// fold them back onto what is held rather than saving the placeholder.
+		// Without this, editing a connector's URL would overwrite its password
+		// with the literal string the browser was shown.
+		instance := req.Instance
+		if instance.ID != uuid.Nil {
+			if current, readErr := s.GetConnectorInstance(ctx, instance.ID); readErr == nil {
+				instance.Config = configsecret.Merge(instance.Config, current.Config)
+			} else if configsecret.HasSentinel(instance.Config) {
+				// Refusing beats writing the placeholder as a credential.
+				return UpdateConnectorInstanceResponse{
+					Err: apierr.Invalidf("could not read the stored connection to keep its saved credentials: %v", readErr),
+				}, nil
+			}
+		}
+		err := s.UpdateConnectorInstance(ctx, instance)
 		return UpdateConnectorInstanceResponse{Err: err}, nil
 	}
 }
@@ -228,4 +247,16 @@ func MakeDeleteManifestEndpoint(s services.ServiceFacade) endpoint.Endpoint {
 		}
 		return DeleteManifestResponse{Err: s.DeleteManifest(ctx, id)}, nil
 	}
+}
+
+// maskInstances replaces every stored credential with a placeholder.
+//
+// This is the API boundary, deliberately: the executor reads instances through
+// the service directly and still needs the real values. Masking any deeper
+// would break the calls the credentials exist for.
+func maskInstances(instances []entities.ConnectorInstance) []entities.ConnectorInstance {
+	for i := range instances {
+		instances[i].Config = configsecret.Mask(instances[i].Config)
+	}
+	return instances
 }

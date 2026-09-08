@@ -20,12 +20,18 @@ import (
 type userService struct {
 	repo      repositories.Repository
 	jwtSecret []byte
+	// principals is a short-lived cache of who a token belongs to. Validating
+	// one read the account twice, each read preloading organizations and
+	// projects — about six queries before a request reached its handler. See
+	// principal_cache.go for why the lifetime is seconds rather than minutes.
+	principals *principalCache
 }
 
 func NewUserService(repo repositories.Repository, jwtSecret string) contracts.UserService {
 	return &userService{
-		repo:      repo,
-		jwtSecret: []byte(jwtSecret),
+		repo:       repo,
+		jwtSecret:  []byte(jwtSecret),
+		principals: newPrincipalCache(),
 	}
 }
 
@@ -153,11 +159,14 @@ func (s *userService) ValidateToken(ctx context.Context, tokenString string) (en
 			return entities.User{}, fmt.Errorf("invalid token: invalid user id")
 		}
 
-		if err := s.rejectIfIssuedBeforeCredentialsChanged(ctx, userID, claims); err != nil {
+		principal, err := s.resolvePrincipal(ctx, userID)
+		if err != nil {
 			return entities.User{}, err
 		}
-
-		return s.GetUser(ctx, userID)
+		if err := rejectIfIssuedBeforeCredentialsChanged(principal.tokensValidFrom, claims); err != nil {
+			return entities.User{}, err
+		}
+		return principal.user, nil
 	}
 
 	return entities.User{}, fmt.Errorf("invalid token")
@@ -205,7 +214,13 @@ func (s *userService) UpdateUser(ctx context.Context, u entities.User) error {
 		stored.Organization = u.Organization.Name
 	}
 
-	return s.repo.User().Update(ctx, stored)
+	if err := s.repo.User().Update(ctx, stored); err != nil {
+		return err
+	}
+	// An update can change roles, which is an authorization decision; a cached
+	// caller would keep the ones they had.
+	s.principals.forget(u.ID)
+	return nil
 }
 
 // MinPasswordLength is the shortest password SetPassword will store.
@@ -258,7 +273,13 @@ func (s *userService) ChangePassword(ctx context.Context, userID uuid.UUID, curr
 	if err != nil {
 		return fmt.Errorf("could not hash the new password: %w", err)
 	}
-	return s.repo.User().SetPasswordHash(ctx, uuid.UUID(mu.ID), string(newHash))
+	if err := s.repo.User().SetPasswordHash(ctx, uuid.UUID(mu.ID), string(newHash)); err != nil {
+		return err
+	}
+	// Ending the old sessions is the point of the change. A cached credential
+	// cutoff would keep honouring them for the life of the entry.
+	s.principals.forget(uuid.UUID(mu.ID))
+	return nil
 }
 
 func (s *userService) SetPassword(ctx context.Context, username, newPassword string) error {
@@ -279,27 +300,55 @@ func (s *userService) SetPassword(ctx context.Context, username, newPassword str
 	if err != nil {
 		return fmt.Errorf("could not hash the new password: %w", err)
 	}
-	return s.repo.User().SetPasswordHash(ctx, uuid.UUID(user.ID), string(hash))
+	if err := s.repo.User().SetPasswordHash(ctx, uuid.UUID(user.ID), string(hash)); err != nil {
+		return err
+	}
+	s.principals.forget(uuid.UUID(user.ID))
+	return nil
 }
 
 func (s *userService) DeleteUser(ctx context.Context, id uuid.UUID) error {
-	return s.repo.User().Delete(ctx, id)
+	if err := s.repo.User().Delete(ctx, id); err != nil {
+		return err
+	}
+	s.principals.forget(id)
+	return nil
 }
 
+// Membership changes decide which tenant's data a caller can see, so a stale
+// entry is an access decision made against a grant that has been withdrawn.
+// Each of these drops the account rather than waiting out the entry's lifetime.
+
 func (s *userService) AssignOrganization(ctx context.Context, userID, organizationID uuid.UUID) error {
-	return s.repo.User().AddOrganization(ctx, userID, organizationID)
+	if err := s.repo.User().AddOrganization(ctx, userID, organizationID); err != nil {
+		return err
+	}
+	s.principals.forget(userID)
+	return nil
 }
 
 func (s *userService) UnassignOrganization(ctx context.Context, userID, organizationID uuid.UUID) error {
-	return s.repo.User().RemoveOrganization(ctx, userID, organizationID)
+	if err := s.repo.User().RemoveOrganization(ctx, userID, organizationID); err != nil {
+		return err
+	}
+	s.principals.forget(userID)
+	return nil
 }
 
 func (s *userService) AssignProject(ctx context.Context, userID, projectID uuid.UUID) error {
-	return s.repo.User().AddProject(ctx, userID, projectID)
+	if err := s.repo.User().AddProject(ctx, userID, projectID); err != nil {
+		return err
+	}
+	s.principals.forget(userID)
+	return nil
 }
 
 func (s *userService) UnassignProject(ctx context.Context, userID, projectID uuid.UUID) error {
-	return s.repo.User().RemoveProject(ctx, userID, projectID)
+	if err := s.repo.User().RemoveProject(ctx, userID, projectID); err != nil {
+		return err
+	}
+	s.principals.forget(userID)
+	return nil
 }
 
 // rejectIfIssuedBeforeCredentialsChanged refuses a token minted before this
@@ -315,12 +364,28 @@ func (s *userService) UnassignProject(ctx context.Context, userID, projectID uui
 // Reads the cutoff from the database rather than trusting a claim, because a
 // claim is exactly what an attacker holding a token already controls the
 // contents of.
-func (s *userService) rejectIfIssuedBeforeCredentialsChanged(ctx context.Context, userID uuid.UUID, claims jwt.MapClaims) error {
+// resolvePrincipal reads the account behind a token, through a short-lived
+// cache.
+//
+// One read now serves both the credential cutoff and the caller identity; it
+// used to be two, each preloading the same associations.
+func (s *userService) resolvePrincipal(ctx context.Context, userID uuid.UUID) (cachedPrincipal, error) {
+	if cached, ok := s.principals.get(userID); ok {
+		return cached, nil
+	}
 	mu, _, err := s.repo.User().GetWithPasswordByID(ctx, userID)
 	if err != nil {
-		return fmt.Errorf("invalid token: no such user")
+		return cachedPrincipal{}, fmt.Errorf("invalid token: no such user")
 	}
-	if mu.TokensValidFrom == nil {
+	user := adapters.UserEntityAdapter{Model: mu}.ToEntity()
+	s.principals.put(userID, user, mu.TokensValidFrom)
+	return cachedPrincipal{user: user, tokensValidFrom: mu.TokensValidFrom}, nil
+}
+
+// rejectIfIssuedBeforeCredentialsChanged refuses a token minted before the
+// account's credentials last changed. Pure, over what resolvePrincipal read.
+func rejectIfIssuedBeforeCredentialsChanged(tokensValidFrom *time.Time, claims jwt.MapClaims) error {
+	if tokensValidFrom == nil {
 		// An account whose password has not changed since the column was
 		// added. Nothing to compare against, and filling it in on upgrade
 		// would have signed everybody out.
@@ -339,7 +404,7 @@ func (s *userService) rejectIfIssuedBeforeCredentialsChanged(ctx context.Context
 	// Strictly before: a token minted in the same second as the change is the
 	// one the user is about to be handed, and refusing it would sign them out
 	// of the session they just re-authenticated.
-	if issued.Unix() < mu.TokensValidFrom.Unix() {
+	if issued.Unix() < tokensValidFrom.Unix() {
 		return fmt.Errorf("invalid token: issued before the password was changed")
 	}
 	return nil

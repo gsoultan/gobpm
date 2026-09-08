@@ -115,6 +115,7 @@ func (m *MockRepository) ConnectorInstance() contracts.ConnectorInstanceReposito
 }
 func (m *MockRepository) Decision() contracts.DecisionRepository         { return nil }
 func (m *MockRepository) Definition() contracts.DefinitionRepository     { return nil }
+func (m *MockRepository) Environment() contracts.EnvironmentRepository   { return nil }
 func (m *MockRepository) Deployment() contracts.DeploymentRepository     { return nil }
 func (m *MockRepository) ExternalTask() contracts.ExternalTaskRepository { return nil }
 func (m *MockRepository) Form() contracts.FormRepository                 { return nil }

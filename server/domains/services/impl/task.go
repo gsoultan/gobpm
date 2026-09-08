@@ -2,12 +2,12 @@ package impl
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gsoultan/metis/internal/pkg/apierr"
 	"github.com/gsoultan/metis/server/domains/adapters"
 	"github.com/gsoultan/metis/server/domains/entities"
 	servicecontracts "github.com/gsoultan/metis/server/domains/services/contracts"
@@ -122,7 +122,9 @@ func (s *taskService) ClaimTask(ctx context.Context, id uuid.UUID, userID string
 }
 
 // ErrTaskForbidden is returned when a caller is not permitted to act on a task.
-var ErrTaskForbidden = errors.New("task: caller is not permitted to act on this task")
+// ErrTaskForbidden wraps apierr.ErrForbidden so the transport answers 403: the
+// task exists and the caller may know it does; what they lack is the right.
+var ErrTaskForbidden = fmt.Errorf("%w: task: caller is not permitted to act on this task", apierr.ErrForbidden)
 
 // authorizeCandidate reports whether userID may claim or complete an
 // unassigned task.
@@ -504,6 +506,25 @@ func (s *taskService) ListTasksByCandidatesPaged(ctx context.Context, userID str
 
 // ListTasksPaged returns one page of a project's tasks, or of the tenant's
 // tasks when no project is selected.
+// ListTasksByInstancePaged returns one window of a single instance's tasks.
+//
+// Separate from ListTasksPaged rather than another argument to it: an instance
+// belongs to exactly one project, so naming an instance already answers the
+// project question, and a call taking both would have to define what a
+// mismatched pair means.
+func (s *taskService) ListTasksByInstancePaged(ctx context.Context, instanceID uuid.UUID, page repocontracts.Pagination) (repocontracts.Page[entities.Task], error) {
+	result, err := s.repo.Task().ListByInstancePaged(ctx, instanceID, page)
+	if err != nil {
+		return repocontracts.Page[entities.Task]{}, err
+	}
+
+	tasks := make([]entities.Task, len(result.Items))
+	for i, m := range result.Items {
+		tasks[i] = adapters.TaskEntityAdapter{Model: m}.ToEntity()
+	}
+	return repocontracts.NewPage(tasks, result.Total, page), nil
+}
+
 func (s *taskService) ListTasksPaged(ctx context.Context, projectID uuid.UUID, page repocontracts.Pagination) (repocontracts.Page[entities.Task], error) {
 	var result repocontracts.Page[models.TaskModel]
 	var err error

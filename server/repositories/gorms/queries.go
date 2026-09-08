@@ -107,6 +107,12 @@ func QualifiedByProjectID(table string) string {
 	return table + ".project_id = ?"
 }
 
+// QualifiedByInstanceID is QueryByInstanceID qualified with its table, for reads
+// that run under a tenant join. See QualifiedByID for why qualification matters.
+func QualifiedByInstanceID(table string) string {
+	return table + ".instance_id = ?"
+}
+
 // QueryHighestVersion selects the highest version in the scoped rows, or zero
 // when there are none.
 //

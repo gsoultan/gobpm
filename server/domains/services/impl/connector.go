@@ -608,9 +608,9 @@ func closeResponse(body io.Closer, connector string) {
 // through a reply produced an empty result and a *successful* service task. The
 // process then carried on with variables the partner never sent.
 func readResponse(resp *http.Response, connector string) ([]byte, error) {
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := httpclient.ReadResponseBody(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("%s: the reply was cut short after %d bytes: %w", connector, len(raw), err)
+		return nil, fmt.Errorf("%s: the reply could not be read in full: %w", connector, err)
 	}
 	return raw, nil
 }

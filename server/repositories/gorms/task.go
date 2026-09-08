@@ -174,14 +174,19 @@ func (r *gormTaskRepository) Create(ctx context.Context, t models.TaskModel) err
 	return nil
 }
 
+// CountByStatus counts a tenant's tasks, optionally in one status.
+//
+// Tenant-scoped for the same reason the instance counter is: the project is
+// optional here, and without a scope a caller who named none counted every
+// organization's tasks. See gormProcessRepository.CountByStatus.
 func (r *gormTaskRepository) CountByStatus(ctx context.Context, projectID uuid.UUID, status models.TaskStatus) (int64, error) {
 	var count int64
-	query := GetTx(ctx, r.db).Model(&models.TaskModel{})
+	query := tenantScopeCondition(ctx, GetTx(ctx, r.db).Model(&models.TaskModel{}), tableTasks)
 	if status != "" {
 		query = query.Where("status = ?", status)
 	}
 	if projectID != uuid.Nil {
-		query = query.Where(QueryByProjectID, projectID)
+		query = query.Where(QualifiedByProjectID(tableTasks), projectID)
 	}
 	if err := query.Count(&count).Error; err != nil {
 		return 0, fmt.Errorf("could not count tasks: %w", err)
@@ -232,6 +237,19 @@ func (r *gormTaskRepository) ListByProjectPaged(ctx context.Context, projectID u
 	base := tenantScopeDB(ctx, GetTx(ctx, r.db), "tasks").
 		Model(&models.TaskModel{}).
 		Where(QueryByProjectID, projectID)
+	return countAndPage[models.TaskModel](base, p, "tasks.created_at DESC")
+}
+
+// ListByInstancePaged returns one page of a single instance's tasks.
+//
+// Tenant-scoped, unlike the unpaged ListByInstance above: that one serves the
+// engine, which is already inside a tenant it established, while this one
+// answers an HTTP request carrying an instance id the caller chose. An id from
+// another organization must find nothing rather than someone else's work.
+func (r *gormTaskRepository) ListByInstancePaged(ctx context.Context, instanceID uuid.UUID, p contracts.Pagination) (contracts.Page[models.TaskModel], error) {
+	base := tenantScopeDB(ctx, GetTx(ctx, r.db), "tasks").
+		Model(&models.TaskModel{}).
+		Where(QualifiedByInstanceID("tasks"), instanceID)
 	return countAndPage[models.TaskModel](base, p, "tasks.created_at DESC")
 }
 

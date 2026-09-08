@@ -104,11 +104,25 @@ func (r *gormProcessRepository) ListByParent(ctx context.Context, parentInstance
 	return modelsList, nil
 }
 
+// CountByStatus counts a tenant's process instances in one status.
+//
+// The project is optional and the tenant scope is not. This used to filter on
+// project alone, so a caller who named no project — which the statistics
+// endpoint permits, and its dashboard tile does — was counting every
+// organization's instances in the installation. Counts are not contents, but
+// "how much work does this system carry" is still somebody else's business.
+//
+// Scoped by predicate rather than by join, because a join would make the count
+// depend on the projects table matching, and a subquery says the same thing
+// without widening the statement.
 func (r *gormProcessRepository) CountByStatus(ctx context.Context, projectID uuid.UUID, status models.ProcessStatus) (int64, error) {
 	var count int64
-	query := GetTx(ctx, r.db).Model(&models.ProcessInstanceModel{}).Where("status = ?", string(status))
+	query := tenantScopeCondition(ctx,
+		GetTx(ctx, r.db).Model(&models.ProcessInstanceModel{}),
+		tableProcessInstances).
+		Where("status = ?", string(status))
 	if projectID != uuid.Nil {
-		query = query.Where(QueryByProjectID, projectID)
+		query = query.Where(QualifiedByProjectID(tableProcessInstances), projectID)
 	}
 	if err := query.Count(&count).Error; err != nil {
 		return 0, fmt.Errorf("could not count instances: %w", err)
@@ -129,4 +143,52 @@ func (r *gormProcessRepository) ListPaged(ctx context.Context, p contracts.Pagin
 	base := tenantScopeDB(ctx, GetTx(ctx, r.db), "process_instances").
 		Model(&models.ProcessInstanceModel{})
 	return countAndPage[models.ProcessInstanceModel](base, p, "process_instances.created_at DESC")
+}
+
+// CountInstancesByDefinitions reports how many instances each definition
+// version holds, grouped in one query.
+//
+// The obvious shape — one COUNT per version — is a query per row of the version
+// history, which is the page this exists to render. Grouping by
+// (definition_id, status) answers "how much is still running on v2" and "how
+// much has it ever had" from the same scan.
+//
+// Scoped by predicate rather than by join: GROUP BY over a joined projects table
+// widens the grouping key for no gain, and the subquery form is the one that is
+// portable across all three engines.
+func (r *gormProcessRepository) CountInstancesByDefinitions(ctx context.Context, definitionIDs []uuid.UUID) (map[uuid.UUID]contracts.DefinitionInstanceCount, error) {
+	counts := make(map[uuid.UUID]contracts.DefinitionInstanceCount, len(definitionIDs))
+	if len(definitionIDs) == 0 {
+		return counts, nil
+	}
+
+	var rows []struct {
+		DefinitionID models.UUID
+		Status       string
+		Total        int64
+	}
+	db := tenantScopeCondition(ctx,
+		GetTx(ctx, r.db).Model(&models.ProcessInstanceModel{}),
+		tableProcessInstances)
+	if err := db.
+		Select("definition_id, status, COUNT(*) AS total").
+		Where("definition_id IN ?", definitionIDs).
+		Group("definition_id, status").
+		Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("could not count instances by definition: %w", err)
+	}
+
+	for _, row := range rows {
+		id := uuid.UUID(row.DefinitionID)
+		count := counts[id]
+		count.Total += row.Total
+		// Suspended counts as running: it is work that has not finished and will
+		// resume on the version it started on. Only completed and failed are
+		// done, and a version with failed instances left has still drained.
+		if row.Status == string(models.ProcessActive) || row.Status == string(models.ProcessSuspended) {
+			count.Running += row.Total
+		}
+		counts[id] = count
+	}
+	return counts, nil
 }

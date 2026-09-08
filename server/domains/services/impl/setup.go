@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/gsoultan/metis/internal/pkg/secrets"
@@ -13,18 +12,15 @@ import (
 
 	"github.com/gsoultan/metis/server/repositories/gorms"
 
-	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
 	"github.com/gsoultan/metis/internal/pkg/config"
 	"github.com/gsoultan/metis/internal/pkg/crypto"
+	"github.com/gsoultan/metis/internal/pkg/dbpool"
 	"github.com/gsoultan/metis/internal/pkg/redaction"
 	"github.com/gsoultan/metis/server/domains/services/contracts"
 	"github.com/gsoultan/metis/server/repositories/migrations"
 	"github.com/gsoultan/metis/server/repositories/models"
 	"golang.org/x/crypto/bcrypt"
-	"gorm.io/driver/mysql"
-	"gorm.io/driver/postgres"
-	"gorm.io/driver/sqlserver"
 	"gorm.io/gorm"
 )
 
@@ -96,7 +92,29 @@ func (s *setupService) Setup(ctx context.Context, req contracts.SetupRequest) er
 
 const testConnectionTimeout = 10 * time.Second
 
+// TestConnection opens a database and reports whether it answered.
+//
+// Only while the installation is unconfigured. This endpoint is public, because
+// the wizard that uses it runs before anyone can sign in — and it takes a host
+// and a port from the caller and reports precisely what happened to the attempt.
+// On a configured installation that is an unauthenticated port scanner: the
+// reply distinguishes "connection refused" from a timeout from an authentication
+// failure, which is enough to map whatever network the server sits in.
+//
+// After setup, the same job is done by the environments endpoint, which requires
+// an administrator.
 func (s *setupService) TestConnection(ctx context.Context, req contracts.TestConnectionRequest) contracts.TestConnectionResult {
+	status, err := s.GetSetupStatus(ctx)
+	if err != nil {
+		return contracts.TestConnectionResult{Success: false, Message: "Could not determine whether this installation is configured"}
+	}
+	if status.IsInitialized {
+		return contracts.TestConnectionResult{
+			Success: false,
+			Message: "This installation is already configured. Test a database connection from Settings → Environments.",
+		}
+	}
+
 	if req.DatabaseDriver == "" {
 		return contracts.TestConnectionResult{Success: false, Message: "Database driver is required"}
 	}
@@ -139,32 +157,14 @@ func (s *setupService) TestConnection(ctx context.Context, req contracts.TestCon
 	return contracts.TestConnectionResult{Success: true, Message: "Connection successful"}
 }
 
+// buildDialector defers to the persistence layer's opener.
+//
+// It used to carry its own copy of the driver switch and the SQLite busy-timeout
+// default. Two copies of "how this codebase opens a database" is one that will
+// drift, and the one that drifts is whichever is edited less — which for a
+// setup wizard is both of them.
 func buildDialector(driver, dsn string) gorm.Dialector {
-	switch driver {
-	case config.DriverPostgres:
-		return postgres.Open(dsn)
-	case config.DriverMySQL:
-		return mysql.Open(dsn)
-	case config.DriverSQLServer:
-		return sqlserver.Open(dsn)
-	default:
-		// Same busy-timeout treatment as the app's own open path; a
-		// freshly set-up database must not fail its second request.
-		return sqlite.Open(sqliteSetupDSN(dsn))
-	}
-}
-
-// sqliteSetupDSN mirrors the app's busy-timeout default for databases the
-// setup wizard creates.
-func sqliteSetupDSN(dsn string) string {
-	if strings.Contains(dsn, "_pragma=busy_timeout") {
-		return dsn
-	}
-	separator := "?"
-	if strings.Contains(dsn, "?") {
-		separator = "&"
-	}
-	return dsn + separator + "_pragma=busy_timeout(5000)"
+	return gorms.Dialector(driver, dsn)
 }
 
 func validateSetupRequest(req contracts.SetupRequest) error {
@@ -254,14 +254,12 @@ func openTargetDatabase(req contracts.SetupRequest) (*gorm.DB, func(), error) {
 		return nil, nil, fmt.Errorf("failed to open target database: %w", err)
 	}
 
-	// SQLite gets one connection, mirroring the app's own open path: pooled
-	// connections deadlock on lock upgrades, which busy_timeout cannot help
-	// with, and this database is about to be hot-swapped in as the live one.
-	if req.DatabaseDriver == config.DriverSQLite || req.DatabaseDriver == "" {
-		if sqlDB, err := db.DB(); err == nil {
-			sqlDB.SetMaxOpenConns(1)
-		}
-	}
+	// Sized the same way the app's own open path sizes it — this database is
+	// about to be hot-swapped in as the live one, so it must not run the rest
+	// of its life on a pool nobody configured. SQLite still gets exactly one
+	// connection: pooled connections deadlock on lock upgrades, which
+	// busy_timeout cannot help with.
+	dbpool.Apply(db)
 
 	cleanup := func() {
 		sqlDB, err := db.DB()
