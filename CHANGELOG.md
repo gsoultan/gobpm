@@ -10,6 +10,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 
 ### Security
 
+- **The live event stream carried every organization's process variables to
+  every signed-in browser.** The SSE client registry was a flat set with no
+  record of who was listening, and a process event carries the instance's
+  variables — an amount, an applicant's name, an approval decision. So anybody
+  with the stream open received all of it, from every tenant, as it happened.
+  Confirmed against the running handler before it was changed.
+
+  Events are scoped now, by organization and by environment, compared for
+  equality. There is no "unscoped means everybody": an event whose audience
+  cannot be worked out reaches nobody, and the unscoped broadcast has been
+  removed from the API so delivering to everyone is a compile error rather than
+  an omission. The scope comes from the token and from the port a connection
+  arrived on, never from anything a caller sends, and it travels with the event
+  across the replica bus — a replica reading one back has no request context to
+  recompute it from.
+
+
 - **Connector credentials were returned to the browser and stored in clear
   text.** A connector instance's configuration holds whatever it needs to
   authenticate — a bearer token, an SMTP password, a signing secret — and the
@@ -45,6 +62,48 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   session token lives in `localStorage`.
 
 ### Added
+
+- **A new version of a process no longer takes over the moment it is deployed.**
+  Deploying used to make the new version live immediately, because "live" meant
+  "the highest version number" and there was no way to say anything else. It is
+  a choice now: promote it and let the old version drain — it keeps running the
+  instances it has and takes nothing new until the last one finishes — or stage
+  it and leave the old one live, or schedule the change for a chosen moment.
+
+  Running instances are never moved. An instance finishes on the graph it
+  started with, which is the only property an edit cannot break.
+
+- **A project can have several environments, each with its own database and its
+  own port.** Development, staging and production are configured from the UI and
+  served on the same server. What one holds is absent from another rather than
+  filtered out of it. Which runtime a request belongs to is decided by the port
+  it arrived on, never by a header or a body — an environment a caller could
+  name is one a staging user could set to production.
+
+  A new environment is served from the next restart, which the settings page
+  says.
+
+- **Running instances can be moved onto another version, with a preview.** The
+  supported way to change version is still to promote and drain; this is for the
+  case drain cannot serve — work in flight on a version that must not continue.
+  It shows what would move and where before it moves anything, refuses a mapping
+  that would leave a task somewhere the new version has no node for, and is
+  administrative, because every other action on that page decides what future
+  instances do and this one rewrites instances that have already started.
+
+- **The people who run Metis and the people a process assigns work to are now
+  separate.** One table held both, so one role list served both and giving
+  somebody a task inbox meant creating them an account on the platform.
+  Participants belong to a project, have no roles, and arrive in bulk — from a
+  CSV upload, an HTTP endpoint, or a PostgreSQL query, optionally on a schedule.
+  An import is additive: somebody absent from the file is left alone rather than
+  deactivated.
+
+  Somebody can also be removed from a project's directory. The removal is
+  reversible — importing a directory that names them again brings back the same
+  person with their teams — and their open tasks stay where they are, because a
+  task names its assignee rather than pointing at them.
+
 
 - **The interface can be shown in another language.** There was no
   internationalization layer at all; every string was hardcoded English. There
@@ -190,6 +249,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   `Task.Name` is the label to display.
 
 ### Changed
+
+- **Soft deletion is declared in the schema rather than remembered at each
+  query.** Every read of a table that soft-deletes now carries `deleted_at IS
+  NULL` because the model says so, not because the query did. One consequence is
+  worth knowing before adding a table: a unique key on such a table covers only
+  the live rows by default, so the value frees up when a row is removed. That is
+  right for a connector key and wrong for a version number, an idempotency key or
+  a participant's username, where reissuing the value would let a second subject
+  inherit the first one's history — those declare that they cover the deleted
+  rows too, and say on the line above why.
+
+  A schema that has drifted from the model is reported at startup rather than
+  altered. Existing tables belong to the numbered migrations; two things deciding
+  the shape of one table means the one that ran last wins.
+
 
 - **The Go SDK moved to its own repository.** It was already its own module —
   a client for an HTTP API has no business making consumers inherit GORM, goja,
