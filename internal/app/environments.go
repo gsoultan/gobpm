@@ -1,0 +1,196 @@
+package app
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/google/uuid"
+	"github.com/gsoultan/metis/internal/pkg/config"
+	"github.com/gsoultan/metis/server/domains/entities"
+	"github.com/gsoultan/metis/server/repositories/gorms"
+	"github.com/gsoultan/metis/server/repositories/migrations"
+	"github.com/gsoultan/metis/server/repositories/models"
+	"github.com/rs/zerolog/log"
+	"gorm.io/gorm"
+)
+
+// openEnvironments connects to every enabled environment's database and brings
+// its schema up to date.
+//
+// One database that will not open must not stop the server. A project with a
+// development, staging and production runtime has three chances to be
+// misconfigured, and refusing to boot over any of them takes down the two that
+// were fine — including production, over a development database somebody
+// pointed at a laptop. So a failure here is recorded against that environment
+// and the rest carry on; the environment simply has no connection, and requests
+// bound to it are refused with the reason.
+//
+// Called after the main database is migrated, because the list of environments
+// lives there.
+func (a *App) openEnvironments(ctx context.Context) error {
+	rows, err := a.repo.Environment().ListAll(entities.WithSystemContext(ctx))
+	if err != nil {
+		return fmt.Errorf("could not read the environments to open: %w", err)
+	}
+
+	var opened, skipped, failed int
+	for _, row := range rows {
+		id := uuid.UUID(row.ID)
+		if !row.Enabled {
+			skipped++
+			continue
+		}
+		db, err := a.openEnvironment(ctx, row)
+		if err != nil {
+			failed++
+			// Named, at error level, with the environment: this is the message
+			// somebody reads when a runtime is missing, and "which one" is the
+			// first thing they need.
+			log.Error().Err(err).
+				Str("environment", row.Name).
+				Int("port", row.Port).
+				Msg("This environment's database could not be opened. It will not be served; the others are unaffected.")
+			continue
+		}
+		if previous := gorms.RegisterEnvironmentDB(id, db); previous != nil {
+			closeDB(previous)
+		}
+		opened++
+		log.Info().
+			Str("environment", row.Name).
+			Int("port", row.Port).
+			Str("driver", row.Driver).
+			Msg("Environment ready")
+	}
+
+	if len(rows) > 0 {
+		log.Info().
+			Int("opened", opened).
+			Int("disabled", skipped).
+			Int("failed", failed).
+			Msg("Environments")
+	}
+	return nil
+}
+
+// openEnvironment connects to one environment's database and migrates it.
+//
+// The schema is the same one the main database gets. An environment holds only
+// the runtime — deployed models, instances, tasks — so the identity tables it
+// also creates stay empty; leaving them there costs nothing and means one
+// migration list rather than two lists that would drift.
+func (a *App) openEnvironment(ctx context.Context, row models.EnvironmentModel) (*gorm.DB, error) {
+	dsn, err := environmentDSN(row)
+	if err != nil {
+		return nil, err
+	}
+
+	db, err := gorms.Open(row.Driver, dsn)
+	if err != nil {
+		return nil, err
+	}
+	// Opening does not contact the server, so without this a database that is
+	// simply not there would be registered as ready and fail at the first
+	// request instead of at boot, where somebody is watching.
+	if err := gorms.Ping(db); err != nil {
+		closeDB(db)
+		return nil, err
+	}
+
+	// Migrations rewrite rows across every tenant in this runtime, which is
+	// what they are for.
+	migrateCtx := entities.WithSystemContext(ctx)
+	result, err := migrations.Run(migrateCtx, db, migrations.Schema(models.MigrationModels()))
+	if err != nil {
+		closeDB(db)
+		return nil, fmt.Errorf("could not migrate this environment's database: %w", err)
+	}
+	if len(result.Applied) > 0 {
+		log.Info().
+			Str("environment", row.Name).
+			Ints("applied", result.Applied).
+			Msg("Environment database migrated")
+	}
+
+	// Without the project and organization rows, every tenant-scoped query in
+	// this database joins an empty table and matches nothing. See
+	// SeedEnvironmentIdentity.
+	projectID := uuid.UUID(row.ProjectID)
+	if projectID == uuid.Nil {
+		closeDB(db)
+		return nil, errNoProject
+	}
+	project, organization, err := a.identityFor(ctx, projectID)
+	if err != nil {
+		closeDB(db)
+		return nil, err
+	}
+	if err := SeedEnvironmentIdentity(migrateCtx, db, project, organization); err != nil {
+		closeDB(db)
+		return nil, err
+	}
+	return db, nil
+}
+
+// environmentDSN builds the connection string for a stored environment.
+//
+// The stored map is read back decrypted — EncryptedMap does that at the
+// persistence boundary — so this is the point where a database password exists
+// in memory. It goes straight into a DSN and is not logged: every log line
+// about an environment names it and its port, never its connection.
+func environmentDSN(row models.EnvironmentModel) (string, error) {
+	fields := config.DatabaseFields{
+		Host:       stringField(row.Connection, "host"),
+		Port:       intField(row.Connection, "port"),
+		Username:   stringField(row.Connection, "username"),
+		Password:   stringField(row.Connection, "password"),
+		DBName:     stringField(row.Connection, "db_name"),
+		SSLEnabled: boolField(row.Connection, "ssl_enabled"),
+	}
+	if fields.DBName == "" {
+		return "", fmt.Errorf("this environment names no database")
+	}
+	return config.BuildConnectionString(row.Driver, fields), nil
+}
+
+// The three readers below take the comma-ok form on purpose. The connection map
+// is stored as JSON and comes back with whatever shape it was written with — a
+// port that went in as an int returns as a float64 after a round trip — so a
+// bare assertion here is a panic at boot on a row somebody edited by hand.
+func stringField(m models.EncryptedMap, key string) string {
+	if value, ok := m[key].(string); ok {
+		return value
+	}
+	return ""
+}
+
+func intField(m models.EncryptedMap, key string) int {
+	switch value := m[key].(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	}
+	return 0
+}
+
+func boolField(m models.EncryptedMap, key string) bool {
+	value, ok := m[key].(bool)
+	return ok && value
+}
+
+// closeDB releases a connection pool, reporting a failure rather than
+// discarding it: a pool that would not close is a file handle and a set of
+// server-side sessions that stay held.
+func closeDB(db *gorm.DB) {
+	sqlDB, err := db.DB()
+	if err != nil {
+		log.Warn().Err(err).Msg("Could not reach a database pool to close it")
+		return
+	}
+	if err := sqlDB.Close(); err != nil {
+		log.Warn().Err(err).Msg("Could not close a database pool")
+	}
+}

@@ -1,0 +1,254 @@
+package impl
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/google/uuid"
+	"github.com/gsoultan/metis/internal/pkg/apierr"
+	"github.com/gsoultan/metis/internal/pkg/config"
+	"github.com/gsoultan/metis/internal/pkg/configsecret"
+	"github.com/gsoultan/metis/internal/pkg/redaction"
+	"github.com/gsoultan/metis/server/domains/entities"
+	servicecontracts "github.com/gsoultan/metis/server/domains/services/contracts"
+	"github.com/gsoultan/metis/server/repositories"
+	"github.com/gsoultan/metis/server/repositories/gorms"
+	"github.com/gsoultan/metis/server/repositories/models"
+	"github.com/rs/zerolog/log"
+)
+
+type environmentService struct {
+	repo repositories.Repository
+}
+
+// NewEnvironmentService returns the service that manages a project's runtimes.
+func NewEnvironmentService(repo repositories.Repository) servicecontracts.EnvironmentService {
+	return &environmentService{repo: repo}
+}
+
+// Ports below this are reserved by convention and usually need privileges to
+// bind. Refusing them here turns a permission error at the next restart into a
+// message on the form somebody is filling in.
+const minEnvironmentPort = 1024
+
+// maxEnvironmentNameLength matches the column, so a name that would be silently
+// truncated by the database is refused with an explanation instead.
+const maxEnvironmentNameLength = 63
+
+// ListEnvironments returns a project's runtimes with their credentials masked.
+func (s *environmentService) ListEnvironments(ctx context.Context, projectID uuid.UUID) ([]entities.Environment, error) {
+	ms, err := s.repo.Environment().ListByProject(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]entities.Environment, 0, len(ms))
+	for _, m := range ms {
+		out = append(out, maskedEnvironment(m))
+	}
+	return out, nil
+}
+
+// GetEnvironment returns one runtime with its credentials masked.
+func (s *environmentService) GetEnvironment(ctx context.Context, id uuid.UUID) (entities.Environment, error) {
+	m, err := s.repo.Environment().Get(ctx, id)
+	if err != nil {
+		return entities.Environment{}, err
+	}
+	return maskedEnvironment(m), nil
+}
+
+// CreateEnvironment records a new runtime for a project.
+func (s *environmentService) CreateEnvironment(ctx context.Context, env entities.Environment) (uuid.UUID, error) {
+	if env.Project == nil || env.Project.ID == uuid.Nil {
+		return uuid.Nil, apierr.Invalidf("an environment belongs to a project")
+	}
+	if err := s.validate(ctx, env, uuid.Nil); err != nil {
+		return uuid.Nil, err
+	}
+
+	id, err := uuid.NewV7()
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("could not generate an environment id: %w", err)
+	}
+	m := models.EnvironmentModel{
+		Base:       models.Base{ID: models.FromUUID(id)},
+		ProjectID:  models.FromUUID(env.Project.ID),
+		Name:       strings.TrimSpace(env.Name),
+		Port:       env.Port,
+		Driver:     env.Driver,
+		Connection: models.EncryptedMap(env.Connection),
+		Enabled:    env.Enabled,
+	}
+	if err := s.repo.Environment().Create(ctx, m); err != nil {
+		return uuid.Nil, err
+	}
+	return id, nil
+}
+
+// UpdateEnvironment saves changes to a runtime.
+//
+// The stored connection is merged with what arrived, so a caller who edited the
+// host without re-typing the password keeps the password. That is the whole
+// reason the sentinel exists — see internal/pkg/configsecret.
+func (s *environmentService) UpdateEnvironment(ctx context.Context, env entities.Environment) error {
+	existing, err := s.repo.Environment().Get(ctx, env.ID)
+	if err != nil {
+		return err
+	}
+	if err := s.validate(ctx, env, env.ID); err != nil {
+		return err
+	}
+
+	existing.Name = strings.TrimSpace(env.Name)
+	existing.Port = env.Port
+	existing.Driver = env.Driver
+	existing.Enabled = env.Enabled
+	existing.Connection = models.EncryptedMap(
+		configsecret.Merge(env.Connection, map[string]any(existing.Connection)))
+
+	return s.repo.Environment().Update(ctx, existing)
+}
+
+// DeleteEnvironment removes a runtime from the registry.
+//
+// The database it named is untouched. Removing the row stops the runtime being
+// served; deciding to destroy what it ran is a separate act, and not one a
+// delete button on a settings page should perform.
+func (s *environmentService) DeleteEnvironment(ctx context.Context, id uuid.UUID) error {
+	return s.repo.Environment().Delete(ctx, id)
+}
+
+// validate refuses an environment that could not be served, before it is saved.
+//
+// Every check here is one whose failure would otherwise surface at the next
+// restart, when the server tries to bind the listeners — where a bad row takes
+// down the whole installation rather than one form.
+func (s *environmentService) validate(ctx context.Context, env entities.Environment, excluding uuid.UUID) error {
+	name := strings.TrimSpace(env.Name)
+	switch {
+	case name == "":
+		return apierr.Invalidf("an environment needs a name")
+	case len(name) > maxEnvironmentNameLength:
+		return apierr.Invalidf("the environment name is %d characters; the limit is %d",
+			len(name), maxEnvironmentNameLength)
+	}
+
+	switch env.Driver {
+	case config.DriverSQLite, config.DriverPostgres, config.DriverMySQL, config.DriverSQLServer:
+	case "":
+		return apierr.Invalidf("an environment needs a database driver")
+	default:
+		return apierr.Invalidf("%q is not a database driver this supports", env.Driver)
+	}
+
+	if env.Port < minEnvironmentPort || env.Port > 65535 {
+		return apierr.Invalidf("port %d is outside the range an environment can be served on (%d-65535)",
+			env.Port, minEnvironmentPort)
+	}
+	taken, err := s.repo.Environment().PortTaken(ctx, env.Port, excluding)
+	if err != nil {
+		return err
+	}
+	if taken {
+		// Named without saying whose: a port collision with another
+		// organization's environment is still a collision, and telling this
+		// caller which organization holds it would answer a question they did
+		// not get to ask.
+		return apierr.Invalidf("port %d is already served by another environment", env.Port)
+	}
+	return nil
+}
+
+// maskedEnvironment converts a stored row for return over the API, with every
+// credential-shaped key replaced by a sentinel.
+//
+// The masking is here rather than at the endpoint so that no future caller of
+// this service can forget it. A database password is worth more than any one
+// connector's token: it is every credential in that runtime at once.
+func maskedEnvironment(m models.EnvironmentModel) entities.Environment {
+	return entities.Environment{
+		ID:         uuid.UUID(m.ID),
+		Project:    &entities.Project{ID: uuid.UUID(m.ProjectID)},
+		Name:       m.Name,
+		Port:       m.Port,
+		Driver:     m.Driver,
+		Connection: configsecret.Mask(map[string]any(m.Connection)),
+		Enabled:    m.Enabled,
+		CreatedAt:  m.CreatedAt,
+	}
+}
+
+// TestEnvironmentConnection opens the described database and reports whether it
+// answered.
+//
+// A password sent as the masking sentinel is resolved against what is stored, so
+// an administrator can test an existing environment without re-typing a
+// credential the browser was never given.
+//
+// The reply says whether it worked and, when it did not, why — which is a
+// network probe, and why this is administrative. The unauthenticated equivalent
+// on the setup wizard closes as soon as the installation is configured.
+func (s *environmentService) TestEnvironmentConnection(ctx context.Context, env entities.Environment) entities.EnvironmentHealth {
+	connection := env.Connection
+	if env.ID != uuid.Nil {
+		if stored, err := s.repo.Environment().Get(ctx, env.ID); err == nil {
+			connection = configsecret.Merge(connection, map[string]any(stored.Connection))
+		}
+	}
+
+	dsn := config.BuildConnectionString(env.Driver, config.DatabaseFields{
+		Host:       stringOf(connection, "host"),
+		Port:       intOf(connection, "port"),
+		Username:   stringOf(connection, "username"),
+		Password:   stringOf(connection, "password"),
+		DBName:     stringOf(connection, "db_name"),
+		SSLEnabled: boolOf(connection, "ssl_enabled"),
+	})
+
+	db, err := gorms.Open(env.Driver, dsn)
+	if err != nil {
+		return entities.EnvironmentHealth{EnvironmentID: env.ID, Detail: redaction.RedactError(err)}
+	}
+	defer func() {
+		// A connection test that leaks its own pool is a connection test that
+		// exhausts the server it was checking.
+		if sqlDB, handleErr := db.DB(); handleErr == nil {
+			if closeErr := sqlDB.Close(); closeErr != nil {
+				log.Warn().Err(closeErr).Msg("Could not close the connection opened to test an environment")
+			}
+		}
+	}()
+
+	if err := gorms.Ping(db); err != nil {
+		return entities.EnvironmentHealth{EnvironmentID: env.ID, Detail: redaction.RedactError(err)}
+	}
+	return entities.EnvironmentHealth{EnvironmentID: env.ID, Reachable: true}
+}
+
+// The three readers below take the comma-ok form because the connection map is
+// stored as JSON: a port written as an int comes back as a float64, and a bare
+// assertion would be a panic on a value that made a legitimate round trip.
+func stringOf(m map[string]any, key string) string {
+	if value, ok := m[key].(string); ok {
+		return value
+	}
+	return ""
+}
+
+func intOf(m map[string]any, key string) int {
+	switch value := m[key].(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	}
+	return 0
+}
+
+func boolOf(m map[string]any, key string) bool {
+	value, ok := m[key].(bool)
+	return ok && value
+}

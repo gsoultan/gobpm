@@ -27,7 +27,7 @@ const tableProjects = "projects"
 // Get returns a project by ID, scoped to the caller's tenant.
 func (r *gormProjectRepository) Get(ctx context.Context, id uuid.UUID) (models.ProjectModel, error) {
 	var m models.ProjectModel
-	db := tenantScopeOrganization(ctx, GetTx(ctx, r.db), tableProjects)
+	db := tenantScopeOrganization(ctx, MainTx(ctx, r.db), tableProjects)
 	if err := db.First(&m, QualifiedByID(tableProjects), id).Error; err != nil {
 		return models.ProjectModel{}, lookupError(err, "project")
 	}
@@ -38,7 +38,7 @@ func (r *gormProjectRepository) Get(ctx context.Context, id uuid.UUID) (models.P
 // the installation — the whole customer list, to anyone authenticated.
 func (r *gormProjectRepository) List(ctx context.Context) ([]models.ProjectModel, error) {
 	var modelsList []models.ProjectModel
-	db := tenantScopeOrganization(ctx, GetTx(ctx, r.db), tableProjects)
+	db := tenantScopeOrganization(ctx, MainTx(ctx, r.db), tableProjects)
 	if err := db.Find(&modelsList).Error; err != nil {
 		return nil, fmt.Errorf("could not list projects: %w", err)
 	}
@@ -49,7 +49,7 @@ func (r *gormProjectRepository) List(ctx context.Context) ([]models.ProjectModel
 // by the one they are actually in — naming someone else's returns nothing.
 func (r *gormProjectRepository) ListByOrganization(ctx context.Context, organizationID uuid.UUID) ([]models.ProjectModel, error) {
 	var modelsList []models.ProjectModel
-	query := tenantScopeOrganization(ctx, GetTx(ctx, r.db), tableProjects)
+	query := tenantScopeOrganization(ctx, MainTx(ctx, r.db), tableProjects)
 	if organizationID != uuid.Nil {
 		query = query.Where("projects.organization_id = ?", organizationID)
 	}
@@ -64,7 +64,7 @@ func (r *gormProjectRepository) Create(ctx context.Context, p models.ProjectMode
 	if err := requireOwnOrganization(ctx, uuid.UUID(p.OrganizationID)); err != nil {
 		return err
 	}
-	if err := GetTx(ctx, r.db).Create(&p).Error; err != nil {
+	if err := MainTx(ctx, r.db).Create(&p).Error; err != nil {
 		return fmt.Errorf("could not create project: %w", err)
 	}
 	return nil
@@ -72,7 +72,7 @@ func (r *gormProjectRepository) Create(ctx context.Context, p models.ProjectMode
 
 // Update saves a project, refusing an ID outside the caller's tenant.
 func (r *gormProjectRepository) Update(ctx context.Context, p models.ProjectModel) error {
-	db := GetTx(ctx, r.db)
+	db := MainTx(ctx, r.db)
 	if err := requireProjectInTenant(ctx, db, uuid.UUID(p.ID)); err != nil {
 		return err
 	}
@@ -93,7 +93,7 @@ func (r *gormProjectRepository) Update(ctx context.Context, p models.ProjectMode
 
 // Delete removes a project, refusing an ID outside the caller's tenant.
 func (r *gormProjectRepository) Delete(ctx context.Context, id uuid.UUID) error {
-	db := GetTx(ctx, r.db)
+	db := MainTx(ctx, r.db)
 	if err := requireProjectInTenant(ctx, db, id); err != nil {
 		return err
 	}

@@ -20,9 +20,20 @@ func NewGroupRepository(db *gorm.DB) contracts.GroupRepository {
 	return &gormGroupRepository{db: db}
 }
 
+// tableGroups is the SQL table behind GroupModel, needed by name so the tenant
+// scope can build its clauses.
+const tableGroups = "groups"
+
+// List returns the caller's groups, optionally narrowed to one organization.
+//
+// The organization argument is optional and the tenant scope is not. Naming no
+// organization used to mean no filter at all, and the list endpoint accepts an
+// empty one — so a caller could read every group in the installation. Groups
+// carry organization_id directly, so the scope is a predicate rather than a
+// join.
 func (r *gormGroupRepository) List(ctx context.Context, organizationID uuid.UUID) ([]models.GroupModel, error) {
 	var modelsList []models.GroupModel
-	query := GetTx(ctx, r.db)
+	query := tenantScopeOrganization(ctx, MainTx(ctx, r.db).Model(&models.GroupModel{}), tableGroups)
 	if organizationID != uuid.Nil {
 		query = query.Where(QueryByOrganizationID, organizationID)
 	}
@@ -33,7 +44,7 @@ func (r *gormGroupRepository) List(ctx context.Context, organizationID uuid.UUID
 }
 
 func (r *gormGroupRepository) Create(ctx context.Context, g models.GroupModel) error {
-	if err := GetTx(ctx, r.db).Create(&g).Error; err != nil {
+	if err := MainTx(ctx, r.db).Create(&g).Error; err != nil {
 		return fmt.Errorf("could not create group: %w", err)
 	}
 	return nil
@@ -41,24 +52,24 @@ func (r *gormGroupRepository) Create(ctx context.Context, g models.GroupModel) e
 
 func (r *gormGroupRepository) Get(ctx context.Context, id uuid.UUID) (models.GroupModel, error) {
 	var m models.GroupModel
-	if err := GetTx(ctx, r.db).First(&m, QueryByID, id).Error; err != nil {
+	if err := MainTx(ctx, r.db).First(&m, QueryByID, id).Error; err != nil {
 		return models.GroupModel{}, lookupError(err, "group")
 	}
 	return m, nil
 }
 
 func (r *gormGroupRepository) Update(ctx context.Context, g models.GroupModel) error {
-	if err := GetTx(ctx, r.db).Save(&g).Error; err != nil {
+	if err := MainTx(ctx, r.db).Save(&g).Error; err != nil {
 		return fmt.Errorf("could not update group: %w", err)
 	}
 	return nil
 }
 
 func (r *gormGroupRepository) Delete(ctx context.Context, id uuid.UUID) error {
-	if err := GetTx(ctx, r.db).Delete(&models.MembershipModel{}, "group_id = ?", id).Error; err != nil {
+	if err := MainTx(ctx, r.db).Delete(&models.MembershipModel{}, "group_id = ?", id).Error; err != nil {
 		return fmt.Errorf("could not delete group memberships: %w", err)
 	}
-	if err := GetTx(ctx, r.db).Delete(&models.GroupModel{}, QueryByID, id).Error; err != nil {
+	if err := MainTx(ctx, r.db).Delete(&models.GroupModel{}, QueryByID, id).Error; err != nil {
 		return fmt.Errorf("could not delete group: %w", err)
 	}
 	return nil
@@ -66,7 +77,7 @@ func (r *gormGroupRepository) Delete(ctx context.Context, id uuid.UUID) error {
 
 func (r *gormGroupRepository) ListGroupMembers(ctx context.Context, groupID uuid.UUID) ([]models.UserModel, error) {
 	var userModels []models.UserModel
-	err := GetTx(ctx, r.db).
+	err := MainTx(ctx, r.db).
 		Joins("JOIN memberships ON memberships.user_id = users.id").
 		Where("memberships.group_id = ?", groupID).
 		Find(&userModels).Error
@@ -81,14 +92,14 @@ func (r *gormGroupRepository) AddMembership(ctx context.Context, userID, groupID
 		UserID:  models.UUID(userID),
 		GroupID: models.UUID(groupID),
 	}
-	if err := GetTx(ctx, r.db).Create(&m).Error; err != nil {
+	if err := MainTx(ctx, r.db).Create(&m).Error; err != nil {
 		return fmt.Errorf("could not add membership: %w", err)
 	}
 	return nil
 }
 
 func (r *gormGroupRepository) RemoveMembership(ctx context.Context, userID, groupID uuid.UUID) error {
-	if err := GetTx(ctx, r.db).Delete(&models.MembershipModel{}, "user_id = ? AND group_id = ?", userID, groupID).Error; err != nil {
+	if err := MainTx(ctx, r.db).Delete(&models.MembershipModel{}, "user_id = ? AND group_id = ?", userID, groupID).Error; err != nil {
 		return fmt.Errorf("could not remove membership: %w", err)
 	}
 	return nil
@@ -96,7 +107,7 @@ func (r *gormGroupRepository) RemoveMembership(ctx context.Context, userID, grou
 
 func (r *gormGroupRepository) ListUserGroups(ctx context.Context, userID uuid.UUID) ([]models.GroupModel, error) {
 	var groupModels []models.GroupModel
-	err := GetTx(ctx, r.db).
+	err := MainTx(ctx, r.db).
 		Joins("JOIN memberships ON memberships.group_id = groups.id").
 		Where("memberships.user_id = ?", userID).
 		Find(&groupModels).Error
