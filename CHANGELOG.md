@@ -8,7 +8,297 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 
 ## [Unreleased]
 
+### Security
+
+- **Connector credentials were returned to the browser and stored in clear
+  text.** A connector instance's configuration holds whatever it needs to
+  authenticate — a bearer token, an SMTP password, a signing secret — and the
+  API returned that map verbatim. Opening the Connectors page put every
+  third-party credential an organization had into the response and the browser's
+  developer tools, and the column was plain JSON, so a database backup or a read
+  replica carried them too.
+
+  Secrets are now replaced with a placeholder at the API boundary and the column
+  is encrypted at rest. Editing an unrelated field keeps the stored credential
+  rather than overwriting it with the placeholder, clearing one is still
+  possible, and the placeholder can never itself become a stored value. The
+  executor is unaffected: it reads instances through the service, not the API.
+  Existing rows are read as they are and re-encrypted on their next write, so no
+  migration is needed.
+
+- **A task could be completed by somebody who was not holding it.** The task
+  endpoints took the acting user from a `user_id` field in the request body and
+  the service then checked *that name* against the assignee. So any signed-in
+  member of an organization could complete, claim or delegate a colleague's task
+  by naming the colleague, and the audit trail recorded the colleague as having
+  done it. In an engine that runs approvals and payments, that is impersonation
+  with a forged record attached.
+
+  The actor now comes from the verified token and any `user_id` on the wire is
+  ignored. Handing a task to somebody else is still possible, and still a
+  parameter, but only for the person holding it or an administrator. Proven end
+  to end through the real HTTP chain.
+
+- **The embedded UI is served with security headers.** A Content-Security-Policy
+  written for exactly what the app loads, plus `X-Frame-Options`,
+  `Referrer-Policy` and `X-Content-Type-Options`. There were none, on a UI whose
+  session token lives in `localStorage`.
+
+### Added
+
+- **The interface can be shown in another language.** There was no
+  internationalization layer at all; every string was hardcoded English. There
+  is now a small, tested one: interpolation and plurals, with plural categories
+  taken from `Intl.PluralRules` so a language with four of them is handled by
+  the platform rather than by a rule written here. English ships with the app
+  and every other catalogue is fetched only when chosen, so a language nobody
+  selects costs nothing at first paint. A missing key shows the key rather than
+  falling back to English, which is what keeps a gap visible.
+
+  **The shell is translated; the pages are not yet.** Navigation, the language
+  menu and the offline and update messages go through it — the rest is still
+  hardcoded English, which is the large majority of the strings. The machinery
+  is proven by a second language that is not a copy of English, and
+  `ui/src/i18n/README.md` states the convention and what remains.
+
+- **Tasks can be completed and claimed offline.** They are kept on the device
+  and sent when the connection returns. The idempotency key is generated when
+  the button is pressed rather than when the request is sent, so a flush that
+  succeeds on the server but loses the answer replays instead of completing the
+  task twice. A queued action says "Saved on this device", never "Task
+  completed". If the server refuses one on arrival — the task was claimed by
+  somebody else while the phone was in a pocket — the person is told in a
+  notification that does not disappear, and the entry is dropped rather than
+  retried forever. Only completing and claiming queue; a write with wider
+  consequences still fails outright.
+
+  Offline *reading* is still limited to the application shell: the task list
+  comes over Connect RPC, which is a POST, and the worker's cache is
+  deliberately GET-only. `ui/src/pwa/README.md` says so and names the fix.
+
+- **The task inbox says what a task is about.** Its widest column showed the
+  first eight characters of the process instance's identifier — and those
+  identifiers are time-ordered, so every approval created in the same period
+  showed the same eight characters. It named nothing, and there was no way to
+  tell one row from another. Rows now carry the description the process was
+  started with ("Expense of GBP 1,750"), with a short reference code taken from
+  the *end* of the identifier, where the characters actually differ. The same
+  fix covers the All Tasks list, and a gateway's fallback badge on the canvas
+  now says it has one rather than printing part of a flow's identifier.
+
+- **A project is chosen for you.** Signing in left none selected, so the first
+  thing after entering a password was "Choose a project to continue" — on every
+  screen, every session, even for somebody who belongs to exactly one. The app
+  now keeps whatever is already selected, falls back to the first available when
+  there is nothing selected or the stored one has gone (deleted, or access
+  withdrawn), and only asks when there is genuinely nothing to pick. The empty
+  state says that instead of telling people to choose from a header with nothing
+  in it.
+
+- **The sample data is a working demo.** `./scripts/dev.sh --sample` created
+  none of the groups its own approvals are offered to, so every seeded task sat
+  unclaimed in a queue with no members: the inbox — the screen the demo most
+  needs to show — was empty on a fresh install, while the script's own summary
+  promised approvals waiting in it. It now creates the three groups, a person in
+  each, and puts the admin in all of them. It also starts the supplier check,
+  which fails on purpose, so the incident inbox has something in it too; the
+  summary says the retries have to run out first rather than sending you to look
+  at nothing.
+
+- **Runbooks.** [`docs/runbooks.md`](docs/runbooks.md) covers every alerting
+  rule plus the four incidents that were not written down: a stuck instance, a
+  poison job, an expired connector credential and a database failover. Each
+  entry gives the query to run rather than a description of one, and every
+  destructive step is preceded by the `SELECT` that shows what it will touch.
+
+- **PostgreSQL guidance.** [`docs/postgresql.md`](docs/postgresql.md): pool
+  sizing against the in-flight limit, the three server timeouts that bound
+  failures Metis cannot bound from outside (`statement_timeout`,
+  `idle_in_transaction_session_timeout`, `lock_timeout`), what to watch, and a
+  worked production secret.
+
+- **Missing migrations are visible.** Schema drift is published as
+  `metis_schema_drift_items` and alerted on by `MetisSchemaDrift`, with unit
+  tests proving the rule fires and stays quiet. It was previously a log line
+  only, on a failure that is silent by construction — `/readyz` only pings the
+  database, so a feature returning 500 on every request never paged anybody.
+  `METIS_REFUSE_SCHEMA_DRIFT=true` turns it into a refusal to start.
+
+- **The supply chain is attestable.** The release now publishes a software bill
+  of materials and a maximum-detail provenance attestation, and signs the image
+  with cosign keyless — so there is no long-lived signing key to leak. CI scans
+  the built image for critical vulnerabilities, and Dependabot proposes updates
+  weekly rather than leaving them to be discovered during an incident.
+
+- **The latency targets are measured on the database people deploy.** The SLO
+  suite ran in a job with no DSN, so it measured SQLite; it now runs against
+  PostgreSQL in the dialects job. The load test — a hundred thousand instances —
+  had never run at all, and now runs weekly and on demand.
+
+- **Job throughput is configurable, and a burst drains.** Five workers on a
+  fixed two-second poll, claiming at most five jobs a tick, capped a replica at
+  roughly 2.5 jobs a second regardless of the machine — and a burst of a
+  thousand timers trickled out at that rate with the pool idle in between. The
+  sizing is now `METIS_JOB_WORKERS`, `METIS_JOB_POLL_INTERVAL` and
+  `METIS_JOB_LEASE`, the worker keeps claiming while rounds come back full, and
+  the claim query is ordered oldest-due-first over a new composite index rather
+  than returning whatever the database found convenient.
+
+- **The connection pool is sized.** Only SQLite was ever configured. PostgreSQL,
+  MySQL and SQL Server ran on `database/sql`'s defaults — unlimited open
+  connections and two idle — so a burst could open more than PostgreSQL's
+  default `max_connections` and fail every caller at once, while a steady load
+  reconnected between bursts for no reason. See `METIS_DB_*` in the README.
+
+- **Deployed process definitions are cached.** A definition is immutable once
+  deployed but was read from the database and decoded on every job, every
+  message, every timer and twice per task completion — each read a row whose
+  node and flow columns are large JSON documents. The cache is bounded, evicts
+  least-recently-used, drops on deletion, and is keyed by tenant so a cached
+  copy cannot cross an organization boundary.
+
 ### Fixed
+
+- **The instance listing ignored the paging it was asked for.**
+  `GET /api/v1/instances` declared `page` and `page_size`, and the query behind
+  it ordered and windowed correctly — but the HTTP decoder read only
+  `project_id`, so the parameters never reached the endpoint. Every caller got
+  the first page at the server default, and a project with more instances than
+  that page holds had no way to reach the rest. The decoder now reads them, as
+  the task listing's already did.
+
+### Added
+
+- **`GET /api/v1/tasks?instance_id=` filters tasks to one process instance.**
+  "What is this run waiting on" previously had no answer: the listing took a
+  project and nothing else, so a client holding an instance id had to page the
+  whole project and match, which worked only while the task it wanted was still
+  on a reachable page. The filter is tenant-scoped like the other request-driven
+  reads, so an id from another organization finds nothing rather than somebody
+  else's work. It takes precedence over `project_id`, which an instance already
+  implies, and a malformed one is refused rather than quietly widening the
+  listing to the project.
+
+- **Task responses carry the node's type.** Every task named its node by id
+  alone, so a client could not tell a user task from a manual task from the
+  node — only from `Task.Type`, and only by knowing that `Node.Type`, the
+  obvious place, was never filled in. The type is on the task row already.
+
+  `Node.Name` is deliberately still empty: `UpdateTask` can rename a task, after
+  which its name is no longer the diagram's label for that node, and filling the
+  field from it would hand callers the newer of the two with no way to tell.
+  `Task.Name` is the label to display.
+
+### Changed
+
+- **The Go SDK moved to its own repository.** It was already its own module —
+  a client for an HTTP API has no business making consumers inherit GORM, goja,
+  RabbitMQ and OpenTelemetry — and it is now published from
+  [gsoultan/metis-sdk](https://github.com/gsoultan/metis-sdk), so it versions
+  independently of the engine it talks to and its own CI fails the build if
+  `go.mod` ever grows a `require` block.
+
+  For anyone importing it, the package name and every exported symbol are
+  unchanged; only the path moves:
+
+  ```go
+  github.com/gsoultan/metis/sdk  →  github.com/gsoultan/metis-sdk
+  ```
+
+  There is no fallback for this one — a nested module path cannot redirect — so
+  it is an edit to make now rather than one with an expiry.
+  [`docs/upgrading.md`](docs/upgrading.md) says so alongside the other renames.
+
+### Fixed
+
+- **The UI was served uncompressed and uncacheable.** The embedded assets went
+  out through a bare file server: no compression and no `Cache-Control`, and the
+  image has no reverse proxy to add either. A first paint was about 1.25 MB on
+  the wire where the same bytes gzip to about 330 kB, and every reload refetched
+  the whole application. Assets are now compressed once at startup, hashed
+  bundles are immutable for a year, the shell revalidates, and conditional
+  requests get a 304.
+
+- **A corrupt config file booted the server onto an empty database.** An
+  unreadable `config.yaml` was a warning, then the server fell back to the
+  environment — and with no `DATABASE_URL` set, that meant creating a *fresh,
+  empty SQLite file* and serving from it. The process passed its own readiness
+  probe while every list in the product was empty and every write went somewhere
+  nobody would look. It now refuses to start and says which file it could not
+  read. Unknown keys are refused too: `databse:` used to parse cleanly as "no
+  database configured".
+
+- **Every deploy froze in-flight jobs for five minutes.** Shutdown cancelled the
+  worker's context and returned. Anything already running was abandoned, and its
+  final status write rode that cancelled context and failed — so the row stayed
+  marked running, holding this worker's lock, until the lease expired. The
+  shipped manifest uses a Recreate strategy, so this happened on every rollout.
+  The worker now stops claiming and waits for what it holds
+  (`METIS_SHUTDOWN_DRAIN`, 20s), and the status write is made on a context that
+  survives the cancellation.
+
+- **Every authenticated request cost about six queries before it started.**
+  Validating a token read the account twice — once for the credential cutoff and
+  once to build the caller — and each read preloaded the user's organizations
+  and projects. One cached read now serves both. The lifetime is five seconds by
+  default and deliberately not longer: the cached value carries the cutoff that
+  ends sessions, so a stale entry would extend a compromised one. Password, role
+  and membership changes drop the entry immediately, which the existing
+  password-change tests prove by failing without it.
+
+- **The interface failed WCAG AA on every screen.** Secondary text measured
+  3.15:1 against the page background where AA asks for 4.5:1 — Mantine's default
+  grey, chosen against pure white, on a page that is slightly grey. Badges and
+  filled buttons were short too, and the shell emitted two `banner` landmarks
+  and two `navigation` landmarks, one nested inside the other, so a screen
+  reader offered indistinguishable duplicates and lost the ability to jump to
+  the header. Section headings jumped from `h1` to `h4` or `h5`, breaking the
+  outline people navigate by.
+
+  Measured with axe across eleven pages: 12 to 33 violations each before, zero
+  after. The colour values are asserted by a unit test against the same surfaces
+  they are used on, so a future palette change fails a test rather than shipping.
+
+- **The signed-webhook feature returned 500 on every installation.** Its two
+  tables were declared by models and given a repository, but no migration
+  created them, so every install newer than the versioning baseline answered the
+  feature's endpoints with "no such table". `/readyz` only pings the database,
+  so nothing ever paged. Migration 12 creates them.
+
+- **The designer deployed processes that could not run.** Three separate ways,
+  each silent: labelling a gateway path deployed the label as the path's
+  *condition*, so a path captioned "Yes" carried the unbound condition `Yes` and
+  was never taken; a "call a web address" step wrote its address and its
+  external topic under names nothing reads, so the step deployed and did
+  nothing at all; and the checks that would have caught an undecidable gateway
+  lived in a module nothing imported, while the Deploy button consulted a much
+  weaker one. Deploy is now held on a gateway whose paths carry no conditions
+  and no fallback, and every message names the step and says what to do.
+
+- **Unsaved work in the designer was thrown away.** The canvas autosaved to the
+  browser every few seconds and never read it back, while the header said "last
+  saved" — so a closed tab lost everything since the last *deploy*, which was
+  the only way to save. The draft is offered back on open, Ctrl-S keeps it
+  rather than publishing, and deploying clears it.
+
+- **An outbound reply could exhaust the server's memory.** Service tasks and
+  connectors read a whole HTTP response into memory with no ceiling, and the URL
+  comes from a user-authored definition. Replies are now bounded and an
+  oversized one is refused rather than truncated.
+
+- **The expression cache stopped caching instead of evicting.** Past 4096
+  distinct expressions nothing new was ever remembered again, so one tenant
+  deploying that many conditions turned parsing back on for the whole
+  installation, permanently and silently. It evicts least-recently-used now.
+
+- **The decision editor had a dead end for a first-time author.** A new result
+  column is created without a process variable, which is an error that disables
+  Save — and the only control that fixed it was hidden behind Advanced → Expert.
+  The variable is always visible now and fills itself in from the column
+  heading. Saving also keeps you in the editor rather than returning to the
+  list, so the try-fix-try loop is possible, and a trial run that matched
+  nothing is no longer reported under a green tick.
+
 
 - **Asking for something that is not there returned 500.** A well-formed
   identifier naming nothing reached GORM, came back as `ErrRecordNotFound`, and

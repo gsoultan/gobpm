@@ -94,6 +94,7 @@ One command runs the backend and the UI together:
 ./scripts/dev.sh backend    # backend only
 ./scripts/dev.sh ui         # UI only
 ./scripts/dev.sh --reset    # wipe the local database and re-run setup
+./scripts/dev.sh --sample   # set up and fill it with worked examples
 UI_PORT=3000 API_PORT=9000 GRPC_PORT=9001 ./scripts/dev.sh   # different ports
 ```
 
@@ -128,6 +129,19 @@ Release notes are in [`CHANGELOG.md`](CHANGELOG.md); upgrading from GoBPM is [`d
 | `METIS_ALLOW_IMPLICIT_DEFAULT_FLOW` | Restores the legacy behaviour where a gateway with no matching condition took its first outgoing flow. Off by default — that silently routed processes down arbitrary branches. |
 | `METIS_TRUSTED_PROXIES` | Which peers may set `X-Forwarded-For`, as comma-separated CIDRs. Defaults to loopback and private space, which is where a load balancer or sidecar connects from. Set it to `none` when the server is exposed directly. **Requests from anywhere else have the header ignored** — it is a client-set header, and believing it unconditionally let one address take 30 requests through a limit of 3 by varying it. |
 | `METIS_PPROF_ENABLED` | Expose pprof on `127.0.0.1:6060`. |
+| `METIS_DB_MAX_OPEN_CONNS` | Connection pool ceiling for PostgreSQL, MySQL and SQL Server (default `25`). Previously unset, which means *unlimited* — a burst could open more connections than PostgreSQL's default `max_connections` of 100 and fail every caller at once. SQLite ignores this and always uses one connection. |
+| `METIS_DB_MAX_IDLE_CONNS` | Idle connections kept open (defaults to the open ceiling). The `database/sql` default of 2 closes the rest as soon as a burst subsides and pays a fresh handshake on the next one. |
+| `METIS_DB_CONN_MAX_LIFETIME` | How long a connection may live (default `30m`). Bounded so a database failover or rolling restart is picked up without restarting Metis. |
+| `METIS_DB_CONN_MAX_IDLE_TIME` | How long an unused connection is kept (default `5m`). |
+| `METIS_DEFINITION_CACHE_SIZE` | Decoded process definitions held in memory (default `256`). A definition is immutable once deployed but is read on every job, message and timer; the cache is bounded, evicts least-recently-used, and is keyed by tenant so a cached copy can never cross an organization boundary. |
+| `METIS_JOB_WORKERS` | Jobs run at once (default `10`). Was a compile-time 5, which with a fixed 2-second poll capped a replica at about 2.5 jobs a second whatever the hardware. Keep it at or below the database pool: above that, workers queue on connections instead of working. |
+| `METIS_JOB_POLL_INTERVAL` | How long an idle worker waits before looking again (default `2s`). It bounds how late the *first* job of a quiet period starts; once work exists the worker keeps claiming without waiting. |
+| `METIS_JOB_LEASE` | How long a claim is held before another worker may take the job (default `5m`). Values under 2 minutes are refused: an outbound call may run for 30 seconds, and a lease shorter than that permits a second worker to run a job still in flight, which is a duplicate service call. |
+| `METIS_AUTH_CACHE_TTL` | How long a resolved caller is reused (default `5s`, `0s` disables). Validating a token read the account twice with associations preloaded — about six queries before a request reached its handler. Deliberately seconds: the cached value carries the credential cutoff that invalidates tokens, so a stale entry extends a compromised session. Password, role and membership changes drop the entry immediately. |
+| `METIS_AUTH_CACHE_SIZE` | Accounts held (default `10000`, evicting least-recently-used). |
+| `METIS_REFUSE_SCHEMA_DRIFT` | Refuse to start when a model change has no migration (default off, a warning). The drift count is published as `metis_schema_drift_items` and alerted on either way — features behind a missing table return 500 while `/readyz` stays green, so this is not otherwise visible. Useful in staging to fail the deploy rather than discover it in production. |
+| `METIS_SHUTDOWN_DRAIN` | How long a stopping process waits for jobs it has already claimed (default `20s`). Shutdown used to abandon them: the final status write rode the cancelled context and failed, so the row kept its lock until the five-minute lease expired — and the shipped manifest uses a Recreate strategy, so that was every deploy. Keep it inside your termination grace period. |
+| `METIS_HTTP_MAX_RESPONSE_BYTES` | Ceiling on a single outbound reply a service task or connector reads into memory (default `8388608`, 8 MiB). Exceeding it is refused rather than truncated: a process must not act on half a document it believes is whole. Without a bound, a partner streaming an unbounded body exhausts the pod's memory. |
 
 ### Production build
 
@@ -197,13 +211,30 @@ To start it already carrying the examples from `docs/data-flow.md`:
 ```
 
 That runs the setup wizard for you, imports an expense approval and a new
-supplier check with the decision tables they consult, and starts four
-approvals — so the process list, the decision list, the instance list and the
-task inbox all have something in them. Sign in as `admin` / `admin`.
+supplier check with the decision tables they consult, creates the people and
+groups those approvals are offered to, and starts five instances — so the
+process list, the decision list, the instance list, the task inbox and the
+incident inbox all have something in them.
+
+Sign in as `admin` / `admin`, which belongs to every group and so sees
+everything. The others use the password `sample-password`:
+
+| Account | Sees |
+| :-- | :-- |
+| `manager` | Approvals under GBP 1,000 |
+| `director` | Approvals above it |
+| `reviewer` | The supplier compliance review, once the incident below is resolved |
 
 The amount decides who approves: under 100 needs nobody, under 1000 a manager,
 anything more a director. `docs/data-flow.md` follows one through, value by
 value.
+
+One supplier check **fails on purpose** — its first step calls a web address
+that does not exist. It retries with backoff first, so give it a couple of
+minutes; the incident appears once the retries are spent. Then open Instances,
+pick the failed one and choose "Show what failed" to read the cause and retry
+it. That is the operator's half of the product, and showing it needs something
+broken.
 
 To seed an installation that is already set up, give it the password you chose:
 
@@ -251,12 +282,14 @@ instances, correlate messages, work human tasks from your own UI, and serve
 process steps with external workers — over plain HTTP or the Go SDK:
 
 ```bash
-go get github.com/gsoultan/metis/sdk
+go get github.com/gsoultan/metis-sdk
 ```
 
-The SDK has no dependencies outside the Go standard library. Start with
-[`docs/integration.md`](docs/integration.md); `sdk/examples/quickstart` runs
-the whole journey against a live server.
+The SDK has no dependencies outside the Go standard library and lives in its
+own repository, [gsoultan/metis-sdk](https://github.com/gsoultan/metis-sdk),
+so it versions independently of the server. Start with
+[`docs/integration.md`](docs/integration.md); the SDK's `examples/quickstart`
+runs the whole journey against a live server.
 
 ## 🧪 Testing
 

@@ -7,7 +7,12 @@
 #   ./scripts/dev.sh backend      backend only
 #   ./scripts/dev.sh ui           UI only
 #   ./scripts/dev.sh --reset      wipe the local SQLite database first
-#   ./scripts/dev.sh --sample     set up and fill it with worked examples
+#   ./scripts/dev.sh --sample     set up and fill it with worked examples:
+#                                 two processes, the decisions they consult,
+#                                 approvals waiting in an inbox, the people and
+#                                 groups they are offered to, and one instance
+#                                 that fails on purpose so the incident inbox
+#                                 has something in it
 #
 # The UI runs on :5273 and proxies /api to the backend on :8273, so
 # development is same-origin — the app talks to the server exactly as it does
@@ -326,7 +331,15 @@ main() {
              (( sample )) && start_sample
              start_ui
              printf '\n'
-             ok "Open ${C_BOLD}http://localhost:${UI_PORT}${C_RESET} — first run shows the setup wizard"
+             if (( sample )); then
+               ok "Open ${C_BOLD}http://localhost:${UI_PORT}${C_RESET} — sign in as admin / admin"
+             else
+               ok "Open ${C_BOLD}http://localhost:${UI_PORT}${C_RESET} — first run shows the setup wizard"
+               # Said here rather than only in --help: an empty installation is
+               # a poor first impression, every list reads "nothing here yet",
+               # and the flag that fixes it is easy to miss.
+               printf '%s     Empty? Ctrl-C, then: ./scripts/dev.sh --reset --sample%s\n' "$C_DIM" "$C_RESET"
+             fi
              printf '%s     Ctrl-C stops both.%s\n\n' "$C_DIM" "$C_RESET"
              ;;
   esac

@@ -166,3 +166,23 @@ spec:
               exists because the alarming failures here are quiet ones — a
               worker that stopped claiming jobs, or a tenant scope answering
               every query with nothing, both look like an idle system.
+
+        - alert: MetisSchemaDrift
+          # The failure this exists for is silent by construction: a model
+          # shipped without its migration means the feature behind it answers
+          # every request with a 500, while /readyz stays green because it only
+          # pings the database. The signed-webhook receiver shipped that way and
+          # was broken on every installation for four releases without paging
+          # anyone.
+          expr: metis_schema_drift_items > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Metis is missing a database migration
+            description: >-
+              {{ $value }} model change(s) have no migration, so the tables or
+              columns behind them do not exist and the features that use them
+              return 500. Startup logs each one: `kubectl -n metis logs
+              deploy/metis | grep "Schema drift"`. The fix is a numbered
+              migration, not a restart — see docs/runbooks.md.

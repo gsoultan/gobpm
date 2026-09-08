@@ -126,6 +126,7 @@ import json, sys
 print(json.dumps({"username": sys.argv[1], "password": sys.argv[2]}))
 ' "$ADMIN_USER" "$ADMIN_PASS")")"
   TOKEN="$(printf '%s' "$response" | json "d.get('token')")"
+  ADMIN_ID="$(printf '%s' "$response" | json "(d.get('user') or {}).get('id')")"
   if [[ -z "$TOKEN" ]]; then
     # An installation that already exists has whatever password was typed at
     # its setup, which is usually not this one. That is not a failure of the
@@ -139,6 +140,100 @@ print(json.dumps({"username": sys.argv[1], "password": sys.argv[2]}))
     fi
     die "could not sign in as $ADMIN_USER after setting it up"
   fi
+}
+
+
+# --- the people the sample routes work to ----------------------------------
+
+# The sample's user tasks are offered to candidate *groups* — line-managers,
+# finance and compliance — and nothing created them. So every approval the seed
+# started sat unclaimed, offered to a group with no members, and the inbox this
+# script's own summary promised was empty on a fresh install. A demo whose
+# headline screen is blank is worse than no demo.
+#
+# Each group also gets a person in it, so the sample shows what the product is
+# for: work arriving in somebody's queue and being claimed by them. The admin
+# joins all three, so signing in as the account this script prints shows
+# everything without switching users.
+readonly SAMPLE_PASS="sample-password"
+
+ORG=""
+
+ensure_people() {
+  ORG="$(api GET /organizations | json "(d.get('organizations') or [{}])[0].get('id')")"
+  [[ -n "$ORG" ]] || die "no organization to add groups to"
+
+  # name:description:who-belongs-to-it
+  local spec name description member
+  for spec in \
+    "line-managers:Approves expenses up to GBP 1,000:manager" \
+    "finance:Approves anything larger:director" \
+    "compliance:Reviews new suppliers:reviewer"
+  do
+    name="${spec%%:*}"
+    description="$(cut -d: -f2 <<<"$spec")"
+    member="${spec##*:}"
+
+    create_group "$name" "$description"
+    create_person "$member" "$name"
+    join_group "$ADMIN_ID" "$name"
+  done
+  ok "created three groups and the people in them"
+}
+
+# Creating something that already exists is not an error here: this script is
+# safe to run twice, and the second run should reach the same end state.
+create_group() { # create_group <name> <description>
+  api POST "/organizations/$ORG/groups" "$(python3 -c '
+import json, sys
+print(json.dumps({"group": {
+    "name": sys.argv[1], "description": sys.argv[2], "roles": ["USER"],
+}}))' "$1" "$2")" >/dev/null
+}
+
+group_id() { # group_id <name>
+  api GET "/organizations/$ORG/groups" | python3 -c "
+import json,sys
+try: d = json.load(sys.stdin)
+except Exception: print(''); raise SystemExit
+name = sys.argv[1]
+print(next((g['id'] for g in (d.get('groups') or []) if g.get('name') == name), ''))
+" "$1"
+}
+
+create_person() { # create_person <username> <group-name>
+  # organizations, not organization_id: the server reads a membership list, and
+  # a user created without one is refused on every request they make.
+  api POST /users "$(python3 -c '
+import json, sys
+print(json.dumps({
+    "user": {
+        "organizations": [{"id": sys.argv[1]}],
+        "username": sys.argv[2],
+        "full_name": sys.argv[2].title(),
+        "display_name": sys.argv[2].title(),
+        "email": sys.argv[2] + "@example.invalid",
+        "roles": ["USER"],
+    },
+    "password": sys.argv[3],
+}))' "$ORG" "$1" "$SAMPLE_PASS")" >/dev/null
+
+  local uid
+  uid="$(api GET "/organizations/$ORG/users" | python3 -c "
+import json,sys
+try: d = json.load(sys.stdin)
+except Exception: print(''); raise SystemExit
+name = sys.argv[1]
+print(next((u['id'] for u in (d.get('users') or []) if u.get('username') == name), ''))
+" "$1")"
+  [[ -n "$uid" ]] && join_group "$uid" "$2"
+}
+
+join_group() { # join_group <user-id> <group-name>
+  local gid
+  gid="$(group_id "$2")"
+  [[ -n "$gid" && -n "$1" ]] || return 0
+  api POST "/groups/$gid/members/$1" >/dev/null
 }
 
 # --- the examples ----------------------------------------------------------
@@ -187,6 +282,29 @@ print(json.dumps({
     [[ -z "$err" ]] && (( started += 1 )) || warn "starting an instance: $err"
   done
   ok "started $started expense approvals"
+
+  # And one supplier check, which is the failure half of the sample.
+  #
+  # Its first step calls a web address that does not exist, so the instance
+  # stops there and raises an incident — which is the point: the incident inbox
+  # is where an operator spends their time, and a sample with nothing in it
+  # cannot show that. It also means the compliance review after that step is
+  # not reached until somebody resolves the incident, which is the walk-through.
+  err="$(api POST /process.ProcessService/StartProcess "$(python3 -c '
+import json, sys
+print(json.dumps({
+    "projectId": sys.argv[1],
+    "definitionKey": "supplier-check",
+    "variables": {
+        "registration_id": "12345678",
+        "supplierName": "Northwind Supplies Ltd",
+    },
+}))' "$PROJECT")" | json "d.get('error')")"
+  if [[ -z "$err" ]]; then
+    ok "started a supplier check, which fails on purpose"
+  else
+    warn "starting the supplier check: $err"
+  fi
 }
 
 # --- main ------------------------------------------------------------------
@@ -196,6 +314,7 @@ main() {
   wait_for_server
   ensure_configured
   sign_in
+  ensure_people
   import_examples
   start_instances
 
@@ -206,13 +325,26 @@ ${C_DIM}
   Processes    two: an expense approval, and a new supplier check
   Decisions    the tables those two consult
   Instances    four expense approvals, one of them finished
-  My work      approvals waiting for a manager and for a director
+  My inbox     approvals waiting, under "Available to Claim"
+
+  Sign in as any of these — all with the password ${SAMPLE_PASS}:
+
+    manager    sees the approvals under GBP 1,000
+    director   sees the ones above it
+    reviewer   sees the supplier compliance review, once the incident
+               below is resolved and the process reaches that step
+
+  ${ADMIN_USER} is in all three groups, so it sees everything.
 
   The amount decides who approves: under 100 needs nobody, under 1000 a
   manager, anything more a director. docs/data-flow.md follows one through.
 
-  The supplier check calls https://api.example.com, which does not exist, so
-  it raises an incident — deliberately, to show what a failure looks like.
+  One supplier check is running, and it fails on purpose: its first step calls
+  https://api.example.com, which does not exist. It retries with backoff first,
+  so give it a couple of minutes — the incident appears once the retries are
+  spent, not straight away. Then: Instances → the failed one → "Show what
+  failed", which explains the cause and offers a retry. That is the operator's
+  half of the product, and it needs something broken to show.
 ${C_RESET}
 EOF
 }

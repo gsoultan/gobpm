@@ -5,6 +5,12 @@ on:
   push:
     branches:
       - main
+  # The load test is too slow to seed on every pull request and too important to
+  # leave un-run — a performance harness nobody has executed proves nothing at
+  # all, which is how the dialect suites came to be skipping silently.
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -159,15 +165,6 @@ jobs:
           METIS_FEATURE_STRICT_TENANT_SCOPE: "true"
         run: go test -count=1 ./tests/strictscope/...
 
-      # The SDK is its own zero-dependency module, so the module-wide commands
-      # above never see it. Untested here, it would only break in a consumer's
-      # build — the one place we cannot fix it from.
-      - name: Client SDK (vet, race)
-        working-directory: sdk
-        run: |
-          go vet ./...
-          go test -race -count=1 ./...
-
       - name: Vulnerability scan (govulncheck)
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
@@ -281,8 +278,14 @@ jobs:
       - name: Run the dialect suites
         run: |
           set -o pipefail
+          # tests/slo is here rather than only in the module-wide run because
+          # that run has no DSN, so it measured SQLite — and the targets in
+          # roadmap.md §1 are stated for the database people actually deploy.
+          # A latency target proven on a single-connection file database is not
+          # proven.
           go test -count=1 -v ./tests/postgres/... ./tests/mysqldb/... ./tests/mssql/... \
             ./tests/tenant/... ./tests/migrations/... ./tests/replicas/... ./tests/outage/... \
+            ./tests/slo/... \
             2>&1 | tee /tmp/dialects.log
           if grep -q -- "--- SKIP" /tmp/dialects.log; then
             echo "::error::A dialect test skipped, which means its DSN did not reach it:"
@@ -450,6 +453,57 @@ jobs:
       - name: Lint the workflows
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/*.yml
 
+  loadtest:
+    name: Load (read latency at volume)
+    runs-on: ubuntu-latest
+    # Weekly and on demand only. Seeding a hundred thousand instances takes
+    # minutes, which is the wrong tax on every pull request — but "we never
+    # measured" is the wrong answer when a list endpoint gets slow.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: gobpm
+          POSTGRES_DB: gobpm
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+
+    env:
+      METIS_TEST_POSTGRES_DSN: "host=127.0.0.1 port=5432 user=postgres password=gobpm dbname=gobpm sslmode=disable"
+      METIS_LOADTEST: '1'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Place the embedded UI
+        # ui/embed.go carries //go:embed all:dist, so the Go build needs the
+        # directory to exist. The load test measures API latency, not the
+        # bundle, so a placeholder is enough and building the real one would
+        # add minutes for nothing.
+        run: mkdir -p ui/dist && touch ui/dist/index.html
+
+      - name: Read latency at volume
+        run: |
+          set -o pipefail
+          go test -count=1 -v -timeout 30m ./tests/loadtest/... 2>&1 | tee /tmp/loadtest.log
+          if grep -q -- "--- SKIP" /tmp/loadtest.log; then
+            echo "::error::The load test skipped, so nothing was measured:"
+            grep -- "--- SKIP" /tmp/loadtest.log
+            exit 1
+          fi
+
   image:
     name: Image (build and boot)
     runs-on: ubuntu-latest
@@ -500,6 +554,20 @@ jobs:
           docker build \
             --build-arg VERSION="$(git describe --tags --always --dirty)" \
             -t metis:ci .
+
+      # A distroless base carries almost nothing, which is the point — but "almost
+      # nothing" is not "nothing", and the Go binary itself is in scope. This
+      # fails on CRITICAL only: a job that fails on every advisory in every
+      # severity is a job people learn to rerun until it passes.
+      - name: Scan the image for known vulnerabilities
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: metis:ci
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: CRITICAL
+          vuln-type: os,library
 
       # The release publishes arm64 too, and until this existed that path was
       # only exercised by tagging — which is how the first release broke, on a

@@ -27,6 +27,11 @@ type StartProcessRequest struct {
 	ProjectId     string                 `protobuf:"bytes,1,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
 	DefinitionKey string                 `protobuf:"bytes,2,opt,name=definition_key,json=definitionKey,proto3" json:"definition_key,omitempty"`
 	Variables     *structpb.Struct       `protobuf:"bytes,3,opt,name=variables,proto3" json:"variables,omitempty"`
+	// Start a named version instead of the live one. Zero means the live one,
+	// which is what every client written before this field sends.
+	//
+	// The use it exists for is trying a staged version before promoting it.
+	Version       int32 `protobuf:"varint,4,opt,name=version,proto3" json:"version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -80,6 +85,13 @@ func (x *StartProcessRequest) GetVariables() *structpb.Struct {
 		return x.Variables
 	}
 	return nil
+}
+
+func (x *StartProcessRequest) GetVersion() int32 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
 }
 
 type StartProcessResponse struct {
@@ -138,12 +150,13 @@ var File_endpoints_start_process_proto protoreflect.FileDescriptor
 
 const file_endpoints_start_process_proto_rawDesc = "" +
 	"\n" +
-	"\x1dendpoints/start_process.proto\x12\aprocess\x1a\x1cgoogle/protobuf/struct.proto\"\x92\x01\n" +
+	"\x1dendpoints/start_process.proto\x12\aprocess\x1a\x1cgoogle/protobuf/struct.proto\"\xac\x01\n" +
 	"\x13StartProcessRequest\x12\x1d\n" +
 	"\n" +
 	"project_id\x18\x01 \x01(\tR\tprojectId\x12%\n" +
 	"\x0edefinition_key\x18\x02 \x01(\tR\rdefinitionKey\x125\n" +
-	"\tvariables\x18\x03 \x01(\v2\x17.google.protobuf.StructR\tvariables\"M\n" +
+	"\tvariables\x18\x03 \x01(\v2\x17.google.protobuf.StructR\tvariables\x12\x18\n" +
+	"\aversion\x18\x04 \x01(\x05R\aversion\"M\n" +
 	"\x14StartProcessResponse\x12\x1f\n" +
 	"\vinstance_id\x18\x01 \x01(\tR\n" +
 	"instanceId\x12\x14\n" +

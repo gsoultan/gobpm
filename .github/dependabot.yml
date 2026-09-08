@@ -1,0 +1,58 @@
+# Dependency updates, proposed rather than discovered.
+#
+# CI already scans: govulncheck for Go, `bun audit` for the UI, and trivy
+# against the built image. Those tell you a dependency is a problem *now*, which
+# is the wrong time to find out — usually during an incident, on a version that
+# is several majors behind whatever fixes it. This opens the pull request before
+# then.
+#
+# Weekly, not daily: a queue of update pull requests nobody reads is the same as
+# no updates, and the verification gate has to run on every one of them.
+
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      # Grouped so the gate runs once for a set rather than five times for five
+      # patch bumps. Kept separate from majors, which need reading.
+      go-minor-and-patch:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: npm
+    directory: /ui
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      ui-minor-and-patch:
+        update-types: [minor, patch]
+    ignore:
+      # Pinned deliberately, and both would break if bumped alone:
+      #
+      #   typescript          — 7.x, the native compiler the build uses
+      #   typescript-for-eslint — an aliased 6.x, because typescript-eslint
+      #                           cannot load a 7.x compiler yet
+      #
+      # See ui/TYPESCRIPT.md. An automated bump of either is a broken lint or a
+      # broken build, so they move together, by hand.
+      - dependency-name: typescript
+      - dependency-name: typescript-for-eslint
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(ci)"

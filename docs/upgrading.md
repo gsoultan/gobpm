@@ -15,12 +15,28 @@ Nothing, to keep running. One thing, to keep building:
 ```go
 // go.mod, and every import
 github.com/gsoultan/gobpm      →  github.com/gsoultan/metis
-github.com/gsoultan/gobpm/sdk  →  github.com/gsoultan/metis/sdk
+github.com/gsoultan/gobpm/sdk  →  github.com/gsoultan/metis-sdk
 ```
 
 The Go client's package name changed with it — `gobpm.NewClient` is now
 `metis.NewClient`. GitHub redirects the old repository URL, so `git remote` and
 `go get` keep resolving, but the import path in your source has to be edited.
+
+### The Go SDK is its own repository
+
+The client was always its own module; it is now published from its own
+repository, [gsoultan/metis-sdk](https://github.com/gsoultan/metis-sdk), so it
+versions independently of the engine it talks to. If you already moved to the
+`metis` spelling, this is the one further edit:
+
+```go
+github.com/gsoultan/metis/sdk  →  github.com/gsoultan/metis-sdk
+```
+
+Nothing else changes. The package name is still `metis` and every exported
+symbol is identical, so only the import line moves. Unlike the environment
+variables below, this one has no fallback — a nested module path cannot redirect
+— so it is an edit to make now rather than one with an expiry.
 
 ### What still works, and for how long
 

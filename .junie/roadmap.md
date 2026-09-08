@@ -742,12 +742,14 @@
     tenant scoping was deployed, versioned, and permanently invisible to its own
     organization. The XML parser now also carries `topic=` / `camunda:topic` into
     `ExternalTopic` both ways, so XML-deployed processes can produce external tasks at all.
-  - **Go SDK** (`sdk/`, own module, zero dependencies): deploy/start, messages/signals,
-    tasks, and a long-poll `Worker` whose handler budget is its lock. Proven by
-    `sdk/examples/quickstart` against a live server: login → deploy BPMN → worker serves
+  - **Go SDK** (own module, zero dependencies): deploy/start, messages/signals,
+    tasks, and a long-poll `Worker` whose handler budget is its lock. Proven by its
+    `examples/quickstart` against a live server: login → deploy BPMN → worker serves
     the external task → human task claimed/completed → instance completed → timeline read.
-    `docs/integration.md` documents exactly what that program exercises. CI and `make gate`
-    include the SDK module, which the module-wide commands cannot see.
+    `docs/integration.md` documents exactly what that program exercises. Since extracted
+    to its own repository, [gsoultan/metis-sdk](https://github.com/gsoultan/metis-sdk),
+    where its own CI enforces the zero-dependency promise; it is no longer part of
+    `make gate` here.
   - **Transaction-joining sweep, found by running the product**: five repositories (29 call
     sites — variable snapshots, connectors, external tasks, incidents, compensatable
     activities) called `ResolveDB` instead of `GetTx`, so their writes ignored any active
@@ -779,9 +781,28 @@
 2. ~~**P0 Reliability remainder**~~ — the connector contract tier landed
    (`tests/connector/contract_test.go`), which was the last missing tier. Outage
    simulation and feature flags had already landed.
-3. **P1** — `golangci-lint` backlog burn-down; order is in `.golangci.yml`.
-4. **P2 UX Delight** — Task Inbox SLA fields: overdue countdown and priority badge
-   backend fields. Business Timeline is already complete.
+3. ~~**P1** — `golangci-lint` backlog burn-down~~ — closed. `golangci-lint run` reports
+   **0 issues**. The last seventeen were cleared rather than baselined: unchecked type
+   assertions in `internal/pkg/lru` (now comma-ok, degrading to a cache miss rather than a
+   panic), a dead `maxConcurrentJobs = 5` const whose comment still claimed it was the
+   semaphore default while the real one is `defaultJobWorkers = 10`, a discarded static-asset
+   write, `noctx` in four tests, and one genuine false positive — the shutdown drain's
+   deliberately non-inherited context, now `//nolint:contextcheck` with the reason.
+4. ~~**P2 UX Delight** — Task Inbox SLA fields~~ — already delivered; this entry was stale
+   against the checklist at §9.7, which marks the overhaul done. Priority and due date are
+   authored on the node, copied onto the task in `task.go`, and carried out through
+   `TaskPBAdapter`. That chain had no test; `tests/bpmn/task_sla_fields_test.go` now asserts it
+   end to end, because the failure would have been silent — every task ordinary, never overdue.
+
+**Found while closing the above (2026-09-07), all fixed:** three cross-tenant disclosures of the
+same shape — a filter that was *skipped* when absent rather than matching nothing, with no
+tenant scope behind it. `GET /processes/statistics` counted every organization's instances and
+tasks; `ListUsers` and `ListGroups` returned every account and group in the installation, with
+memberships preloaded. Regression tests in `tests/tenant/statistics_scope_test.go` and
+`tests/tenant/directory_scope_test.go`. Note these were invisible to
+`METIS_FEATURE_STRICT_TENANT_SCOPE`: a query that never asks for a scope is not one the flag
+can deny. Scoping them is what made them visible to it, which is why item 1 below gained three
+call sites.
 
 **Closed since this list was written:** Phase 2 landed the real FEEL parser, and the
 memory-exhaustion vector it existed to remove is now off by default —

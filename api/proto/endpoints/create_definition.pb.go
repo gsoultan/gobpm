@@ -23,12 +23,19 @@ const (
 )
 
 type CreateDefinitionRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ProjectId     string                 `protobuf:"bytes,1,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
-	Key           string                 `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
-	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
-	Nodes         []*entities.Node       `protobuf:"bytes,4,rep,name=nodes,proto3" json:"nodes,omitempty"`
-	Flows         []*entities.Flow       `protobuf:"bytes,5,rep,name=flows,proto3" json:"flows,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	ProjectId string                 `protobuf:"bytes,1,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
+	Key       string                 `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
+	Name      string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	Nodes     []*entities.Node       `protobuf:"bytes,4,rep,name=nodes,proto3" json:"nodes,omitempty"`
+	Flows     []*entities.Flow       `protobuf:"bytes,5,rep,name=flows,proto3" json:"flows,omitempty"`
+	// Deploy the version without making it live: new instances keep starting on
+	// whichever version is live now, and this one waits to be promoted.
+	//
+	// Negative ("stage") rather than positive ("promote") so a client that
+	// predates staging — which is every client written before this field — keeps
+	// getting a deploy that goes live.
+	Stage         bool `protobuf:"varint,6,opt,name=stage,proto3" json:"stage,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -98,10 +105,21 @@ func (x *CreateDefinitionRequest) GetFlows() []*entities.Flow {
 	return nil
 }
 
+func (x *CreateDefinitionRequest) GetStage() bool {
+	if x != nil {
+		return x.Stage
+	}
+	return false
+}
+
 type CreateDefinitionResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Error string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	// What the deploy actually did, so a caller can say "v4 deployed and live" or
+	// "v4 staged, v3 still live" without a second round trip.
+	Version       int32 `protobuf:"varint,3,opt,name=version,proto3" json:"version,omitempty"`
+	Live          bool  `protobuf:"varint,4,opt,name=live,proto3" json:"live,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -150,21 +168,38 @@ func (x *CreateDefinitionResponse) GetError() string {
 	return ""
 }
 
+func (x *CreateDefinitionResponse) GetVersion() int32 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *CreateDefinitionResponse) GetLive() bool {
+	if x != nil {
+		return x.Live
+	}
+	return false
+}
+
 var File_endpoints_create_definition_proto protoreflect.FileDescriptor
 
 const file_endpoints_create_definition_proto_rawDesc = "" +
 	"\n" +
-	"!endpoints/create_definition.proto\x12\aprocess\x1a\x13entities/node.proto\x1a\x13entities/flow.proto\"\xa8\x01\n" +
+	"!endpoints/create_definition.proto\x12\aprocess\x1a\x13entities/node.proto\x1a\x13entities/flow.proto\"\xbe\x01\n" +
 	"\x17CreateDefinitionRequest\x12\x1d\n" +
 	"\n" +
 	"project_id\x18\x01 \x01(\tR\tprojectId\x12\x10\n" +
 	"\x03key\x18\x02 \x01(\tR\x03key\x12\x12\n" +
 	"\x04name\x18\x03 \x01(\tR\x04name\x12#\n" +
 	"\x05nodes\x18\x04 \x03(\v2\r.process.NodeR\x05nodes\x12#\n" +
-	"\x05flows\x18\x05 \x03(\v2\r.process.FlowR\x05flows\"@\n" +
+	"\x05flows\x18\x05 \x03(\v2\r.process.FlowR\x05flows\x12\x14\n" +
+	"\x05stage\x18\x06 \x01(\bR\x05stage\"n\n" +
 	"\x18CreateDefinitionResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05errorB\x99\x01\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\x12\x18\n" +
+	"\aversion\x18\x03 \x01(\x05R\aversion\x12\x12\n" +
+	"\x04live\x18\x04 \x01(\bR\x04liveB\x99\x01\n" +
 	"\vcom.processB\x15CreateDefinitionProtoP\x01Z7github.com/gsoultan/metis/api/proto/endpoints;endpoints\xa2\x02\x03PXX\xaa\x02\aProcess\xca\x02\aProcess\xe2\x02\x13Process\\GPBMetadata\xea\x02\aProcessb\x06proto3"
 
 var (
