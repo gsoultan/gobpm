@@ -24,6 +24,20 @@ type BroadcastEventModel struct {
 	// producer keeps this table indifferent to what an event contains.
 	Payload string `gorm:"type:text;not null"`
 
+	// OrganizationID and EnvironmentID are who the event is for.
+	//
+	// They travel with the payload because the replica that delivers it has no
+	// context to recover them from: the request that produced the event
+	// happened on another machine. Without them a peer replica could only
+	// deliver to everybody, which is the leak this scoping closes — and closing
+	// it on one replica while the bus reopened it would be no fix at all.
+	//
+	// Nullable so rows written before this column existed still read; they are
+	// dropped on delivery rather than broadcast, because an event whose
+	// audience is unknown has no safe audience.
+	OrganizationID *UUID `gorm:"index:ix_broadcast_events_org"`
+	EnvironmentID  *UUID `json:"environment_id,omitzero"`
+
 	// CreatedAt is only for pruning. Delivery ordering is ID.
 	CreatedAt time.Time `gorm:"not null;index:ix_broadcast_events_created_at"`
 }

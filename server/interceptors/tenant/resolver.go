@@ -180,3 +180,29 @@ func (i *httpOrganizationSelector) Wrap(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// ResolveFromContext derives the active tenant from an authenticated request
+// context, outside the endpoint chain.
+//
+// The endpoint resolver covers everything that goes through go-kit. The event
+// stream does not: it is a long-lived handler mounted straight on the mux, so
+// without this it would see no tenant at all — and a stream with no tenant
+// either delivers nothing or delivers everything, depending on which way the
+// registry reads an empty scope. Both are wrong answers, and one of them is a
+// disclosure.
+//
+// Resolution starts from the principal that token validation loaded, exactly as
+// the endpoint resolver does. An explicit organization is still checked against
+// the caller's memberships; ok is false when there is no principal or no
+// membership to select.
+func ResolveFromContext(ctx context.Context) (entities.TenantContext, bool) {
+	orgs, hasPrincipal, err := organizationsFromContext(ctx)
+	if err != nil || !hasPrincipal || len(orgs) == 0 {
+		return entities.TenantContext{}, false
+	}
+	active, err := selectOrganization(orgs, requestedOrganization(ctx))
+	if err != nil {
+		return entities.TenantContext{}, false
+	}
+	return entities.TenantContext{TenantID: active}, true
+}

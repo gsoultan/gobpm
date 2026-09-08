@@ -5,7 +5,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/gsoultan/metis/server/domains/entities"
 	"github.com/gsoultan/metis/server/repositories/contracts"
+	"github.com/gsoultan/metis/server/repositories/models"
 	"github.com/rs/zerolog/log"
 )
 
@@ -46,8 +49,33 @@ type SSEFanout struct {
 	// a payload and a pending write. The conditions that make the database slow
 	// are the conditions that make the engine busy, so the failure arrives when
 	// there is least room for it.
-	queue   chan string
+	queue   chan busEvent
 	dropped atomic.Uint64
+}
+
+// busEvent is one event waiting for the bus, with the scope it may be
+// delivered in. The scope has to travel with it: the replica that reads it back
+// has no request context to recover the audience from.
+type busEvent struct {
+	scope   entities.SSEScope
+	payload string
+}
+
+// scopeOfRow reads the audience back off a bus row.
+//
+// A row written before the scope columns existed has neither, so it resolves to
+// nothing and DeliverFromPeer drops it. That is deliberate: those rows are at
+// most a few minutes old — the bus prunes — and an event whose audience is
+// unknown has no safe audience.
+func scopeOfRow(row models.BroadcastEventModel) entities.SSEScope {
+	var scope entities.SSEScope
+	if row.OrganizationID != nil {
+		scope.Organization = uuid.UUID(*row.OrganizationID)
+	}
+	if row.EnvironmentID != nil {
+		scope.Environment = uuid.UUID(*row.EnvironmentID)
+	}
+	return scope
 }
 
 const (
@@ -93,7 +121,7 @@ func NewSSEFanout(repo contracts.BroadcastRepository, observer *SSEObserver, ori
 		repo:      repo,
 		observer:  observer,
 		origin:    origin,
-		queue:     make(chan string, publishQueueDepth),
+		queue:     make(chan busEvent, publishQueueDepth),
 		interval:  defaultFanoutInterval,
 		batch:     defaultFanoutBatch,
 		retention: defaultFanoutRetention,
@@ -128,9 +156,9 @@ func (f *SSEFanout) Start(ctx context.Context) error {
 // path on a database write: the goroutine is the point. A failure is logged and
 // dropped rather than retried, because the local clients have already been
 // served and the UI treats an event as a hint to refetch.
-func (f *SSEFanout) publish(payload string) {
+func (f *SSEFanout) publish(scope entities.SSEScope, payload string) {
 	select {
-	case f.queue <- payload:
+	case f.queue <- busEvent{scope: scope, payload: payload}:
 	default:
 		// Dropped rather than queued without limit, and counted rather than
 		// logged: the moment this happens is the moment the bus is struggling,
@@ -150,13 +178,13 @@ func (f *SSEFanout) publishLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case payload := <-f.queue:
-			f.writeToBus(ctx, payload)
+		case event := <-f.queue:
+			f.writeToBus(ctx, event)
 		}
 	}
 }
 
-func (f *SSEFanout) writeToBus(ctx context.Context, payload string) {
+func (f *SSEFanout) writeToBus(ctx context.Context, event busEvent) {
 	// Detached from the caller's cancellation on purpose: the event outlives
 	// the HTTP request that caused it, and cancelling that request must not
 	// cancel telling the other replicas about it. Still bounded by the
@@ -164,7 +192,7 @@ func (f *SSEFanout) writeToBus(ctx context.Context, payload string) {
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 
-	if err := f.repo.Publish(writeCtx, f.origin, payload); err != nil {
+	if err := f.repo.Publish(writeCtx, f.origin, event.scope, event.payload); err != nil {
 		log.Warn().Err(err).
 			Msg("An SSE event was not put on the shared bus; browsers on other replicas will not see it until they refetch.")
 	}
@@ -213,7 +241,7 @@ func (f *SSEFanout) drain(ctx context.Context) {
 			return
 		}
 		for _, event := range events {
-			f.observer.DeliverFromPeer(event.Payload)
+			f.observer.DeliverFromPeer(scopeOfRow(event), event.Payload)
 			f.lastID = event.ID
 		}
 		// A short read means the bus is drained; anything else means there is

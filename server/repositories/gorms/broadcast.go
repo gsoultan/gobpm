@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/gsoultan/metis/server/domains/entities"
 	"github.com/gsoultan/metis/server/repositories/contracts"
 	"github.com/gsoultan/metis/server/repositories/models"
 	"gorm.io/gorm"
@@ -19,7 +21,7 @@ func NewBroadcastRepository(db *gorm.DB) contracts.BroadcastRepository {
 	return &gormBroadcastRepository{db: db}
 }
 
-func (r *gormBroadcastRepository) Publish(ctx context.Context, origin, payload string) error {
+func (r *gormBroadcastRepository) Publish(ctx context.Context, origin string, scope entities.SSEScope, payload string) error {
 	// Deliberately not GetTx: an event is published as a fact about something
 	// that already happened, and joining the caller's transaction would mean a
 	// rollback silently un-notifies browsers about work that did commit
@@ -29,6 +31,14 @@ func (r *gormBroadcastRepository) Publish(ctx context.Context, origin, payload s
 		Origin:    origin,
 		Payload:   payload,
 		CreatedAt: time.Now().UTC(),
+	}
+	if scope.Organization != uuid.Nil {
+		organization := models.FromUUID(scope.Organization)
+		event.OrganizationID = &organization
+	}
+	if scope.Environment != uuid.Nil {
+		environment := models.FromUUID(scope.Environment)
+		event.EnvironmentID = &environment
 	}
 	if err := r.db.WithContext(ctx).Create(&event).Error; err != nil {
 		return fmt.Errorf("could not publish a broadcast event: %w", err)
