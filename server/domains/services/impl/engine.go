@@ -34,6 +34,8 @@ type Engine struct {
 	dispatcher     observerContracts.EventDispatcher
 	jobSvc         serviceContracts.JobService
 	varHistory     serviceContracts.VariableHistoryWriter
+	// Decoded definitions, bounded and keyed by tenant. See definition_cache.go.
+	definitions *definitionCache
 }
 
 // EngineOption is a functional option for configuring an Engine after construction.
@@ -67,7 +69,7 @@ func NewExecutionEngine(
 	dispatcher observerContracts.EventDispatcher,
 	opts ...EngineOption,
 ) *Engine {
-	e := &Engine{repo: repo, dispatcher: dispatcher}
+	e := &Engine{repo: repo, dispatcher: dispatcher, definitions: newDefinitionCache()}
 	for _, opt := range opts {
 		opt(e)
 	}
@@ -101,10 +103,13 @@ func (e *Engine) StartSubProcess(ctx context.Context, projectID uuid.UUID, defin
 func (e *Engine) startProcessInternal(ctx context.Context, projectID uuid.UUID, definitionKey string, version int, vars map[string]any, parentInstanceID uuid.UUID, parentNodeID string) (uuid.UUID, error) {
 	var m models.ProcessDefinitionModel
 	var err error
+	// Resolved within the project, not across the tenant: two projects in one
+	// organization can both hold this key, and picking the wrong one would run
+	// the wrong process model under the right name.
 	if version > 0 {
-		m, err = e.repo.Definition().GetByKeyAndVersion(ctx, definitionKey, version)
+		m, err = e.repo.Definition().GetByProjectKeyAndVersion(ctx, projectID, definitionKey, version)
 	} else {
-		m, err = e.repo.Definition().GetByKey(ctx, definitionKey)
+		m, err = e.repo.Definition().GetLiveByProjectKey(ctx, projectID, definitionKey)
 	}
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("could not find definition: %w", err)
@@ -189,11 +194,9 @@ func (e *Engine) GetInstanceForUpdate(ctx context.Context, id uuid.UUID) (entiti
 }
 
 func (e *Engine) GetProcessDefinition(ctx context.Context, id uuid.UUID) (*entities.ProcessDefinition, error) {
-	m, err := e.repo.Definition().Get(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	return adapters.DefinitionEntityAdapter{Model: m}.ToEntity(), nil
+	// Read through the bounded, tenant-keyed cache: a definition is immutable
+	// once deployed, and this is read on every job, message and timer.
+	return e.loadDefinition(ctx, id)
 }
 
 func (e *Engine) ListInstances(ctx context.Context, projectID uuid.UUID) ([]entities.ProcessInstance, error) {
@@ -560,7 +563,11 @@ func (e *Engine) checkAdHocCompletion(ctx context.Context, instance *entities.Pr
 // nodes.  Returns (true, nil) when execution should continue past the node.
 func (e *Engine) removeOrCheckMultiInstance(ctx context.Context, instance *entities.ProcessInstance, def *entities.ProcessDefinition, node *entities.Node, nodeID, iterationID string) (bool, error) {
 	if node == nil || node.MultiInstanceType == "" || node.MultiInstanceType == "none" {
-		instance.RemoveTokenByNode(node)
+		// By node ID, not by node: this branch deliberately accepts a nil node —
+		// the definition no longer describes what the token is sitting on — and
+		// the token still has to come off, or the instance keeps a token nothing
+		// will ever advance.
+		instance.RemoveTokenByNodeID(nodeID)
 		return true, nil
 	}
 	return e.checkMultiInstanceCompletion(ctx, instance, def, node, nodeID, iterationID)
@@ -823,11 +830,10 @@ func (e *Engine) triggerSubscription(ctx context.Context, sub entities.EventSubs
 			return fmt.Errorf("instance %s has no definition reference", instance.ID)
 		}
 
-		md, err := e.repo.Definition().Get(txCtx, instance.Definition.ID)
+		def, err := e.loadDefinition(txCtx, instance.Definition.ID)
 		if err != nil {
 			return fmt.Errorf("load definition %s: %w", instance.Definition.ID, err)
 		}
-		def := adapters.DefinitionEntityAdapter{Model: md}.ToEntity()
 
 		for k, v := range vars {
 			instance.SetVariable(k, v)

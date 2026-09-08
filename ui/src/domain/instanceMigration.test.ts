@@ -1,0 +1,87 @@
+import { describe, expect, it } from 'bun:test';
+
+import {
+  carriedNodes,
+  isApplicable,
+  movedNodes,
+  planSummary,
+  tasksAffected,
+  toNodeMapping,
+  workOn,
+} from './instanceMigration';
+import type { ApiMigrationPlan } from '../services/types';
+
+const plan = (over: Partial<ApiMigrationPlan> = {}): ApiMigrationPlan => ({
+  source_key: 'expense-approval',
+  source_version: 1,
+  target_version: 2,
+  target_id: 'def-2',
+  instances: 3,
+  moves: [
+    { from: 'approve', to: 'review', tokens: 3, tasks: 3, jobs: 0, mapped: true },
+    { from: 'notify', to: 'notify', tokens: 0, tasks: 0, jobs: 1, mapped: false },
+  ],
+  ...over,
+});
+
+describe('instanceMigration', () => {
+  it('counts every kind of work on a node', () => {
+    expect(workOn({ from: 'a', to: 'b', tokens: 2, tasks: 1, jobs: 4, mapped: true })).toBe(7);
+  });
+
+  it('separates the nodes that move from the ones carried across', () => {
+    expect(movedNodes(plan()).map((m) => m.from)).toEqual(['approve']);
+    expect(carriedNodes(plan()).map((m) => m.from)).toEqual(['notify']);
+  });
+
+  it('treats a plan with refusals as not applicable', () => {
+    expect(isApplicable(plan())).toBe(true);
+    expect(isApplicable(plan({ refusals: ['nowhere to put approve'] }))).toBe(false);
+    expect(isApplicable(null)).toBe(false);
+  });
+
+  it('counts the people affected, not the instances', () => {
+    expect(tasksAffected(plan())).toBe(3);
+  });
+
+  it('says plainly when there is nothing to move', () => {
+    expect(planSummary(plan({ instances: 0, moves: [] }))).toBe(
+      'Nothing is running on version 1. There is nothing to move.',
+    );
+  });
+
+  it('names the inboxes, because those are people', () => {
+    expect(planSummary(plan())).toBe(
+      "3 instances would move from version 1 to version 2, including 3 tasks already in somebody's inbox.",
+    );
+  });
+
+  it('does not mention inboxes when no task moves', () => {
+    expect(planSummary(plan({ moves: [{ from: 'wait', to: 'hold', tokens: 3, tasks: 0, jobs: 3, mapped: true }] }))).toBe(
+      '3 instances would move from version 1 to version 2.',
+    );
+  });
+
+  it('reads one instance as one instance', () => {
+    expect(planSummary(plan({ instances: 1, moves: [] }))).toBe(
+      '1 instance would move from version 1 to version 2.',
+    );
+  });
+
+  it('drops rows nobody has finished filling in', () => {
+    expect(
+      toNodeMapping([
+        { from: 'approve', to: 'review' },
+        { from: 'notify', to: '' },
+        { from: '', to: 'somewhere' },
+        { from: '  spaced  ', to: '  padded ' },
+      ]),
+    ).toEqual({ approve: 'review', spaced: 'padded' });
+  });
+
+  it('drops a row that maps a node onto itself', () => {
+    // Sending it would be asking the server to do nothing, in a request whose
+    // whole purpose is to say what changes.
+    expect(toNodeMapping([{ from: 'notify', to: 'notify' }])).toEqual({});
+  });
+});
