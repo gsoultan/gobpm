@@ -1,0 +1,46 @@
+package model
+
+import (
+	"time"
+
+	"github.com/gsoultan/storm"
+)
+
+// Incident is a failure somebody has to look at: a job that exhausted its
+// retries, a gateway whose conditions were all refused.
+//
+// Raised rather than logged, because a process that cannot advance is not an
+// error in a stream somebody may read — it is work that has stopped.
+type Incident struct {
+	storm.Model
+
+	Instance ProcessInstance
+
+	// JobID and DefinitionID are recorded rather than referenced: an incident
+	// outlives the job it came from, and reading it is how somebody finds out
+	// what failed after the job row is gone.
+	Job        *Job
+	Definition *ProcessDefinition
+
+	NodeID string
+	Error  string
+	Status IncidentStatus
+
+	ResolvedAt *time.Time
+
+	DeletedAt *time.Time
+}
+
+func (i *Incident) Schema(t *storm.Table) {
+	t.Col(&i.NodeID).Size(255)
+	t.Col(&i.Status).Size(32)
+	t.Col(&i.Status).Index()
+	// An incident outlives the job it came from: the job row is cleaned up,
+	// the account of why it failed is not.
+	t.Col(&i.Job).OnDelete(storm.SetNull).Index()
+	t.Col(&i.Definition).OnDelete(storm.SetNull).Index()
+	t.Col(&i.DeletedAt).Index()
+	// Declared, so the predicate is compiled into every read of this table
+	// rather than written out at each call site. See the note in doc.go.
+	t.SoftDelete(&i.DeletedAt)
+}

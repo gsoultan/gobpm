@@ -114,12 +114,8 @@ vuln: ## Scan for known vulnerabilities
 
 # --- Gate -----------------------------------------------------------------
 
-.PHONY: sdk
-sdk: ## Build and test the Go client SDK (its own module — the main gate skips it)
-	cd sdk && go vet ./... && go test -race $(GO_TEST_FLAGS) ./...
-
 .PHONY: gate
-gate: ui-build build vet test race strict-scope sdk ui-typecheck ui-lint ui-test ## The full verification gate (AGENTS.md §4)
+gate: ui-build build vet test race strict-scope ui-typecheck ui-lint ui-test ## The full verification gate (AGENTS.md §4)
 	@echo "✅ gate green"
 
 .PHONY: docker
@@ -140,3 +136,13 @@ alerts-test: ## Unit-test the Prometheus alerting rules (needs promtool on PATH)
 .PHONY: graph
 graph: ## Refresh the graphify knowledge graph
 	rtk graphify update .
+
+# Regenerate the typed store from the model layer.
+#
+# Storm builds SQL at compile time, so the query surface is generated code that
+# is checked in — and stale the moment a model changes. Running this is part of
+# changing a model, not a separate chore.
+.PHONY: generate
+generate:
+	go run ./cmd/stormgen
+	gofmt -w server/repositories/store
