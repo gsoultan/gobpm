@@ -40,6 +40,7 @@ func (h *DefinitionHandler) CreateDefinition(ctx context.Context, req *connect.R
 			Nodes:   nodes,
 			Flows:   flows,
 		},
+		Stage: req.Msg.Stage,
 	})
 	if err != nil {
 		return nil, err
@@ -49,8 +50,10 @@ func (h *DefinitionHandler) CreateDefinition(ctx context.Context, req *connect.R
 		return nil, fmt.Errorf("definitions: expected a definition.CreateDefinitionResponse, got %T", response)
 	}
 	return connect.NewResponse(&pbendpoints.CreateDefinitionResponse{
-		Id:    resp.ID.String(),
-		Error: common.ErrString(resp.Err),
+		Id:      resp.ID.String(),
+		Error:   common.ErrString(resp.Err),
+		Version: int32(resp.Version),
+		Live:    resp.Live,
 	}), nil
 }
 

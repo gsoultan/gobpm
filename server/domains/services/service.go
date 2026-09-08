@@ -15,6 +15,10 @@ type service struct {
 	contracts.OrganizationService
 	contracts.ProjectService
 	contracts.DefinitionService
+	contracts.EnvironmentService
+	contracts.WorkflowUserService
+	contracts.ParticipantSyncService
+	contracts.PlatformUserService
 	contracts.TaskService
 	contracts.ExecutionEngine
 	contracts.JobService
@@ -33,46 +37,54 @@ type service struct {
 }
 
 type ServiceParams struct {
-	OrganizationService  contracts.OrganizationService
-	ProjectService       contracts.ProjectService
-	DefinitionService    contracts.DefinitionService
-	TaskService          contracts.TaskService
-	ExecutionEngine      contracts.ExecutionEngine
-	JobService           contracts.JobService
-	ExternalTaskService  contracts.ExternalTaskService
-	DecisionService      contracts.DecisionService
-	MigrationService     contracts.MigrationService
-	ConnectorService     contracts.ConnectorService
-	CollaborationService contracts.CollaborationService
-	MessagingService     contracts.MessagingService
-	WebhookService       contracts.WebhookService
-	AdHocActivator       contracts.AdHocActivator
-	UserService          contracts.UserService
-	GroupService         contracts.GroupService
-	SetupService         contracts.SetupService
-	NotificationService  contracts.NotificationService
+	OrganizationService    contracts.OrganizationService
+	ProjectService         contracts.ProjectService
+	DefinitionService      contracts.DefinitionService
+	EnvironmentService     contracts.EnvironmentService
+	WorkflowUserService    contracts.WorkflowUserService
+	ParticipantSyncService contracts.ParticipantSyncService
+	PlatformUserService    contracts.PlatformUserService
+	TaskService            contracts.TaskService
+	ExecutionEngine        contracts.ExecutionEngine
+	JobService             contracts.JobService
+	ExternalTaskService    contracts.ExternalTaskService
+	DecisionService        contracts.DecisionService
+	MigrationService       contracts.MigrationService
+	ConnectorService       contracts.ConnectorService
+	CollaborationService   contracts.CollaborationService
+	MessagingService       contracts.MessagingService
+	WebhookService         contracts.WebhookService
+	AdHocActivator         contracts.AdHocActivator
+	UserService            contracts.UserService
+	GroupService           contracts.GroupService
+	SetupService           contracts.SetupService
+	NotificationService    contracts.NotificationService
 }
 
 func NewService(p ServiceParams) ServiceFacade {
 	return &service{
-		OrganizationService:  p.OrganizationService,
-		ProjectService:       p.ProjectService,
-		DefinitionService:    p.DefinitionService,
-		TaskService:          p.TaskService,
-		ExecutionEngine:      p.ExecutionEngine,
-		JobService:           p.JobService,
-		ExternalTaskService:  p.ExternalTaskService,
-		DecisionService:      p.DecisionService,
-		MigrationService:     p.MigrationService,
-		ConnectorService:     p.ConnectorService,
-		CollaborationService: p.CollaborationService,
-		MessagingService:     p.MessagingService,
-		WebhookService:       p.WebhookService,
-		AdHocActivator:       p.AdHocActivator,
-		UserService:          p.UserService,
-		GroupService:         p.GroupService,
-		SetupService:         p.SetupService,
-		NotificationService:  p.NotificationService,
+		OrganizationService:    p.OrganizationService,
+		ProjectService:         p.ProjectService,
+		DefinitionService:      p.DefinitionService,
+		EnvironmentService:     p.EnvironmentService,
+		WorkflowUserService:    p.WorkflowUserService,
+		ParticipantSyncService: p.ParticipantSyncService,
+		PlatformUserService:    p.PlatformUserService,
+		TaskService:            p.TaskService,
+		ExecutionEngine:        p.ExecutionEngine,
+		JobService:             p.JobService,
+		ExternalTaskService:    p.ExternalTaskService,
+		DecisionService:        p.DecisionService,
+		MigrationService:       p.MigrationService,
+		ConnectorService:       p.ConnectorService,
+		CollaborationService:   p.CollaborationService,
+		MessagingService:       p.MessagingService,
+		WebhookService:         p.WebhookService,
+		AdHocActivator:         p.AdHocActivator,
+		UserService:            p.UserService,
+		GroupService:           p.GroupService,
+		SetupService:           p.SetupService,
+		NotificationService:    p.NotificationService,
 	}
 }
 
@@ -82,11 +94,32 @@ func NewServiceFacade(
 	dispatcher observercontracts.EventDispatcher,
 	sseObserver *observerimpl.SSEObserver,
 	jwtSecret string,
+	// participants is the storm-backed directory, nil on any engine but
+	// PostgreSQL. Passed in rather than constructed here because the storm
+	// connection belongs to the composition root, which is the only place that
+	// knows whether there is one.
+	participants contracts.WorkflowUserService,
+	// sync is the directory registry, nil for the same reason participants can
+	// be: it is built on the storm connection.
+	sync contracts.ParticipantSyncService,
+	// accounts manages platform administrators, nil for the same reason: it is
+	// storm-backed.
+	accounts contracts.PlatformUserService,
 	setupCallback func(*gorm.DB),
 ) ServiceFacade {
+	if participants == nil {
+		participants = serviceimpl.NewUnavailableWorkflowUserService()
+	}
+	if sync == nil {
+		sync = serviceimpl.NewUnavailableParticipantSyncService()
+	}
+	if accounts == nil {
+		accounts = serviceimpl.NewUnavailablePlatformUserService()
+	}
 	orgSvc := serviceimpl.NewOrganizationService(repo)
 	projectSvc := serviceimpl.NewProjectService(repo)
 	defSvc := serviceimpl.NewDefinitionService(repo)
+	environmentSvc := serviceimpl.NewEnvironmentService(repo)
 	migrationSvc := serviceimpl.NewMigrationService(repo)
 	connectorSvc := serviceimpl.NewConnectorService(repo)
 	connectorSvc.RegisterExecutor(connectors.HTTPConnectorKey, connectors.NewHTTPConnector(nil))
@@ -131,26 +164,34 @@ func NewServiceFacade(
 		serviceimpl.WithJobService(jobSvc),
 		serviceimpl.WithHandlerFactory(handlerFactory),
 	)
+	// Deleting a definition drops the engine's decoded copy of it. Wired here
+	// because this is the only place holding both, and a cache that outlives
+	// its source keeps running something an administrator removed.
+	defSvc.InvalidateWith(engine.ForgetDefinitions)
 
 	return NewService(ServiceParams{
-		OrganizationService:  orgSvc,
-		ProjectService:       projectSvc,
-		DefinitionService:    defSvc,
-		TaskService:          taskSvc,
-		ExecutionEngine:      engine,
-		JobService:           jobSvc,
-		ExternalTaskService:  externalTaskSvc,
-		DecisionService:      decisionSvc,
-		MigrationService:     migrationSvc,
-		ConnectorService:     connectorSvc,
-		CollaborationService: collaborationSvc,
-		MessagingService:     messagingSvc,
-		WebhookService:       webhookSvc,
-		AdHocActivator:       adHocActivator,
-		UserService:          userSvc,
-		GroupService:         groupSvc,
-		SetupService:         setupSvc,
-		NotificationService:  notificationSvc,
+		OrganizationService:    orgSvc,
+		ProjectService:         projectSvc,
+		DefinitionService:      defSvc,
+		EnvironmentService:     environmentSvc,
+		WorkflowUserService:    participants,
+		ParticipantSyncService: sync,
+		PlatformUserService:    accounts,
+		TaskService:            taskSvc,
+		ExecutionEngine:        engine,
+		JobService:             jobSvc,
+		ExternalTaskService:    externalTaskSvc,
+		DecisionService:        decisionSvc,
+		MigrationService:       migrationSvc,
+		ConnectorService:       connectorSvc,
+		CollaborationService:   collaborationSvc,
+		MessagingService:       messagingSvc,
+		WebhookService:         webhookSvc,
+		AdHocActivator:         adHocActivator,
+		UserService:            userSvc,
+		GroupService:           groupSvc,
+		SetupService:           setupSvc,
+		NotificationService:    notificationSvc,
 	})
 }
 

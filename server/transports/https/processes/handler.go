@@ -91,8 +91,16 @@ func decodeStartProcessRequest(_ context.Context, r *http.Request) (any, error) 
 }
 
 func decodeListInstancesRequest(_ context.Context, r *http.Request) (any, error) {
+	// ListInstancesRequest has carried Page and PageSize all along, and the
+	// endpoint passes them to ListInstancesPaged — but nothing read them off the
+	// query string, so every caller got the first page at the server default and
+	// no way past it. A busy project's older instances were unreachable over
+	// HTTP while the paging that would reach them was already implemented.
+	page, pageSize := common.PageParams(r)
 	return process.ListInstancesRequest{
 		ProjectID: r.URL.Query().Get("project_id"),
+		Page:      page,
+		PageSize:  pageSize,
 	}, nil
 }
 

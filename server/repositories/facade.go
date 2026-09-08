@@ -17,6 +17,11 @@ type Repository interface {
 	ConnectorInstance() contracts.ConnectorInstanceRepository
 	Decision() contracts.DecisionRepository
 	Definition() contracts.DefinitionRepository
+
+	// Environment lists the runtimes a project deploys into. These rows live in
+	// the main database; the data each environment holds is in the database it
+	// names.
+	Environment() contracts.EnvironmentRepository
 	Deployment() contracts.DeploymentRepository
 	ExternalTask() contracts.ExternalTaskRepository
 	Form() contracts.FormRepository

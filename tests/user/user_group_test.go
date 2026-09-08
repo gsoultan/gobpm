@@ -22,6 +22,11 @@ func TestUserCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create org: %v", err)
 	}
+	// Everything from here reads as the organization, which is what the auth
+	// interceptor puts on a request once the caller is known. The user and group
+	// directories are tenant-scoped, so a bare context is answered with nothing
+	// under the strict scope — these used to pass only by falling open.
+	ctx = entities.WithTenantContext(ctx, entities.TenantContext{TenantID: org.ID.String()})
 
 	tests := []struct {
 		name     string
@@ -150,6 +155,11 @@ func TestGroupCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create org: %v", err)
 	}
+	// Everything from here reads as the organization, which is what the auth
+	// interceptor puts on a request once the caller is known. The user and group
+	// directories are tenant-scoped, so a bare context is answered with nothing
+	// under the strict scope — these used to pass only by falling open.
+	ctx = entities.WithTenantContext(ctx, entities.TenantContext{TenantID: org.ID.String()})
 
 	tests := []struct {
 		name        string
@@ -257,6 +267,11 @@ func TestGroupMembership(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create org: %v", err)
 	}
+	// Everything from here reads as the organization, which is what the auth
+	// interceptor puts on a request once the caller is known. The user and group
+	// directories are tenant-scoped, so a bare context is answered with nothing
+	// under the strict scope — these used to pass only by falling open.
+	ctx = entities.WithTenantContext(ctx, entities.TenantContext{TenantID: org.ID.String()})
 
 	// CreateAuditEntry users
 	for _, u := range []struct {

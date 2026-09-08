@@ -53,7 +53,7 @@ func newSLOHarnessWithService(t *testing.T) (*sloHarness, services.ServiceFacade
 	db := testutils.SetupPostgresDB(t, 16)
 	repo := repositories.NewRepository(db)
 	sse := observersimpl.NewSSEObserver()
-	svc := services.NewServiceFacade(repo, observersimpl.NewEventDispatcher(), sse, "loadtest-secret", func(*gorm.DB) {})
+	svc := services.NewServiceFacade(repo, observersimpl.NewEventDispatcher(), sse, "loadtest-secret", nil, nil, nil, func(*gorm.DB) {})
 
 	handler, _ := app.BuildAPIHandler(svc, endpoints.MakeEndpoints(svc), sse, nil, map[string]health.Checker{}, db)
 	server := httptest.NewServer(handler)

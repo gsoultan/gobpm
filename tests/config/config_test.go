@@ -234,3 +234,46 @@ func TestBuildConnectionString(t *testing.T) {
 		})
 	}
 }
+
+/*
+ * A typo in config.yaml must not read as "that setting is absent".
+ *
+ * yaml.Unmarshal ignores keys it does not recognise, so `databse:` parsed
+ * cleanly into a Config naming no database — and the caller then fell through
+ * to creating a fresh local SQLite file and serving from it. The process passed
+ * its own readiness probe while every list in the product was empty.
+ */
+func TestLoad_RefusesAnUnknownKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("databse:\n  driver: postgres\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := config.Load(path); err == nil {
+		t.Fatal("a misspelled key was accepted as a valid config")
+	}
+}
+
+func TestLoad_RefusesMalformedYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("database:\n  driver: [unclosed\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := config.Load(path); err == nil {
+		t.Fatal("malformed YAML was accepted")
+	}
+}
+
+func TestLoad_AcceptsAnEmptyFile(t *testing.T) {
+	// An empty file is not a typo; it is a config with nothing set, and the
+	// caller decides what that means.
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := config.Load(path); err != nil {
+		t.Fatalf("an empty config was refused: %v", err)
+	}
+}

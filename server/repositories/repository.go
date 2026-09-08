@@ -14,6 +14,7 @@ type gormRepository struct {
 	connectorInstance     contracts.ConnectorInstanceRepository
 	decision              contracts.DecisionRepository
 	definition            contracts.DefinitionRepository
+	environment           contracts.EnvironmentRepository
 	deployment            contracts.DeploymentRepository
 	externalTask          contracts.ExternalTaskRepository
 	form                  contracts.FormRepository
@@ -45,6 +46,7 @@ func NewRepository(db *gorm.DB) Repository {
 		connectorInstance:     gorms.NewConnectorInstanceRepository(db),
 		decision:              gorms.NewDecisionRepository(db),
 		definition:            gorms.NewDefinitionRepository(db),
+		environment:           gorms.NewEnvironmentRepository(db),
 		deployment:            gorms.NewDeploymentRepository(db),
 		externalTask:          gorms.NewExternalTaskRepository(db),
 		form:                  gorms.NewFormRepository(db),
@@ -78,6 +80,7 @@ func (r *gormRepository) ConnectorInstance() contracts.ConnectorInstanceReposito
 }
 func (r *gormRepository) Decision() contracts.DecisionRepository         { return r.decision }
 func (r *gormRepository) Definition() contracts.DefinitionRepository     { return r.definition }
+func (r *gormRepository) Environment() contracts.EnvironmentRepository   { return r.environment }
 func (r *gormRepository) Deployment() contracts.DeploymentRepository     { return r.deployment }
 func (r *gormRepository) ExternalTask() contracts.ExternalTaskRepository { return r.externalTask }
 func (r *gormRepository) Form() contracts.FormRepository                 { return r.form }

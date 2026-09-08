@@ -238,7 +238,11 @@ func TestHTTPUpdateUser(t *testing.T) {
 		t.Fatalf("failed to login: %v", err)
 	}
 
-	users, err := svc.ListUsers(ctx, org.ID)
+	// Read as the organization, which is what the auth interceptor puts on a
+	// real request. The user directory is tenant-scoped, so a bare context is
+	// answered with nothing once the strict scope is on.
+	users, err := svc.ListUsers(
+		entities.WithTenantContext(ctx, entities.TenantContext{TenantID: org.ID.String()}), org.ID)
 	if err != nil {
 		t.Fatalf("failed to list users: %v", err)
 	}
@@ -403,7 +407,9 @@ func TestHTTPUpdateGroup(t *testing.T) {
 		t.Fatalf("failed to create group: %v", err)
 	}
 
-	groups, err := svc.ListGroups(ctx, org.ID)
+	// Read as the organization, for the same reason the user list above is.
+	groups, err := svc.ListGroups(
+		entities.WithTenantContext(ctx, entities.TenantContext{TenantID: org.ID.String()}), org.ID)
 	if err != nil {
 		t.Fatalf("failed to list groups: %v", err)
 	}
