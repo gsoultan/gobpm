@@ -28,7 +28,7 @@ Metis BPM (formerly GoBPM) is a professional, production-ready BPMN orchestrator
 - **Enterprise Persistence**:
   - **Audit Logging**: Comprehensive, persistent audit trail for every state change and node transition.
   - **Security**: **AES-256-GCM encryption** for process and task variables at rest. Requires `ENCRYPTION_KEY`; the server refuses to start without it once configured.
-  - **Dual DB Support**: Supports **SQLite** for development and **PostgreSQL** for production.
+  - **PostgreSQL**: one engine, so a constraint has one spelling and every test runs against what production runs.
 - **Topology**: job claiming, migrations, correlation, idempotency, live UI updates and rate limits are all safe across replicas. What remains per-process is circuit breakers, which open on consecutive failures by design — so a failing partner sees up to the threshold per replica before all back off, rather than in total. See [`docs/recovery.md` §2.1](docs/recovery.md) before raising the replica count.
 
 ## 🏗️ Architecture & Design Patterns
@@ -116,7 +116,7 @@ Release notes are in [`CHANGELOG.md`](CHANGELOG.md); upgrading from GoBPM is [`d
 | `ENCRYPTION_KEY` | **Required.** Encrypts process and task variables at rest. The server refuses to start without it once configured, and refuses a weak one — see below. Rotating it makes existing variables unreadable. |
 | `JWT_SECRET` | **Required** once configured. Rotating it invalidates every session. A weak one is forgeable into an administrator's token. |
 | `METIS_ALLOW_WEAK_SECRETS` | Start anyway with a secret that would be refused. For an existing installation that cannot rotate `ENCRYPTION_KEY` without losing data; warns on every boot. |
-| `DATABASE_URL` | PostgreSQL DSN. Defaults to a local SQLite file. |
+| `DATABASE_URL` | PostgreSQL DSN. Required unless `config.yaml` names a database; there is no local-file fallback, because one that appears silently is one somebody starts using and then loses. |
 | `METIS_HTTP_ADDRESS` | HTTP listen address (default `:8080`). |
 | `METIS_GRPC_ADDRESS` | gRPC listen address (default `:8081`). |
 | `METIS_CORS_ORIGINS` | Comma-separated allowed origins, or `*`. Unset means no CORS, which is correct when the Go server serves the UI. |
@@ -129,7 +129,7 @@ Release notes are in [`CHANGELOG.md`](CHANGELOG.md); upgrading from GoBPM is [`d
 | `METIS_ALLOW_IMPLICIT_DEFAULT_FLOW` | Restores the legacy behaviour where a gateway with no matching condition took its first outgoing flow. Off by default — that silently routed processes down arbitrary branches. |
 | `METIS_TRUSTED_PROXIES` | Which peers may set `X-Forwarded-For`, as comma-separated CIDRs. Defaults to loopback and private space, which is where a load balancer or sidecar connects from. Set it to `none` when the server is exposed directly. **Requests from anywhere else have the header ignored** — it is a client-set header, and believing it unconditionally let one address take 30 requests through a limit of 3 by varying it. |
 | `METIS_PPROF_ENABLED` | Expose pprof on `127.0.0.1:6060`. |
-| `METIS_DB_MAX_OPEN_CONNS` | Connection pool ceiling for PostgreSQL, MySQL and SQL Server (default `25`). Previously unset, which means *unlimited* — a burst could open more connections than PostgreSQL's default `max_connections` of 100 and fail every caller at once. SQLite ignores this and always uses one connection. |
+| `METIS_DB_MAX_OPEN_CONNS` | Connection pool ceiling (default `25`). Previously unset, which means *unlimited* — a burst could open more connections than PostgreSQL's default `max_connections` of 100 and fail every caller at once. |
 | `METIS_DB_MAX_IDLE_CONNS` | Idle connections kept open (defaults to the open ceiling). The `database/sql` default of 2 closes the rest as soon as a burst subsides and pays a fresh handshake on the next one. |
 | `METIS_DB_CONN_MAX_LIFETIME` | How long a connection may live (default `30m`). Bounded so a database failover or rolling restart is picked up without restarting Metis. |
 | `METIS_DB_CONN_MAX_IDLE_TIME` | How long an unused connection is kept (default `5m`). |

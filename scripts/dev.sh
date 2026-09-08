@@ -6,7 +6,7 @@
 #   ./scripts/dev.sh              backend + UI (default)
 #   ./scripts/dev.sh backend      backend only
 #   ./scripts/dev.sh ui           UI only
-#   ./scripts/dev.sh --reset      wipe the local SQLite database first
+#   ./scripts/dev.sh --reset      drop and recreate the local database first
 #   ./scripts/dev.sh --sample     set up and fill it with worked examples:
 #                                 two processes, the decisions they consult,
 #                                 approvals waiting in an inbox, the people and
@@ -137,7 +137,7 @@ JWT_SECRET=$(random_secret)
 # service task pointed at a mock API on localhost.
 METIS_HTTP_ALLOW_PRIVATE_NETWORKS=true
 
-# Uncomment to run against PostgreSQL instead of the default SQLite file.
+# Metis runs on PostgreSQL. Point DATABASE_URL at an empty database.
 # DATABASE_URL=postgres://metis:metis@localhost:5432/metis?sslmode=disable
 
 # Uncomment to keep the pre-existing gateway fallback while migrating

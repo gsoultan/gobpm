@@ -29,14 +29,15 @@ import (
 // of a port in progress; it is not a silent fallback, because a fallback would
 // mean two layers disagreeing about where the data is.
 func (a *App) openStorm(ctx context.Context) error {
-	driver, dsn, err := a.resolveDSN()
+	_, dsn, err := a.resolveDSN()
 	if err != nil {
 		return err
 	}
-	if driver != config.DriverPostgres {
-		log.Warn().
-			Str("driver", driver).
-			Msg("The storm repositories need PostgreSQL. Features built on them are unavailable on this engine.")
+	if dsn == "" {
+		// Nothing configured yet: the setup wizard has not run. It hot-swaps the
+		// connection in when it does, and the storm repositories are opened
+		// again from there.
+		log.Info().Msg("No database configured yet; waiting for setup.")
 		return nil
 	}
 
@@ -123,7 +124,10 @@ func (a *App) resolveDSN() (driver, dsn string, err error) {
 	if url := envvar.Get("DATABASE_URL"); url != "" {
 		return config.DriverPostgres, url, nil
 	}
-	return config.DriverSQLite, config.DefaultSQLitePath(), nil
+	// No config and no DATABASE_URL means an installation that has not been set
+	// up. There is no file to fall back to any more: a database this creates
+	// silently is one somebody starts using and then loses.
+	return config.DriverPostgres, "", nil
 }
 
 // participantService builds the storm-backed participant directory, or nothing.

@@ -128,7 +128,10 @@ func (s *setupService) TestConnection(ctx context.Context, req contracts.TestCon
 		SSLEnabled: req.DBSSLEnabled,
 	}
 	dsn := config.BuildConnectionString(req.DatabaseDriver, fields)
-	dialector := buildDialector(req.DatabaseDriver, dsn)
+	dialector, err := gorms.Dialector(req.DatabaseDriver, dsn)
+	if err != nil {
+		return contracts.TestConnectionResult{Success: false, Message: err.Error()}
+	}
 
 	db, err := gorm.Open(dialector, gorms.Config())
 	if err != nil {
@@ -157,22 +160,15 @@ func (s *setupService) TestConnection(ctx context.Context, req contracts.TestCon
 	return contracts.TestConnectionResult{Success: true, Message: "Connection successful"}
 }
 
-// buildDialector defers to the persistence layer's opener.
-//
-// It used to carry its own copy of the driver switch and the SQLite busy-timeout
-// default. Two copies of "how this codebase opens a database" is one that will
-// drift, and the one that drifts is whichever is edited less — which for a
-// setup wizard is both of them.
-func buildDialector(driver, dsn string) gorm.Dialector {
-	return gorms.Dialector(driver, dsn)
-}
-
 func validateSetupRequest(req contracts.SetupRequest) error {
 	if req.AdminUsername == "" || req.AdminPassword == "" || req.AdminFullName == "" || req.AdminPublicName == "" || req.OrganizationName == "" {
 		return errors.New("admin username, password, full name, public name and organization name are required")
 	}
 	if req.DatabaseDriver == "" {
 		return errors.New("database driver is required")
+	}
+	if !config.SupportedDriver(req.DatabaseDriver) {
+		return fmt.Errorf("this runs on PostgreSQL; %q is not a database engine it supports", req.DatabaseDriver)
 	}
 	// Validated here, before saveConfiguration encrypts anything with the key.
 	//
@@ -247,7 +243,10 @@ func buildDatabaseFields(req contracts.SetupRequest) config.DatabaseFields {
 
 func openTargetDatabase(req contracts.SetupRequest) (*gorm.DB, func(), error) {
 	dsn := config.BuildConnectionString(req.DatabaseDriver, buildDatabaseFields(req))
-	dialector := buildDialector(req.DatabaseDriver, dsn)
+	dialector, err := gorms.Dialector(req.DatabaseDriver, dsn)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	db, err := gorm.Open(dialector, gorms.Config())
 	if err != nil {
@@ -256,9 +255,7 @@ func openTargetDatabase(req contracts.SetupRequest) (*gorm.DB, func(), error) {
 
 	// Sized the same way the app's own open path sizes it — this database is
 	// about to be hot-swapped in as the live one, so it must not run the rest
-	// of its life on a pool nobody configured. SQLite still gets exactly one
-	// connection: pooled connections deadlock on lock upgrades, which
-	// busy_timeout cannot help with.
+	// of its life on a pool nobody configured.
 	dbpool.Apply(db)
 
 	cleanup := func() {

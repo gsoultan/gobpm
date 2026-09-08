@@ -1,5 +1,43 @@
 # Upgrading
 
+## Moving to PostgreSQL
+
+Metis runs on PostgreSQL and nothing else. SQLite, MySQL and SQL Server were
+supported and are not any more.
+
+An installation on one of them will not start. That is deliberate: the previous
+behaviour for a driver the build did not recognise was to fall back to a local
+SQLite file, which meant coming up healthy and empty — every process, task and
+definition apparently gone, with a successful startup log and a readiness probe
+that passed. Refusing to start says what happened.
+
+To move:
+
+1. **Back up first**, including the encryption key. `scripts/backup.sh` writes
+   both, separately. A database backup without `ENCRYPTION_KEY` restores rows
+   nothing can read.
+2. **Stop the engine.** Migrating a database that is being written to gives you
+   a copy of a moment that never existed.
+3. **Move the data.** There is no built-in converter — the schemas differ in the
+   column types each engine has a word for, which is the reason for the move.
+   `pgloader` handles MySQL and SQLite; for SQL Server, dump and load.
+4. **Point at the new database.** Either set `DATABASE_URL`, or edit
+   `config.yaml` so `database.driver` reads `postgres` and re-encrypt the
+   connection string with the same key.
+5. **Start, and read the first hundred lines.** Schema drift between what is in
+   the database and what this build expects is reported at startup rather than
+   altered.
+
+Why one engine: the storage layer is compiled rather than assembled at run time,
+which is what lets a query's shape be checked before it runs and a soft-delete
+predicate be a property of the schema rather than a rule every call site
+remembers. That compiler emits PostgreSQL. Four dialects also meant four
+spellings of every constraint, three of them exercised by a suite that skipped
+unless somebody had a server running — so "the tests pass" routinely meant
+"SQLite passes", and SQL Server once shipped declaring a column type it has no
+word for.
+
+
 ## GoBPM is now Metis
 
 The project, its module path and its repository are renamed. **An existing

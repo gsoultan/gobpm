@@ -1,7 +1,9 @@
 package environment_test
 
 import (
-	"path/filepath"
+	"fmt"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -17,9 +19,7 @@ import (
 // server can serve: the row names a driver and a database, and nothing else has
 // to be configured for that runtime to exist.
 func TestAnEnvironmentRowOpensAndMigratesItsDatabase(t *testing.T) {
-	file := filepath.Join(t.TempDir(), "staging.db")
-
-	db, err := gorms.Open("sqlite", file)
+	db, err := gorms.Open("postgres", environmentDSN(t))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestTheRegistryTracksConnectionsPerEnvironment(t *testing.T) {
 	t.Cleanup(gorms.ResetEnvironmentDBs)
 
 	staging, production := uuid.New(), uuid.New()
-	stagingDB, err := gorms.Open("sqlite", filepath.Join(t.TempDir(), "staging.db"))
+	stagingDB, err := gorms.Open("postgres", environmentDSN(t))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestTheRegistryTracksConnectionsPerEnvironment(t *testing.T) {
 
 	// Re-opening an environment hands back the old handle so the caller can
 	// close it, rather than closing it out from under requests in flight.
-	replacement, err := gorms.Open("sqlite", filepath.Join(t.TempDir(), "staging2.db"))
+	replacement, err := gorms.Open("postgres", environmentDSN(t))
 	if err != nil {
 		t.Fatalf("open replacement: %v", err)
 	}
@@ -126,4 +126,35 @@ func TestAnUnreachableDatabaseIsRefusedAtOpen(t *testing.T) {
 	if err := gorms.Ping(db); err == nil {
 		t.Fatal("a database on a closed port should not answer")
 	}
+}
+
+// environmentDSN gives each test its own schema on the configured PostgreSQL,
+// so two of them cannot see one another's tables.
+//
+// A file used to do this job: an environment's database was a SQLite file in a
+// temp directory, which needed nothing configured. That is gone with SQLite,
+// and the cost is that these skip without a DSN — which is why the CI job that
+// provides one also fails on a skip.
+func environmentDSN(t *testing.T) string {
+	t.Helper()
+	base := os.Getenv("METIS_TEST_POSTGRES_DSN")
+	if base == "" {
+		t.Skip("set METIS_TEST_POSTGRES_DSN to run this against a live PostgreSQL instance")
+	}
+
+	namespace := "env_" + strings.ReplaceAll(uuid.NewString()[:8], "-", "")
+	admin, err := gorms.Open("postgres", base)
+	if err != nil {
+		t.Fatalf("open the admin connection: %v", err)
+	}
+	if err := admin.Exec("CREATE SCHEMA " + namespace).Error; err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = admin.Exec("DROP SCHEMA IF EXISTS " + namespace + " CASCADE").Error
+		if sqlDB, err := admin.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	return fmt.Sprintf("%s search_path=%s", base, namespace)
 }

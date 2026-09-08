@@ -19,7 +19,9 @@ type Environment struct {
 	Name string `json:"name"`
 	// Port is where this environment is served.
 	Port int `json:"port"`
-	// Driver is the database engine: sqlite, postgres, mysql or sqlserver.
+	// Driver is the database engine. PostgreSQL is the only one; the field
+	// remains because a stored environment names its driver and an installation
+	// upgrading into this needs its rows to still read.
 	Driver string `json:"driver"`
 	// Connection holds host, port, username, password, db_name, ssl_enabled.
 	//

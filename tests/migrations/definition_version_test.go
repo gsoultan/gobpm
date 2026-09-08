@@ -26,7 +26,12 @@ func TestDuplicateVersionsAreRenumberedNotDeleted(t *testing.T) {
 		// The helper migrates from the models, so the constraint is already
 		// there. Drop it to reproduce a database from before it existed.
 		if db.Migrator().HasIndex(&models.ProcessDefinitionModel{}, versionIndex) {
-			if err := db.Migrator().DropIndex(&models.ProcessDefinitionModel{}, versionIndex); err != nil {
+			// Raw SQL for the same reason the migration uses it: GORM's
+			// PostgreSQL migrator builds `DROP INDEX CURRENT_SCHEMA.<name>`,
+			// which is a syntax error on every search_path. Reproducing a
+			// pre-migration database is the whole setup for this test, so a
+			// drop that cannot run means the test asserts nothing.
+			if err := db.Exec("DROP INDEX IF EXISTS " + versionIndex).Error; err != nil {
 				t.Fatalf("drop index: %v", err)
 			}
 		}

@@ -45,18 +45,15 @@ import { useAppStore } from '../store/useAppStore';
 import { MIN_PASSWORD_LENGTH } from '../domain/password';
 import { useEffect } from 'react';
 
+// PostgreSQL is the only engine this runs on. The list stays a list rather than
+// becoming a fixed label because the shape of the step — pick an engine, give
+// its connection — is what a second one would need, and a select with one
+// option says "this is the choice" more honestly than a hidden field.
 const DATABASE_DRIVERS = [
-  { value: 'sqlite', label: 'SQLite (Embedded, no server required)' },
   { value: 'postgres', label: 'PostgreSQL' },
-  { value: 'mysql', label: 'MySQL' },
-  { value: 'sqlserver', label: 'SQL Server' },
 ] as const;
 
-const DEFAULT_PORTS: Record<string, number> = {
-  postgres: 5432,
-  mysql: 3306,
-  sqlserver: 1433,
-};
+const POSTGRES_PORT = 5432;
 
 const MIN_ENCRYPTION_KEY_LENGTH = 16;
 const GENERATED_KEY_LENGTH = 32;
@@ -110,7 +107,7 @@ export function Setup({ onComplete }: { onComplete: () => void }) {
 
   const form = useForm({
     initialValues: {
-      database_driver: 'sqlite',
+      database_driver: 'postgres',
       db_host: 'localhost',
       db_port: 5432,
       db_username: '',
@@ -132,14 +129,12 @@ export function Setup({ onComplete }: { onComplete: () => void }) {
         if (!values.database_driver) {
           return { database_driver: 'Database driver is required' };
         }
-        if (values.database_driver !== 'sqlite') {
-          const errors: Record<string, string | null> = {};
-          if (!values.db_host) errors.db_host = 'Host is required';
-          if (!values.db_port) errors.db_port = 'Port is required';
-          if (!values.db_username) errors.db_username = 'Username is required';
-          if (!values.db_name) errors.db_name = 'Database name is required';
-          if (Object.keys(errors).length > 0) return errors;
-        }
+        const errors: Record<string, string | null> = {};
+        if (!values.db_host) errors.db_host = 'Host is required';
+        if (!values.db_port) errors.db_port = 'Port is required';
+        if (!values.db_username) errors.db_username = 'Username is required';
+        if (!values.db_name) errors.db_name = 'Database name is required';
+        if (Object.keys(errors).length > 0) return errors;
         return {};
       }
       if (active === 1) {
@@ -179,10 +174,7 @@ export function Setup({ onComplete }: { onComplete: () => void }) {
   const handleDriverChange = useCallback((value: string | null) => {
     if (!value) return;
     form.setFieldValue('database_driver', value);
-    const port = DEFAULT_PORTS[value];
-    if (port) {
-      form.setFieldValue('db_port', port);
-    }
+    form.setFieldValue('db_port', POSTGRES_PORT);
   }, [form]);
 
   const generateEncryptionKey = useCallback(() => {
@@ -248,9 +240,6 @@ export function Setup({ onComplete }: { onComplete: () => void }) {
       setLoading(false);
     }
   };
-
-  const selectedDriver = form.values.database_driver;
-  const isSQLite = selectedDriver === 'sqlite';
   const passwordStrength = getPasswordStrength(form.values.admin_password);
 
   return (
@@ -305,21 +294,11 @@ export function Setup({ onComplete }: { onComplete: () => void }) {
                     onChange={handleDriverChange}
                     error={form.errors.database_driver}
                   />
-                  {isSQLite && (
-                    <Alert variant="light" color="blue" icon={<Database size={16} />}>
-                      SQLite uses a local file (<strong>metis.db</strong>) and requires no additional configuration.
-                      You can optionally specify a custom file path below.
-                    </Alert>
-                  )}
-                  {isSQLite && (
-                    <TextInput
-                      label="Database File Path (optional)"
-                      placeholder="metis.db"
-                      description="Leave empty to use the default metis.db file"
-                      {...form.getInputProps('db_name')}
-                    />
-                  )}
-                  {!isSQLite && (
+                  <Alert variant="light" color="blue" icon={<Database size={16} />}>
+                    Metis runs on PostgreSQL. Point it at an empty database — it creates its own
+                    tables on first start, and will not touch anything already there.
+                  </Alert>
+                  {(
                     <>
                       <Group grow>
                         <TextInput
@@ -330,7 +309,7 @@ export function Setup({ onComplete }: { onComplete: () => void }) {
                         />
                         <NumberInput
                           label="Port"
-                          placeholder={String(DEFAULT_PORTS[selectedDriver] || 5432)}
+                          placeholder={String(POSTGRES_PORT)}
                           required
                           min={1}
                           max={65535}

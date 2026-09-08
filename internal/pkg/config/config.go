@@ -9,22 +9,27 @@ import (
 
 	"github.com/gsoultan/metis/internal/pkg/crypto"
 	"gopkg.in/yaml.v3"
-
-	"github.com/rs/zerolog/log"
 )
 
 const (
 	// DefaultConfigPath is the default location for the configuration file.
 	DefaultConfigPath = "config.yaml"
 
-	// DriverSQLite represents the SQLite database driver.
-	DriverSQLite = "sqlite"
-	// DriverPostgres represents the PostgreSQL database driver.
+	// DriverPostgres is the database this runs on. It is the only one.
+	//
+	// SQLite, MySQL and SQL Server were supported and are not any more. The
+	// engine's storage layer is compiled rather than assembled at run time,
+	// which is what lets a query's shape be checked before it runs and a
+	// soft-delete predicate be a property of the schema rather than a rule every
+	// call site remembers — and that compiler emits PostgreSQL. Four dialects
+	// also meant four spellings of every constraint, three of which were
+	// exercised by a test suite that skipped unless somebody had a server
+	// running, so "the tests pass" routinely meant "SQLite passes".
+	//
+	// The constant remains rather than being inlined because a stored config
+	// names its driver, and an installation upgrading into this needs its file
+	// to still parse so it can be told what changed.
 	DriverPostgres = "postgres"
-	// DriverMySQL represents the MySQL database driver.
-	DriverMySQL = "mysql"
-	// DriverSQLServer represents the SQL Server database driver.
-	DriverSQLServer = "sqlserver"
 )
 
 // DatabaseConfig holds the database connection settings.
@@ -122,58 +127,42 @@ type DatabaseFields struct {
 	SSLEnabled bool   `json:"ssl_enabled"`
 }
 
-// DefaultPort returns the default port for the given database driver.
+// DefaultPort returns the port PostgreSQL listens on unless told otherwise.
+//
+// It still takes a driver so that a stored config naming one this no longer
+// supports gets zero rather than 5432 — a wrong port is a connection error that
+// names the host, which is a better thing to read than a refusal to start.
 func DefaultPort(driver string) int {
-	switch driver {
-	case DriverPostgres:
+	if driver == DriverPostgres {
 		return 5432
-	case DriverMySQL:
-		return 3306
-	case DriverSQLServer:
-		return 1433
-	default:
-		return 0
 	}
+	return 0
 }
 
-// BuildConnectionString constructs a driver-specific connection string from individual fields.
+// BuildConnectionString assembles a PostgreSQL connection string from fields.
+//
+// A driver this does not recognise returns the empty string rather than a
+// best-effort guess. Opening on an empty DSN fails immediately and says so,
+// where a guess would connect to something — the local socket, a default
+// database — and the first sign of trouble would be data in the wrong place.
 func BuildConnectionString(driver string, fields DatabaseFields) string {
-	switch driver {
-	case DriverPostgres:
-		sslMode := "disable"
-		if fields.SSLEnabled {
-			sslMode = "require"
-		}
-		return fmt.Sprintf(
-			"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
-			fields.Host, fields.Port, fields.Username, fields.Password, fields.DBName, sslMode,
-		)
-	case DriverMySQL:
-		tls := "false"
-		if fields.SSLEnabled {
-			tls = "true"
-		}
-		return fmt.Sprintf(
-			"%s:%s@tcp(%s:%d)/%s?parseTime=true&tls=%s",
-			fields.Username, fields.Password, fields.Host, fields.Port, fields.DBName, tls,
-		)
-	case DriverSQLServer:
-		encrypt := "disable"
-		if fields.SSLEnabled {
-			encrypt = "true"
-		}
-		return fmt.Sprintf(
-			"sqlserver://%s:%s@%s:%d?database=%s&encrypt=%s",
-			fields.Username, fields.Password, fields.Host, fields.Port, fields.DBName, encrypt,
-		)
-	default:
-		// SQLite: fields.DBName is the file path
-		if fields.DBName == "" {
-			return DefaultSQLitePath()
-		}
-		return fields.DBName
+	if driver != DriverPostgres {
+		return ""
 	}
+	sslMode := "disable"
+	if fields.SSLEnabled {
+		sslMode = "require"
+	}
+	return fmt.Sprintf(
+		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
+		fields.Host, fields.Port, fields.Username, fields.Password, fields.DBName, sslMode,
+	)
 }
+
+// SupportedDriver reports whether a stored or submitted driver is one this can
+// open, so the refusal happens where somebody can read it rather than at the
+// first query.
+func SupportedDriver(driver string) bool { return driver == DriverPostgres }
 
 // NewConfig creates a new Config by encrypting the provided connection string
 // with the supplied passphrase.
@@ -197,43 +186,3 @@ func NewConfig(driver, connectionString, encryptionKey, jwtSecret string) (*Conf
 		JWTSecret:     jwtSecret,
 	}, nil
 }
-
-// DefaultSQLitePath is the SQLite file used when nothing names one.
-//
-// The product's file is metis.db. An installation that predates the rename has
-// a gobpm.db instead, and creating a fresh empty database beside it would look
-// exactly like total data loss to whoever restarted the service — every
-// process, task and definition simply gone, with no error to explain it. So an
-// existing gobpm.db wins, and says so.
-//
-// The check is for an existing file rather than a configured name because this
-// path is only reached when nothing was configured at all.
-func DefaultSQLitePath() string {
-	// The new name wins when it exists: an operator who has already renamed
-	// their file and left a stale copy behind should get the one they moved to.
-	if isRegularFile(defaultSQLiteFile) {
-		return defaultSQLiteFile
-	}
-	if isRegularFile(legacySQLiteFile) {
-		log.Info().
-			Str("file", legacySQLiteFile).
-			Str("new_installs_use", defaultSQLiteFile).
-			Msg("Opening the pre-rename database file. Rename it to metis.db when convenient, or set DATABASE_URL to name it explicitly.")
-		return legacySQLiteFile
-	}
-	return defaultSQLiteFile
-}
-
-// isRegularFile reports whether path is a file this driver could open.
-//
-// Stat alone is not enough: it succeeds on a directory, so a stray `gobpm.db/`
-// would be handed to the driver as though it were a database.
-func isRegularFile(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.Mode().IsRegular()
-}
-
-const (
-	defaultSQLiteFile = "metis.db"
-	legacySQLiteFile  = "gobpm.db"
-)

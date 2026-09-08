@@ -59,13 +59,9 @@ import (
 	"github.com/gsoultan/metis/server/transports/grpcs"
 	https "github.com/gsoultan/metis/server/transports/https"
 
-	"github.com/glebarez/sqlite"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
-	"gorm.io/driver/mysql"
-	"gorm.io/driver/postgres"
-	"gorm.io/driver/sqlserver"
 	"gorm.io/gorm"
 )
 
@@ -209,37 +205,6 @@ func newPprofHandler() http.Handler {
 	}
 
 	return mux
-}
-
-// sqliteDSNWithBusyTimeout gives a SQLite DSN a lock-wait budget.
-//
-// Without one, SQLite answers a locked database with SQLITE_BUSY immediately,
-// and the very first install hits it: the job worker polls every two seconds,
-// so an API write racing one poll returned "database is locked (5)" to the
-// user. Five seconds of patience is the difference between a working install
-// and one that fails on its second request.
-func sqliteDSNWithBusyTimeout(dsn string) string {
-	if strings.Contains(dsn, "_pragma=busy_timeout") {
-		return dsn
-	}
-	separator := "?"
-	if strings.Contains(dsn, "?") {
-		separator = "&"
-	}
-	return dsn + separator + "_pragma=busy_timeout(5000)"
-}
-
-// serializeSQLitePool sizes the connection pool for whichever database this is.
-//
-// The name is historical: it used to do one thing, cap SQLite at a single
-// connection, and leave the server dialects on database/sql's defaults —
-// unlimited open connections and two idle. See internal/pkg/dbpool for why both
-// halves of that default hurt under load. SQLite still gets exactly one
-// connection: it is a single-writer file database, and two pooled connections
-// inside transactions deadlock on a lock upgrade that busy_timeout does not
-// cover, which the very first install hit as "database is locked".
-func serializeSQLitePool(db *gorm.DB) {
-	dbpool.Apply(db)
 }
 
 func newHTTPServer(address string, handler http.Handler) *http.Server {
@@ -533,7 +498,7 @@ func (a *App) setupDatabase() error {
 	if err != nil {
 		return fmt.Errorf("failed to open db: %w", err)
 	}
-	serializeSQLitePool(db)
+	dbpool.Apply(db)
 	a.db = db
 
 	return a.migrate()
@@ -1137,25 +1102,26 @@ func (a *App) resolveDialector() (gorm.Dialector, error) {
 		return a.dialectorFromConfig(cfg)
 	}
 
-	// Priority 2: Fall back to environment variables
+	// Priority 2: DATABASE_URL.
 	dsn := envvar.Get("DATABASE_URL")
 	if dsn != "" {
 		log.Info().Msg("Using PostgreSQL database from DATABASE_URL...")
-		return postgres.Open(dsn), nil
+		return gorms.Dialector(config.DriverPostgres, dsn)
 	}
 
-	// Priority 3: a local SQLite file.
+	// There is no priority 3 any more.
 	//
-	// Reached only when there is no config and no DATABASE_URL, which is a
-	// first run before setup. Said loudly, because the one way this is a
-	// surprise is a deployment that meant to set DATABASE_URL and did not:
-	// it would otherwise come up healthy and empty.
-	path := config.DefaultSQLitePath()
-	log.Warn().
-		Str("file", path).
-		Msg("No config.yaml and no DATABASE_URL: using a local SQLite file. " +
-			"If this is a server deployment, it is not configured — set DATABASE_URL.")
-	return sqlite.Open(sqliteDSNWithBusyTimeout(path)), nil
+	// It used to be a local SQLite file, reached when there was no config and no
+	// DATABASE_URL — a first run before setup, and also a server deployment that
+	// meant to set DATABASE_URL and did not. The second case came up healthy and
+	// empty, which is the worst way to be misconfigured: nothing to read, no
+	// error, and a readiness probe that passes.
+	//
+	// A setup wizard that has not been run needs no database, and says so; a
+	// deployment that has been configured and cannot be read needs to stop.
+	return nil, fmt.Errorf(
+		"no database is configured. Set DATABASE_URL to a PostgreSQL connection string, "+
+			"or run the setup wizard, which writes %s", config.DefaultConfigPath)
 }
 
 func (a *App) dialectorFromConfig(cfg *config.Config) (gorm.Dialector, error) {
@@ -1174,20 +1140,18 @@ func (a *App) dialectorFromConfig(cfg *config.Config) (gorm.Dialector, error) {
 			config.DefaultConfigPath, err)
 	}
 
-	switch cfg.Database.Driver {
-	case config.DriverPostgres:
-		log.Info().Msg("Using PostgreSQL database from config...")
-		return postgres.Open(dsn), nil
-	case config.DriverMySQL:
-		log.Info().Msg("Using MySQL database from config...")
-		return mysql.Open(dsn), nil
-	case config.DriverSQLServer:
-		log.Info().Msg("Using SQL Server database from config...")
-		return sqlserver.Open(dsn), nil
-	default:
-		log.Info().Str("path", redaction.RedactText(dsn)).Msg("Using SQLite database from config...")
-		return sqlite.Open(sqliteDSNWithBusyTimeout(dsn)), nil
+	// Refused rather than defaulted. This used to fall through to SQLite for
+	// anything it did not recognise, so an installation whose config named MySQL
+	// would come up on a fresh empty file beside its real data — every process,
+	// task and definition apparently gone, with a successful startup log.
+	dialector, err := gorms.Dialector(cfg.Database.Driver, dsn)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"%w. Migrate the data to PostgreSQL and point %s at it; see docs/upgrading.md",
+			err, config.DefaultConfigPath)
 	}
+	log.Info().Msg("Using PostgreSQL database from config...")
+	return dialector, nil
 }
 
 // sharedRateLimit pools a limiter's count across replicas when there is a

@@ -226,7 +226,7 @@ func TestReadinessTellsTheTruthThroughAnOutage(t *testing.T) {
 // arbitrary database. Duplicated from tests/postgres deliberately: test
 // packages cannot import each other, and a shared harness in testutils would
 // couple every suite to the engine's constructor churn.
-func newEngine(t *testing.T, db *gorm.DB) (repositories.Repository, *serviceimpl.Engine, uuid.UUID) {
+func newEngine(t *testing.T, db *gorm.DB) (repositories.Repository, *serviceimpl.Engine, uuid.UUID, context.Context) {
 	t.Helper()
 	ctx := t.Context()
 
@@ -251,11 +251,16 @@ func newEngine(t *testing.T, db *gorm.DB) (repositories.Repository, *serviceimpl
 	if err != nil {
 		t.Fatalf("create organization: %v", err)
 	}
+	// The project is created inside its own tenant, as a request would create
+	// it. Without this the fixture reads with a bare context, which strict
+	// scope denies — and this suite skipped without a DSN, so nothing said so
+	// when the other seven were fixed.
+	ctx = entities.WithTenantContext(ctx, entities.TenantContext{TenantID: org.ID.String()})
 	proj, err := projectSvc.CreateProject(ctx, org.ID, "Outage Project", "")
 	if err != nil {
 		t.Fatalf("create project: %v", err)
 	}
-	return repo, engine, proj.ID
+	return repo, engine, proj.ID, ctx
 }
 
 // externalDefinition is start → external service task → end: the smallest
@@ -288,8 +293,9 @@ func TestEngineSurvivesADatabaseOutage(t *testing.T) {
 	t.Setenv(testutils.PostgresDSNEnv, dsn)
 	db := testutils.SetupPostgresDB(t, 4)
 
-	ctx := t.Context()
-	repo, engine, projectID := newEngine(t, db)
+	// The tenant-scoped context the fixture created the project in. Everything
+	// this test does is work inside that tenant, which is how a request does it.
+	repo, engine, projectID, ctx := newEngine(t, db)
 	defSvc := serviceimpl.NewDefinitionService(repo)
 
 	if _, err := defSvc.CreateDefinition(ctx, externalDefinition(projectID, "outage-drill")); err != nil {

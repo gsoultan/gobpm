@@ -378,7 +378,21 @@ func Schema(models []any) []Migration {
 				// not be — the same key changes version more than once.
 				const oldIndex = "idx_definition_release_key"
 				if db.Migrator().HasIndex(model, oldIndex) {
-					if err := db.Migrator().DropIndex(model, oldIndex); err != nil {
+					// Raw SQL rather than Migrator().DropIndex.
+					//
+					// GORM's PostgreSQL migrator builds `DROP INDEX
+					// CURRENT_SCHEMA.<name>` and PostgreSQL refuses it —
+					// CURRENT_SCHEMA is a function, not an identifier, so the
+					// statement is a syntax error every time, on any search_path.
+					// This migration is guarded by HasIndex, so only an
+					// installation upgrading from before it ever reached the
+					// call: a fresh install skips it and looks fine, which is
+					// why nothing caught it until the suite was pointed at a
+					// real PostgreSQL.
+					//
+					// IF EXISTS rather than relying on the guard alone, because
+					// two replicas can both pass HasIndex and only one can drop.
+					if err := db.Exec("DROP INDEX IF EXISTS " + oldIndex).Error; err != nil {
 						return fmt.Errorf("drop %s: %w", oldIndex, err)
 					}
 				}

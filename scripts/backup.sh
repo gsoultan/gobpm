@@ -9,15 +9,10 @@
 #   1. **The encryption key is backed up too, separately.** A database backup
 #      without ENCRYPTION_KEY restores rows nothing can read. Separately,
 #      because a key stored beside the data it protects protects nothing.
-#   2. **MySQL dumps use --single-transaction.** Without it the dump is not a
-#      consistent snapshot, and a process instance can be captured in a state
-#      its own tokens contradict — which restores as a corrupt instance rather
-#      than an obviously failed backup.
-#
 # Usage:
 #   scripts/backup.sh [destination-directory]
 #
-# Reads DATABASE_URL (or the individual PG*/MYSQL_* variables) and
+# Reads DATABASE_URL (or the individual PG* variables) and
 # ENCRYPTION_KEY from the environment. Destination defaults to ./backups.
 set -euo pipefail
 
@@ -45,15 +40,8 @@ case "${METIS_BACKUP_ENGINE:-postgres}" in
     pg_dump --format=custom --no-owner --file="${TARGET}/database.dump" \
       ${DATABASE_URL:+--dbname="$DATABASE_URL"}
     ;;
-  mysql)
-    command -v mysqldump >/dev/null || die "mysqldump not found"
-    note "dumping MySQL"
-    mysqldump --single-transaction --routines --triggers --events \
-      "${MYSQL_DATABASE:?MYSQL_DATABASE is required for a MySQL backup}" \
-      > "${TARGET}/database.sql"
-    ;;
   *)
-    die "unsupported METIS_BACKUP_ENGINE '${METIS_BACKUP_ENGINE}'; expected postgres or mysql"
+    die "unsupported METIS_BACKUP_ENGINE '${METIS_BACKUP_ENGINE}'; expected postgres"
     ;;
 esac
 

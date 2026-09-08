@@ -51,18 +51,20 @@ describe('validateEnvironment', () => {
     expect(errors.db_name).toBeTruthy();
   });
 
-  it('asks for no host on sqlite, which is a file rather than a server', () => {
+  it('refuses an engine this does not run on', () => {
+    // A stored environment can still name one: installations that predate the
+    // move to PostgreSQL have rows saying sqlite or mysql, and the form has to
+    // say so rather than accept a save that the server will refuse.
     const errors = validateEnvironment(draft({ driver: 'sqlite', connection: { db_name: 'staging.db' } }));
-    expect(errors.host).toBeUndefined();
-    expect(errors).toEqual({});
+    expect(errors.driver).toBeTruthy();
   });
 });
 
 describe('needsServerFields', () => {
-  it('is false for sqlite and true for the rest', () => {
-    expect(needsServerFields('sqlite')).toBe(false);
+  it('is true for the engine this runs on and false for anything else', () => {
     expect(needsServerFields('postgres')).toBe(true);
-    expect(needsServerFields('mysql')).toBe(true);
+    expect(needsServerFields('sqlite')).toBe(false);
+    expect(needsServerFields('mysql')).toBe(false);
   });
 });
 
@@ -95,12 +97,8 @@ describe('emptyEnvironment', () => {
     expect(canSaveEnvironment(emptyEnvironment('postgres'))).toBe(false);
   });
 
-  it('pre-fills the engine default for the database port, which is not the serving port', () => {
+  it("pre-fills the engine's port, which is not the port it is served on", () => {
     expect(emptyEnvironment('postgres').connection.port).toBe(5432);
-    expect(emptyEnvironment('mysql').connection.port).toBe(3306);
-  });
-
-  it('asks sqlite for nothing but a file', () => {
-    expect(emptyEnvironment('sqlite').connection.host).toBeUndefined();
+    expect(emptyEnvironment('postgres').port).not.toBe(5432);
   });
 });

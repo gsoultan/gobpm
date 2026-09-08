@@ -81,8 +81,8 @@ What does not, and what each one costs:
 
 | Component | With two replicas |
 | :-- | :-- |
-| ~~Idempotency interceptor~~ | **Fixed.** Records live in `idempotency_records`, claimed with a single conditional insert, so exactly one replica executes and the others replay its answer. Proven across SQLite, PostgreSQL and MySQL by `tests/replicas`. |
-| ~~SSE event delivery~~ | **Fixed.** The client registry is still per-process — it holds open response writers — but events now go onto a shared `broadcast_events` bus that every replica polls, so a browser sees events produced anywhere. A replica delivers its own events directly and skips them on the bus, and starts from the current end rather than replaying history to browsers that were not there for it. Proven across SQLite, PostgreSQL and MySQL by `tests/replicas`. |
+| ~~Idempotency interceptor~~ | **Fixed.** Records live in `idempotency_records`, claimed with a single conditional insert, so exactly one replica executes and the others replay its answer. Proven against PostgreSQL by `tests/replicas`. |
+| ~~SSE event delivery~~ | **Fixed.** The client registry is still per-process — it holds open response writers — but events now go onto a shared `broadcast_events` bus that every replica polls, so a browser sees events produced anywhere. A replica delivers its own events directly and skips them on the bus, and starts from the current end rather than replaying history to browsers that were not there for it. Proven against PostgreSQL by `tests/replicas`. |
 | ~~HTTP rate limiting~~ | **Fixed.** Replicas count locally and exchange totals every 5s through `shared_counters`, so the limit is the installation's. The trade is a bounded overshoot rather than an exact limit: between exchanges a replica does not know what the others have counted, so up to one interval's worth per replica can slip through — roughly a twelfth of a per-minute limit, against N× it permanently. Reading a shared counter on every request would put a database round trip on the hottest path in the product. |
 | ~~Connector rate limits~~ | **Fixed**, by the same exchange. A partner's per-minute quota is now the installation's rather than each process's. |
 | Circuit breakers | Still per-process, and deliberately. They open on *consecutive* failures rather than on a rate — a downstream failing one call in ten is flaky, not down — and a shared count would turn that back into a rate. The cost is that a partner sees up to `FailureThreshold` failures per replica before all of them back off, rather than in total. Real, and far smaller than spending a quota N times. |
@@ -102,7 +102,7 @@ closed. That changes the risk of running two replicas from "may charge a card tw
 conversation.
 
 Two things about the SSE bus worth knowing before relying on it. It **polls** rather than
-using PostgreSQL's `LISTEN/NOTIFY`, because SQLite, MySQL and SQL Server have no
+using PostgreSQL's `LISTEN/NOTIFY`. That was written when three other engines had no
 equivalent and a portable mechanism every deployment gets is worth more here than a faster
 one only one dialect can use; a browser on another replica therefore sees an event up to
 one poll interval late. And delivery is **best-effort by design**, unchanged from
@@ -130,7 +130,7 @@ ENCRYPTION_KEY=... METIS_BACKUP_GPG_RECIPIENT=ops@example.com scripts/backup.sh 
 
 It refuses to run without `ENCRYPTION_KEY`, because a backup that looks complete and
 restores unreadable rows is worse than one that visibly failed. It uses
-`--single-transaction` for MySQL, and writes a manifest so a restore knows what it holds.
+and writes a manifest so a restore knows what it holds.
 
 Continuous archiving is configured on the server itself, and is what buys the 5-minute RPO.
 PostgreSQL (the reference deployment):
@@ -153,8 +153,6 @@ Alongside it, and **into a different store**:
 printf '%s' "$ENCRYPTION_KEY" | gpg --encrypt --recipient ops@example.com > /secrets/metis-encryption-key.gpg
 ```
 
-MySQL: `mysqldump --single-transaction --routines` plus binlog archiving. `--single-transaction`
-matters — without it the dump is not a consistent snapshot, and a process instance can be
 captured in a state its own tokens contradict.
 
 ### 3.2 Restore
@@ -248,7 +246,7 @@ Two things only came out by doing it:
 
 - **`backup.sh` copied `config.yaml` from the working directory with no check.**
   Running it from a different directory than the server bundled a months-old
-  config describing a *SQLite* database, with a *different* `encryption_key`,
+  config describing a *different* database (a SQLite one, back when those existed), with a *different* `encryption_key`,
   next to a PostgreSQL dump — and the manifest said `config_included=yes`.
   Restoring that pair would have installed the wrong key over good data. It now
   compares the config's driver against the engine being dumped, refuses on a

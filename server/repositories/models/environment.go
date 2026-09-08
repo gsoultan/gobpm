@@ -28,10 +28,10 @@ type EnvironmentModel struct {
 	// server is restarting — is worse than being refused on save.
 	Port int `gorm:"uniqueIndex" json:"port"`
 
-	// Driver is the database engine backing this environment: sqlite, postgres,
-	// mysql or sqlserver. Environments of one project may differ — a developer
-	// environment on SQLite next to a production one on PostgreSQL is a normal
-	// arrangement, not a mistake to prevent.
+	// Driver is the database engine backing this environment. PostgreSQL is
+	// the only one this supports; the column remains because a stored row names
+	// its driver, and an installation upgrading into this needs its environments
+	// to still read so it can be told which of them will no longer open.
 	Driver string `gorm:"size:32" json:"driver"`
 
 	// Connection holds host, port, username, password, db_name and ssl_enabled.

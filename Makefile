@@ -78,11 +78,15 @@ test: ## Run the full Go test suite (NOT ./server/... — that skips tests/)
 
 .PHONY: test-db
 test-db: ## Run the tests that need a real database (Postgres/MySQL); see AGENTS.md §4
-	@echo "Postgres and MySQL tests skip unless METIS_TEST_POSTGRES_DSN / METIS_TEST_MYSQL_DSN are set."
+	@echo "Database tests skip unless METIS_TEST_POSTGRES_DSN and STORM_DSN are set."
+	@echo "Use -p 2 against a shared server: every package opens its own pool, and the"
+	@echo "default parallelism exhausts PostgreSQL's 100 connections. The dial timeout"
+	@echo "that produces reads like a defect and is not."
 	@echo "Apple container:"
 	@echo "  container run -d --rm --name metis-pg -e POSTGRES_PASSWORD=metis -e POSTGRES_USER=metis -e POSTGRES_DB=metis docker.io/library/postgres:17"
 	@echo "  export METIS_TEST_POSTGRES_DSN=\"host=<ip> user=metis password=metis dbname=metis port=5432 sslmode=disable\""
-	go test ./tests/postgres/... ./tests/mysqldb/... -v
+	@echo "  export STORM_DSN=\"postgres://metis:metis@<ip>:5432/metis?sslmode=disable\""
+	go test -p 4 ./tests/postgres/... ./tests/model/... ./tests/userimport/... ./tests/participantsource/... -v
 
 .PHONY: race
 race: ## Run the full Go test suite under the race detector

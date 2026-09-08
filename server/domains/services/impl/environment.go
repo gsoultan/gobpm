@@ -134,12 +134,11 @@ func (s *environmentService) validate(ctx context.Context, env entities.Environm
 			len(name), maxEnvironmentNameLength)
 	}
 
-	switch env.Driver {
-	case config.DriverSQLite, config.DriverPostgres, config.DriverMySQL, config.DriverSQLServer:
-	case "":
+	switch {
+	case env.Driver == "":
 		return apierr.Invalidf("an environment needs a database driver")
-	default:
-		return apierr.Invalidf("%q is not a database driver this supports", env.Driver)
+	case !config.SupportedDriver(env.Driver):
+		return apierr.Invalidf("driver %q is not a database engine this supports; environments run on PostgreSQL", env.Driver)
 	}
 
 	if env.Port < minEnvironmentPort || env.Port > 65535 {

@@ -10,19 +10,22 @@ import (
 	"github.com/gsoultan/metis/server/domains/services/impl"
 )
 
-func TestTestConnection_SQLiteSuccess(t *testing.T) {
+// An engine this no longer runs on is refused by name, at the wizard, rather
+// than at the first query.
+func TestTestConnection_RetiredDriverIsRefused(t *testing.T) {
 	svc := impl.NewSetupService(nil)
 
-	result := svc.TestConnection(t.Context(), contracts.TestConnectionRequest{
-		DatabaseDriver: "sqlite",
-		DBName:         ":memory:",
-	})
-
-	if !result.Success {
-		t.Fatalf("expected success, got failure: %s", result.Message)
-	}
-	if result.Message != "Connection successful" {
-		t.Errorf("expected 'Connection successful', got %q", result.Message)
+	for _, driver := range []string{"sqlite", "mysql", "sqlserver"} {
+		result := svc.TestConnection(t.Context(), contracts.TestConnectionRequest{
+			DatabaseDriver: driver,
+			DBName:         "metis",
+		})
+		if result.Success {
+			t.Fatalf("%s reported a successful connection; it is not an engine this supports", driver)
+		}
+		if !strings.Contains(result.Message, "PostgreSQL") {
+			t.Errorf("the refusal for %s does not say what to use instead: %q", driver, result.Message)
+		}
 	}
 }
 
@@ -61,27 +64,6 @@ func TestTestConnection_InvalidHost(t *testing.T) {
 	}
 }
 
-func TestTestConnection_SQLiteDefaultPath(t *testing.T) {
-	svc := impl.NewSetupService(nil)
-
-	// SQLite with empty DBName should use the default file (metis.db, or an
-	// existing gobpm.db from before the rename).
-	result := svc.TestConnection(t.Context(), contracts.TestConnectionRequest{
-		DatabaseDriver: "sqlite",
-	})
-
-	if !result.Success {
-		t.Fatalf("expected success for SQLite default path, got failure: %s", result.Message)
-	}
-}
-
-// The public connection test closes as soon as the installation is configured.
-//
-// It takes a host and a port from an unauthenticated caller and reports exactly
-// what happened to the attempt — the raw dial error, distinguishing "connection
-// refused" from a timeout from an authentication failure. Before setup that is
-// the wizard doing its job. After setup it is a port scanner for whatever
-// network the server sits in, and it was open forever.
 func TestTheConnectionTestClosesOnceConfigured(t *testing.T) {
 	dir := t.TempDir()
 	cwd, err := os.Getwd()

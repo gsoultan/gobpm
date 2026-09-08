@@ -46,7 +46,6 @@ func forEachDialect(t *testing.T, body func(t *testing.T, db *gorm.DB)) {
 	}{
 		{"sqlite", func(t *testing.T) *gorm.DB { return testutils.SetupTestDB(t) }},
 		{"postgres", func(t *testing.T) *gorm.DB { return testutils.SetupPostgresDB(t, testMaxConns) }},
-		{"mysql", func(t *testing.T) *gorm.DB { return testutils.SetupMySQLDB(t, testMaxConns) }},
 	}
 
 	for _, engine := range engines {

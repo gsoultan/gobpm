@@ -41,10 +41,7 @@ import { errorMessage } from '../services/shared/errors';
 import type { ApiEnvironment } from '../services/types';
 
 const DRIVER_LABELS: Record<EnvironmentDriver, string> = {
-  sqlite: 'SQLite (file)',
   postgres: 'PostgreSQL',
-  mysql: 'MySQL',
-  sqlserver: 'SQL Server',
 };
 
 /**

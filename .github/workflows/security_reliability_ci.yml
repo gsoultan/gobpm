@@ -174,34 +174,25 @@ jobs:
           mapfile -t packages < <(go list ./... | grep -v '/node_modules/')
           govulncheck "${packages[@]}"
 
-  dialects:
-    name: Databases (postgres, mysql, sqlserver)
+  database:
+    name: Database (PostgreSQL)
     needs: ui
     runs-on: ubuntu-latest
 
-    # Every dialect-specific test in this repository skips when its DSN is
-    # unset, and none of the three DSNs was ever set anywhere. So the tests that
-    # exist to catch "this query behaves differently on MySQL" — and the schema
-    # tests that exist to catch "this column type does not exist on that engine"
-    # — have never run outside a developer's own machine, which is how SQL
-    # Server came to declare `uuid` columns it has no word for.
+    # This used to start PostgreSQL, MySQL and SQL Server, because the engine
+    # supported all three and every dialect-specific test skipped when its DSN
+    # was unset — which none of them was, anywhere, so "this query behaves
+    # differently on MySQL" was a class of bug nothing looked for. It is one
+    # engine now, and the suites that proved portability are gone with the
+    # portability.
     #
-    # The three databases are service containers. That is only possible on a
-    # Linux runner with a Docker daemon — on the self-hosted Mac this job used
-    # to run on they were ordinary steps driven by Apple's `container` CLI,
-    # with SQL Server forced to amd64 under Rosetta because it ships no arm64
-    # build. Here the runner is amd64 Linux, so SQL Server runs natively and
-    # the orchestration is the runner's job rather than this file's.
-    #
-    # Health checks replace the wait loop the previous version carried: the job
-    # does not start until every database answers, so a test can no longer fail
-    # because it opened a connection a second too early.
+    # What is left is the part that mattered: the tests that need a real
+    # database run against one, and a skip is a failure rather than a line
+    # nobody reads.
 
     env:
       METIS_TEST_POSTGRES_DSN: "host=127.0.0.1 port=5432 user=postgres password=gobpm dbname=gobpm sslmode=disable"
-      METIS_TEST_MYSQL_DSN: "root:gobpm@tcp(127.0.0.1:3306)/gobpm?charset=utf8mb4&parseTime=True&loc=Local"
-      METIS_TEST_SQLSERVER_DSN: "sqlserver://sa:Gobpm_Str0ngPass1@127.0.0.1:1433?database=master&encrypt=disable"
-      MSSQL_SA_PASSWORD: "Gobpm_Str0ngPass1"
+      STORM_DSN: "postgres://postgres:gobpm@127.0.0.1:5432/gobpm?sslmode=disable"
 
     services:
       postgres:
@@ -216,37 +207,6 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 24
-
-      mysql:
-        image: mysql:8
-        env:
-          MYSQL_ROOT_PASSWORD: gobpm
-          MYSQL_DATABASE: gobpm
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pgobpm --silent"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 36
-
-      # SQL Server takes the longest to accept connections and is the reason
-      # the retry budget here is generous. The password is repeated as a
-      # literal because a health-cmd is passed to Docker, not to the shell that
-      # knows this job's env.
-      mssql:
-        image: mcr.microsoft.com/mssql/server:2022-latest
-        env:
-          ACCEPT_EULA: "Y"
-          MSSQL_SA_PASSWORD: "Gobpm_Str0ngPass1"
-          MSSQL_PID: Developer
-        ports:
-          - 1433:1433
-        options: >-
-          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P Gobpm_Str0ngPass1 -Q 'SELECT 1'"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 30
 
     steps:
       - name: Checkout
@@ -267,34 +227,36 @@ jobs:
       # this job exists to prevent — so the count is asserted rather than eyeballed.
       #
       # -count=1 for the same reason. Go's test cache is content-addressed over
-      # the code, and models nothing about which database answered: on a runner
+      # the code and models nothing about which database answered: on a runner
       # whose GOCACHE survives between runs, an unchanged tree returns
       # "ok ... (cached)" without opening a connection. That is not a hypothesis
       # — it is what this job did on the run that added it, going green in 34s
-      # having started three databases and talked to none of them. Worse, a
-      # cached run prints no test lines at all, so the skip assertion below
-      # passes by having nothing to read. Both checks are asserted here because
-      # both failures look exactly like success.
-      - name: Run the dialect suites
+      # having started a database and talked to it not at all. Worse, a cached
+      # run prints no test lines, so the skip assertion passes by having nothing
+      # to read. Both are checked because both look exactly like success.
+      #
+      # -p 4 because every package opens its own pool against one server, and
+      # the default parallelism exhausts its connections — a dial timeout that
+      # reads like a defect and is not.
+      - name: Run the suites that need a database
         run: |
           set -o pipefail
           # tests/slo is here rather than only in the module-wide run because
-          # that run has no DSN, so it measured SQLite — and the targets in
-          # roadmap.md §1 are stated for the database people actually deploy.
-          # A latency target proven on a single-connection file database is not
-          # proven.
-          go test -count=1 -v ./tests/postgres/... ./tests/mysqldb/... ./tests/mssql/... \
+          # that run has no DSN, and the targets in roadmap.md §1 are stated for
+          # the database people actually deploy.
+          go test -count=1 -p 4 -v ./tests/postgres/... \
             ./tests/tenant/... ./tests/migrations/... ./tests/replicas/... ./tests/outage/... \
-            ./tests/slo/... \
-            2>&1 | tee /tmp/dialects.log
-          if grep -q -- "--- SKIP" /tmp/dialects.log; then
-            echo "::error::A dialect test skipped, which means its DSN did not reach it:"
-            grep -- "--- SKIP" /tmp/dialects.log
+            ./tests/slo/... ./tests/model/... ./tests/userimport/... ./tests/participantsource/... \
+            ./tests/environment/... \
+            2>&1 | tee /tmp/database.log
+          if grep -q -- "--- SKIP" /tmp/database.log; then
+            echo "::error::A test skipped, which means its DSN did not reach it:"
+            grep -- "--- SKIP" /tmp/database.log
             exit 1
           fi
-          if grep -q -- "(cached)" /tmp/dialects.log; then
-            echo "::error::A dialect suite was served from the test cache, so no database was contacted:"
-            grep -- "(cached)" /tmp/dialects.log
+          if grep -q -- "(cached)" /tmp/database.log; then
+            echo "::error::A suite was served from the test cache, so no database was contacted:"
+            grep -- "(cached)" /tmp/database.log
             exit 1
           fi
 

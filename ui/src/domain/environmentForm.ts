@@ -15,16 +15,19 @@
 export const MIN_ENVIRONMENT_PORT = 1024;
 export const MAX_ENVIRONMENT_PORT = 65535;
 
-/** The database engines an environment can use. */
-export const ENVIRONMENT_DRIVERS = ['sqlite', 'postgres', 'mysql', 'sqlserver'] as const;
+/**
+ * The database engines an environment can use.
+ *
+ * One, and the list stays a list: the validation below checks membership, and a
+ * check that reads "is this the one allowed value" would have to be rewritten
+ * rather than extended if a second ever appears.
+ */
+export const ENVIRONMENT_DRIVERS = ['postgres'] as const;
 export type EnvironmentDriver = (typeof ENVIRONMENT_DRIVERS)[number];
 
-/** The default port each engine listens on, for pre-filling the form. */
+/** The port the engine listens on, for pre-filling the form. */
 export const DRIVER_DEFAULT_PORT: Record<EnvironmentDriver, number> = {
-  sqlite: 0,
   postgres: 5432,
-  mysql: 3306,
-  sqlserver: 1433,
 };
 
 export interface EnvironmentConnection {
@@ -51,12 +54,15 @@ export interface EnvironmentDraft {
 }
 
 /**
- * SQLite is a file, not a server, so it needs none of the host, port,
- * credentials or TLS the others do. Asking for them would be asking for
- * information that has nowhere to go.
+ * Whether a driver needs host, port, credentials and TLS.
+ *
+ * Every supported one does now — SQLite was the exception, a file rather than a
+ * server, and asking it for a host was asking for information with nowhere to
+ * go. The function stays because the form branches on it and because an engine
+ * that is not a server is the kind of thing that comes back.
  */
 export function needsServerFields(driver: string): boolean {
-  return driver !== 'sqlite';
+  return ENVIRONMENT_DRIVERS.includes(driver as EnvironmentDriver);
 }
 
 /** Field-keyed problems, empty when the draft can be saved. */

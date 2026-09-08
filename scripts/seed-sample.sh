@@ -107,7 +107,8 @@ print(json.dumps({
     "admin_full_name": "Development Admin", "admin_public_name": "Admin",
     "admin_email": "admin@example.invalid",
     "organization_name": "Example Co", "project_name": "Sample Project",
-    "database_driver": "sqlite", "db_name": "metis.db",
+    "database_driver": "postgres", "db_host": "${DB_HOST:-127.0.0.1}", "db_port": ${DB_PORT:-5432},
+    "db_username": "${DB_USER:-metis}", "db_password": "${DB_PASSWORD:-metis}", "db_name": "${DB_NAME:-metis}",
     "encryption_key": sys.argv[3], "jwt_secret": sys.argv[4],
 }))' "$ADMIN_USER" "$ADMIN_PASS" "$key" "$secret")"
 
