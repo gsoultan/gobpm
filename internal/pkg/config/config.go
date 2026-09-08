@@ -1,7 +1,10 @@
 package config
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/gsoultan/metis/internal/pkg/crypto"
@@ -90,7 +93,13 @@ func Load(path string) (*Config, error) {
 	}
 
 	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	// KnownFields: an unrecognised key is a typo, and a typo in a database
+	// setting is a server quietly pointed at something nobody intended.
+	// yaml.Unmarshal ignores them by default, so `databse:` read as no database
+	// at all and the caller fell through to a fresh local one.
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&cfg); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
