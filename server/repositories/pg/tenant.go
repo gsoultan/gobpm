@@ -9,6 +9,7 @@ import (
 	"github.com/gsoultan/metis/internal/pkg/tenantscope"
 	"github.com/gsoultan/metis/server/domains/entities"
 	"github.com/gsoultan/metis/server/repositories/db"
+	"github.com/gsoultan/metis/server/repositories/store/processinstance"
 	"github.com/gsoultan/metis/server/repositories/store/project"
 )
 
@@ -146,3 +147,40 @@ type conn struct {
 }
 
 var _ = db.ErrEnvironmentUnavailable
+
+// requireInstanceInTenant refuses an instance that is not the caller's.
+//
+// Several tables hang off an instance and carry no project of their own — a
+// snapshot, a compensation record, an audit entry read by instance. Scoping
+// them means asking whether the instance is visible, which is one indexed read
+// and the same answer every one of them needs.
+func (r *conn) requireInstanceInTenant(ctx context.Context, instanceID uuid.UUID) error {
+	scope, err := r.scopeOf(ctx)
+	if err != nil {
+		return err
+	}
+	if scope.unrestricted() || instanceID == uuid.Nil {
+		return nil
+	}
+	if len(scope.projects) == 0 {
+		return fmt.Errorf("%w: no such process instance", apierr.ErrNotFound)
+	}
+
+	ex, err := r.conn.Executor(ctx)
+	if err != nil {
+		return err
+	}
+	found, err := processinstance.New().
+		Where(
+			processinstance.ID.Eq(instanceID),
+			processinstance.ProjectID.In(uuidsToRaw(scope.projects)...),
+		).
+		Exists(ctx, ex)
+	if err != nil {
+		return fmt.Errorf("could not check the process instance: %w", err)
+	}
+	if !found {
+		return fmt.Errorf("%w: no such process instance", apierr.ErrNotFound)
+	}
+	return nil
+}

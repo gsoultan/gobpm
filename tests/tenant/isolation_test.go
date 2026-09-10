@@ -184,7 +184,7 @@ func TestTenantIsolation_ListsExcludeOtherTenants(t *testing.T) {
 			{
 				name: "audit of another tenant's project",
 				read: func() ([]uuid.UUID, error) {
-					rows, err := gorms.NewAuditRepository(db).ListByProject(ctx, f.projectB)
+					rows, err := pg.NewAuditRepository(testutils.StormConn(db)).ListByProject(ctx, f.projectB)
 					return idsOf(rows, func(m models.AuditModel) uuid.UUID { return uuid.UUID(m.ID) }), err
 				},
 				want: nil,
@@ -192,7 +192,7 @@ func TestTenantIsolation_ListsExcludeOtherTenants(t *testing.T) {
 			{
 				name: "audit of another tenant's instance",
 				read: func() ([]uuid.UUID, error) {
-					rows, err := gorms.NewAuditRepository(db).ListByInstance(ctx, f.instanceB)
+					rows, err := pg.NewAuditRepository(testutils.StormConn(db)).ListByInstance(ctx, f.instanceB)
 					return idsOf(rows, func(m models.AuditModel) uuid.UUID { return uuid.UUID(m.ID) }), err
 				},
 				want: nil,
@@ -200,7 +200,7 @@ func TestTenantIsolation_ListsExcludeOtherTenants(t *testing.T) {
 			{
 				name: "audit of own project",
 				read: func() ([]uuid.UUID, error) {
-					rows, err := gorms.NewAuditRepository(db).ListByProject(ctx, f.projectA)
+					rows, err := pg.NewAuditRepository(testutils.StormConn(db)).ListByProject(ctx, f.projectA)
 					return idsOf(rows, func(m models.AuditModel) uuid.UUID { return uuid.UUID(m.ID) }), err
 				},
 				want: []uuid.UUID{f.auditA},

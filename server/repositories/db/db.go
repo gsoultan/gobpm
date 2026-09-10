@@ -105,6 +105,25 @@ func (c *Conn) Executor(ctx context.Context) (runtime.Executor, error) {
 	return pgxdrv.Pool{P: pool}, nil
 }
 
+// Outside resolves an executor that deliberately ignores an enclosing
+// transaction.
+//
+// For work that is a fact about something which has already happened and must
+// not be undone with the caller's write: the SSE bus is the case, where joining
+// the transaction would mean a rollback silently un-notifying browsers about
+// work that did commit earlier in the same handler, and would hold the row
+// invisible until commit — exactly when it is least useful.
+//
+// The environment binding still applies. Which database the work belongs to is
+// not a transaction question.
+func (c *Conn) Outside(ctx context.Context) (runtime.Executor, error) {
+	pool, err := c.poolFor(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return pgxdrv.Pool{P: pool}, nil
+}
+
 // poolFor picks the pool for this work, without regard to transactions.
 func (c *Conn) poolFor(ctx context.Context) (*pgxpool.Pool, error) {
 	environmentID, bound := EnvironmentFrom(ctx)

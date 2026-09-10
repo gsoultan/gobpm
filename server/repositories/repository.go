@@ -54,9 +54,9 @@ func NewRepository(db *gorm.DB, conn *stormdb.Conn) Repository {
 		panic("repositories: a storm connection is required; the ported repositories have no GORM implementation left")
 	}
 	return &gormRepository{
-		audit:                 gorms.NewAuditRepository(db),
-		broadcast:             gorms.NewBroadcastRepository(db),
-		sharedCounter:         gorms.NewSharedCounterRepository(db),
+		audit:                 pg.NewAuditRepository(conn),
+		broadcast:             pg.NewBroadcastRepository(conn),
+		sharedCounter:         pg.NewSharedCounterRepository(conn),
 		connector:             gorms.NewConnectorRepository(db),
 		connectorInstance:     gorms.NewConnectorInstanceRepository(db),
 		decision:              gorms.NewDecisionRepository(db),
@@ -69,7 +69,7 @@ func NewRepository(db *gorm.DB, conn *stormdb.Conn) Repository {
 		job:                   gorms.NewJobRepository(db),
 		organization:          pg.NewOrganizationRepository(conn),
 		process:               gorms.NewProcessRepository(db),
-		serviceCall:           gorms.NewServiceCallRepository(db),
+		serviceCall:           pg.NewServiceCallRepository(conn),
 		webhook:               gorms.NewWebhookRepository(db),
 		connectorManifest:     gorms.NewConnectorManifestRepository(db),
 		project:               pg.NewProjectRepository(conn),
@@ -78,8 +78,8 @@ func NewRepository(db *gorm.DB, conn *stormdb.Conn) Repository {
 		user:                  gorms.NewUserRepository(db),
 		group:                 gorms.NewGroupRepository(db),
 		notification:          gorms.NewNotificationRepository(db),
-		compensatableActivity: gorms.NewCompensatableActivityRepository(db),
-		variableSnapshot:      gorms.NewVariableSnapshotRepository(db),
+		compensatableActivity: pg.NewCompensatableActivityRepository(conn),
+		variableSnapshot:      pg.NewVariableSnapshotRepository(conn),
 		uow:                   gorms.NewUnitOfWork(db),
 	}
 }

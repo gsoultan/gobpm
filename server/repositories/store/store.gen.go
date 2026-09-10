@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/gsoultan/metis/server/repositories/store/auditentry"
+	"github.com/gsoultan/metis/server/repositories/store/broadcastevent"
 	"github.com/gsoultan/metis/server/repositories/store/compensatableactivity"
 	"github.com/gsoultan/metis/server/repositories/store/connector"
 	"github.com/gsoultan/metis/server/repositories/store/connectorinstance"
@@ -46,35 +47,35 @@ import (
 // runtime code inspects a schema and no constraint has to be deferred for
 // a graph write to succeed.
 var FlushOrder = map[string]int{
-	"broadcast_events":            0,
-	"connector_manifests":         1,
-	"connectors":                  2,
-	"idempotency_records":         3,
-	"organizations":               4,
-	"platform_roles":              5,
-	"platform_users":              6,
-	"projects":                    7,
-	"shared_counters":             8,
-	"webhooks":                    9,
-	"workflow_groups":             10,
-	"workflow_users":              11,
-	"connector_instances":         12,
-	"decision_definitions":        13,
-	"deployments":                 14,
-	"environments":                15,
-	"forms":                       16,
-	"participant_sources":         17,
-	"platform_role_assignments":   18,
-	"process_definition_releases": 19,
-	"process_definitions":         20,
-	"process_instances":           21,
-	"resources":                   22,
-	"service_calls":               23,
-	"tasks":                       24,
-	"variable_snapshots":          25,
-	"webhook_deliveries":          26,
-	"workflow_group_memberships":  27,
-	"audit_logs":                  28,
+	"connector_manifests":         0,
+	"connectors":                  1,
+	"idempotency_records":         2,
+	"organizations":               3,
+	"platform_roles":              4,
+	"platform_users":              5,
+	"projects":                    6,
+	"shared_counters":             7,
+	"webhooks":                    8,
+	"workflow_groups":             9,
+	"workflow_users":              10,
+	"connector_instances":         11,
+	"decision_definitions":        12,
+	"deployments":                 13,
+	"environments":                14,
+	"forms":                       15,
+	"participant_sources":         16,
+	"platform_role_assignments":   17,
+	"process_definition_releases": 18,
+	"process_definitions":         19,
+	"process_instances":           20,
+	"resources":                   21,
+	"service_calls":               22,
+	"tasks":                       23,
+	"variable_snapshots":          24,
+	"webhook_deliveries":          25,
+	"workflow_group_memberships":  26,
+	"audit_logs":                  27,
+	"broadcast_events":            28,
 	"compensatable_activities":    29,
 	"event_subscriptions":         30,
 	"external_tasks":              31,
@@ -324,6 +325,256 @@ func (p AuditEntryWithProjectQuery) All(ctx context.Context, ex runtime.Executor
 			return nil, fmt.Errorf("storm: %s references a missing %s row", "audit_logs", "projects")
 		}
 		out[i].Project = targets[j]
+	}
+	return out, nil
+}
+
+// BroadcastEventWithEnvironmentRow is broadcast_events with its Environment loaded.
+type BroadcastEventWithEnvironmentRow struct {
+	broadcastevent.Row
+	// A pointer because the link is optional. nil means the row has no
+	// Environment, which is different from having one that failed to load.
+	Environment *environment.Row
+}
+
+type BroadcastEventWithEnvironmentQuery struct {
+	q broadcastevent.Query
+}
+
+// BroadcastEventWithEnvironment starts the plan.
+func BroadcastEventWithEnvironment() BroadcastEventWithEnvironmentQuery {
+	return BroadcastEventWithEnvironmentQuery{q: broadcastevent.New()}
+}
+
+func (p BroadcastEventWithEnvironmentQuery) Where(ps ...broadcastevent.Pred) BroadcastEventWithEnvironmentQuery {
+	p.q = p.q.Where(ps...)
+	return p
+}
+
+func (p BroadcastEventWithEnvironmentQuery) WhereIf(cond bool, pr broadcastevent.Pred) BroadcastEventWithEnvironmentQuery {
+	p.q = p.q.WhereIf(cond, pr)
+	return p
+}
+
+func (p BroadcastEventWithEnvironmentQuery) Any(ps ...broadcastevent.Pred) BroadcastEventWithEnvironmentQuery {
+	p.q = p.q.Any(ps...)
+	return p
+}
+
+func (p BroadcastEventWithEnvironmentQuery) Not(pr broadcastevent.Pred) BroadcastEventWithEnvironmentQuery {
+	p.q = p.q.Not(pr)
+	return p
+}
+
+func (p BroadcastEventWithEnvironmentQuery) NotAny(ps ...broadcastevent.Pred) BroadcastEventWithEnvironmentQuery {
+	p.q = p.q.NotAny(ps...)
+	return p
+}
+
+func (p BroadcastEventWithEnvironmentQuery) Order(ts ...broadcastevent.Sort) BroadcastEventWithEnvironmentQuery {
+	p.q = p.q.Order(ts...)
+	return p
+}
+
+func (p BroadcastEventWithEnvironmentQuery) Limit(n int64) BroadcastEventWithEnvironmentQuery {
+	p.q = p.q.Limit(n)
+	return p
+}
+
+func (p BroadcastEventWithEnvironmentQuery) Offset(n int64) BroadcastEventWithEnvironmentQuery {
+	p.q = p.q.Offset(n)
+	return p
+}
+
+// After pages the PARENTS past one already seen — keyset pagination over
+// the plan. It takes the plan's row type, so the cursor is a row you
+// actually received rather than one you had to unwrap.
+func (p BroadcastEventWithEnvironmentQuery) After(r BroadcastEventWithEnvironmentRow) BroadcastEventWithEnvironmentQuery {
+	p.q = p.q.After(r.Row)
+	return p
+}
+
+// Err reports a parent query that outgrew its buffers or was given a
+// mixed ordering to page. Terminals return it too; this is for checking
+// a composed plan before running it.
+func (p BroadcastEventWithEnvironmentQuery) Err() error { return p.q.Err() }
+
+// All runs the plan in exactly TWO round trips. Distinct parent keys are
+// de-duplicated before the second, so a thousand rows pointing at three
+// orgs fetch three orgs.
+func (p BroadcastEventWithEnvironmentQuery) All(ctx context.Context, ex runtime.Executor) ([]BroadcastEventWithEnvironmentRow, error) {
+	parents, err := p.q.All(ctx, ex, nil)
+	if err != nil {
+		return nil, err
+	}
+	if len(parents) == 0 {
+		return nil, nil
+	}
+	out := make([]BroadcastEventWithEnvironmentRow, len(parents))
+	seen := make(map[[16]byte]bool, len(parents))
+	ids := make([][16]byte, 0, len(parents))
+	for i, r := range parents {
+		out[i] = BroadcastEventWithEnvironmentRow{Row: r}
+		key, ok := r.EnvironmentID.Get()
+		if !ok {
+			continue
+		}
+		if !seen[key] {
+			seen[key] = true
+			ids = append(ids, key)
+		}
+	}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	targets, err := environment.New().Unordered().
+		Where(environment.ID.In(ids...)).
+		Limit(int64(len(ids))).
+		All(ctx, ex, nil)
+	if err != nil {
+		return nil, err
+	}
+	by := make(map[[16]byte]int, len(targets))
+	for i := range targets {
+		by[targets[i].ID] = i
+	}
+	for i := range out {
+		key, ok := out[i].EnvironmentID.Get()
+		if !ok {
+			continue
+		}
+		j, ok := by[key]
+		if !ok {
+			// A foreign key pointing at a row that is not there. The database
+			// forbids it, so reaching this means the constraint was dropped.
+			return nil, fmt.Errorf("storm: %s references a missing %s row", "broadcast_events", "environments")
+		}
+		out[i].Environment = &targets[j]
+	}
+	return out, nil
+}
+
+// BroadcastEventWithOrganizationRow is broadcast_events with its Organization loaded.
+type BroadcastEventWithOrganizationRow struct {
+	broadcastevent.Row
+	// A pointer because the link is optional. nil means the row has no
+	// Organization, which is different from having one that failed to load.
+	Organization *organization.Row
+}
+
+type BroadcastEventWithOrganizationQuery struct {
+	q broadcastevent.Query
+}
+
+// BroadcastEventWithOrganization starts the plan.
+func BroadcastEventWithOrganization() BroadcastEventWithOrganizationQuery {
+	return BroadcastEventWithOrganizationQuery{q: broadcastevent.New()}
+}
+
+func (p BroadcastEventWithOrganizationQuery) Where(ps ...broadcastevent.Pred) BroadcastEventWithOrganizationQuery {
+	p.q = p.q.Where(ps...)
+	return p
+}
+
+func (p BroadcastEventWithOrganizationQuery) WhereIf(cond bool, pr broadcastevent.Pred) BroadcastEventWithOrganizationQuery {
+	p.q = p.q.WhereIf(cond, pr)
+	return p
+}
+
+func (p BroadcastEventWithOrganizationQuery) Any(ps ...broadcastevent.Pred) BroadcastEventWithOrganizationQuery {
+	p.q = p.q.Any(ps...)
+	return p
+}
+
+func (p BroadcastEventWithOrganizationQuery) Not(pr broadcastevent.Pred) BroadcastEventWithOrganizationQuery {
+	p.q = p.q.Not(pr)
+	return p
+}
+
+func (p BroadcastEventWithOrganizationQuery) NotAny(ps ...broadcastevent.Pred) BroadcastEventWithOrganizationQuery {
+	p.q = p.q.NotAny(ps...)
+	return p
+}
+
+func (p BroadcastEventWithOrganizationQuery) Order(ts ...broadcastevent.Sort) BroadcastEventWithOrganizationQuery {
+	p.q = p.q.Order(ts...)
+	return p
+}
+
+func (p BroadcastEventWithOrganizationQuery) Limit(n int64) BroadcastEventWithOrganizationQuery {
+	p.q = p.q.Limit(n)
+	return p
+}
+
+func (p BroadcastEventWithOrganizationQuery) Offset(n int64) BroadcastEventWithOrganizationQuery {
+	p.q = p.q.Offset(n)
+	return p
+}
+
+// After pages the PARENTS past one already seen — keyset pagination over
+// the plan. It takes the plan's row type, so the cursor is a row you
+// actually received rather than one you had to unwrap.
+func (p BroadcastEventWithOrganizationQuery) After(r BroadcastEventWithOrganizationRow) BroadcastEventWithOrganizationQuery {
+	p.q = p.q.After(r.Row)
+	return p
+}
+
+// Err reports a parent query that outgrew its buffers or was given a
+// mixed ordering to page. Terminals return it too; this is for checking
+// a composed plan before running it.
+func (p BroadcastEventWithOrganizationQuery) Err() error { return p.q.Err() }
+
+// All runs the plan in exactly TWO round trips. Distinct parent keys are
+// de-duplicated before the second, so a thousand rows pointing at three
+// orgs fetch three orgs.
+func (p BroadcastEventWithOrganizationQuery) All(ctx context.Context, ex runtime.Executor) ([]BroadcastEventWithOrganizationRow, error) {
+	parents, err := p.q.All(ctx, ex, nil)
+	if err != nil {
+		return nil, err
+	}
+	if len(parents) == 0 {
+		return nil, nil
+	}
+	out := make([]BroadcastEventWithOrganizationRow, len(parents))
+	seen := make(map[[16]byte]bool, len(parents))
+	ids := make([][16]byte, 0, len(parents))
+	for i, r := range parents {
+		out[i] = BroadcastEventWithOrganizationRow{Row: r}
+		key, ok := r.OrganizationID.Get()
+		if !ok {
+			continue
+		}
+		if !seen[key] {
+			seen[key] = true
+			ids = append(ids, key)
+		}
+	}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	targets, err := organization.New().Unordered().
+		Where(organization.ID.In(ids...)).
+		Limit(int64(len(ids))).
+		All(ctx, ex, nil)
+	if err != nil {
+		return nil, err
+	}
+	by := make(map[[16]byte]int, len(targets))
+	for i := range targets {
+		by[targets[i].ID] = i
+	}
+	for i := range out {
+		key, ok := out[i].OrganizationID.Get()
+		if !ok {
+			continue
+		}
+		j, ok := by[key]
+		if !ok {
+			// A foreign key pointing at a row that is not there. The database
+			// forbids it, so reaching this means the constraint was dropped.
+			return nil, fmt.Errorf("storm: %s references a missing %s row", "broadcast_events", "organizations")
+		}
+		out[i].Organization = &targets[j]
 	}
 	return out, nil
 }

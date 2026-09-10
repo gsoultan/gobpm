@@ -20,10 +20,12 @@ var (
 // Row is what a full read returns: the model struct with relations
 // replaced by their scalar foreign keys and *T rewritten to Null[T].
 type Row struct {
-	ID        int64
-	Origin    string
-	Payload   string
-	CreatedAt time.Time
+	ID             int64
+	Origin         string
+	Payload        string
+	OrganizationID runtime.Null[[16]byte]
+	EnvironmentID  runtime.Null[[16]byte]
+	CreatedAt      time.Time
 }
 
 // Operator ids. Argument-taking operators are numbered first, so the
@@ -61,7 +63,7 @@ const (
 	opNotExists runtime.Op = 26
 )
 
-const nCols = 4
+const nCols = 6
 
 // Query is a value type: composing one allocates nothing. Predicates
 // are a postfix token stream, so disjunction and negation are
@@ -71,14 +73,16 @@ type Query struct {
 	nt   uint8
 	top  uint8 // top-level conjuncts, ANDed at compile time
 
-	strs        [6]string
-	nums        [6]int64
-	tims        [4]time.Time
-	ns, nn, ntm uint8
+	strs            [6]string
+	nums            [6]int64
+	raws            [4][16]byte
+	tims            [4]time.Time
+	ns, nn, nr, ntm uint8
 
-	anyStr     [3][]string
-	anyI64     [3][]int64
-	nas, nai64 uint8
+	anyRaw          [3][][16]byte
+	anyStr          [3][]string
+	anyI64          [3][]int64
+	nar, nas, nai64 uint8
 
 	// Order terms live in their own buffer and are appended to the stream
 	// after the predicate tree. Sharing one buffer would let a Where after
@@ -195,6 +199,20 @@ func (q *Query) cursor(col uint32, r Row) {
 		q.strs[q.ns] = r.Payload
 		q.ns++
 	case 3:
+		if int(q.nr) >= len(q.raws) {
+			q.over = true
+			return
+		}
+		q.raws[q.nr] = r.OrganizationID.V
+		q.nr++
+	case 4:
+		if int(q.nr) >= len(q.raws) {
+			q.over = true
+			return
+		}
+		q.raws[q.nr] = r.EnvironmentID.V
+		q.nr++
+	case 5:
 		if int(q.ntm) >= len(q.tims) {
 			q.over = true
 			return
@@ -350,7 +368,9 @@ type Pred struct {
 	op     runtime.Op
 	num    int64
 	str    string
+	raw    [16]byte
 	tim    time.Time
+	anyRaw [][16]byte
 	anyStr []string
 	anyI64 []int64
 }
@@ -358,10 +378,12 @@ type Pred struct {
 // Typed column handles. The type of the handle is what makes
 // Age.Like(...) fail to compile.
 var (
-	ID        = Int64Col{0}
-	Origin    = TextCol{1}
-	Payload   = TextCol{2}
-	CreatedAt = TimeCol{3}
+	ID             = Int64Col{0}
+	Origin         = TextCol{1}
+	Payload        = TextCol{2}
+	OrganizationID = NullUUIDCol{3}
+	EnvironmentID  = NullUUIDCol{4}
+	CreatedAt      = TimeCol{5}
 )
 
 // Int64Col addresses a int8 column.
@@ -415,6 +437,29 @@ func (h TextCol) In(v ...string) Pred { return Pred{col: h.c, op: opIn, anyStr: 
 // comparison NULL for every row and the result empty —
 // PostgreSQL's rule for NOT IN, not storm's.
 func (h TextCol) NotIn(v ...string) Pred { return Pred{col: h.c, op: opNotIn, anyStr: v} }
+
+// NullUUIDCol addresses a uuid column.
+type NullUUIDCol struct{ c uint8 }
+
+func (h NullUUIDCol) Asc() Sort  { return Sort(runtime.MakeOrder(runtime.Asc, uint32(h.c))) }
+func (h NullUUIDCol) Desc() Sort { return Sort(runtime.MakeOrder(runtime.Desc, uint32(h.c))) }
+func (h NullUUIDCol) AscNullsFirst() Sort {
+	return Sort(runtime.MakeOrder(runtime.AscNullsFirst, uint32(h.c)))
+}
+func (h NullUUIDCol) DescNullsLast() Sort {
+	return Sort(runtime.MakeOrder(runtime.DescNullsLast, uint32(h.c)))
+}
+
+func (h NullUUIDCol) Eq(v [16]byte) Pred    { return Pred{col: h.c, op: opEq, raw: v} }
+func (h NullUUIDCol) NotEq(v [16]byte) Pred { return Pred{col: h.c, op: opNotEq, raw: v} }
+func (h NullUUIDCol) In(v ...[16]byte) Pred { return Pred{col: h.c, op: opIn, anyRaw: v} }
+
+// NotIn is `<> ALL($1)`. A NULL anywhere in v makes the
+// comparison NULL for every row and the result empty —
+// PostgreSQL's rule for NOT IN, not storm's.
+func (h NullUUIDCol) NotIn(v ...[16]byte) Pred { return Pred{col: h.c, op: opNotIn, anyRaw: v} }
+func (h NullUUIDCol) IsNull() Pred             { return Pred{col: h.c, op: opIsNull} }
+func (h NullUUIDCol) IsNotNull() Pred          { return Pred{col: h.c, op: opIsNotNull} }
 
 // TimeCol addresses a timestamptz column.
 type TimeCol struct{ c uint8 }
@@ -597,6 +642,20 @@ func (q *Query) leaf(p Pred) {
 			}
 			q.anyStr[q.nas] = p.anyStr
 			q.nas++
+		case 3:
+			if int(q.nar) >= 3 {
+				q.over = true
+				return
+			}
+			q.anyRaw[q.nar] = p.anyRaw
+			q.nar++
+		case 4:
+			if int(q.nar) >= 3 {
+				q.over = true
+				return
+			}
+			q.anyRaw[q.nar] = p.anyRaw
+			q.nar++
 		}
 		q.push(runtime.MakeLeaf(uint32(p.op), uint32(p.col)))
 		return
@@ -624,6 +683,20 @@ func (q *Query) leaf(p Pred) {
 		q.strs[q.ns] = p.str
 		q.ns++
 	case 3:
+		if int(q.nr) >= 4 {
+			q.over = true
+			return
+		}
+		q.raws[q.nr] = p.raw
+		q.nr++
+	case 4:
+		if int(q.nr) >= 4 {
+			q.over = true
+			return
+		}
+		q.raws[q.nr] = p.raw
+		q.nr++
+	case 5:
 		if int(q.ntm) >= 4 {
 			q.over = true
 			return
@@ -635,42 +708,54 @@ func (q *Query) leaf(p Pred) {
 }
 
 // Chained predicate sugar. Identical to Where(Col.Op(v)).
-func (q Query) IDEq(v int64) Query               { return q.Where(ID.Eq(v)) }
-func (q Query) IDNotEq(v int64) Query            { return q.Where(ID.NotEq(v)) }
-func (q Query) IDGt(v int64) Query               { return q.Where(ID.Gt(v)) }
-func (q Query) IDGte(v int64) Query              { return q.Where(ID.Gte(v)) }
-func (q Query) IDLt(v int64) Query               { return q.Where(ID.Lt(v)) }
-func (q Query) IDLte(v int64) Query              { return q.Where(ID.Lte(v)) }
-func (q Query) IDIn(v ...int64) Query            { return q.Where(ID.In(v...)) }
-func (q Query) IDNotIn(v ...int64) Query         { return q.Where(ID.NotIn(v...)) }
-func (q Query) OriginEq(v string) Query          { return q.Where(Origin.Eq(v)) }
-func (q Query) OriginNotEq(v string) Query       { return q.Where(Origin.NotEq(v)) }
-func (q Query) OriginGt(v string) Query          { return q.Where(Origin.Gt(v)) }
-func (q Query) OriginGte(v string) Query         { return q.Where(Origin.Gte(v)) }
-func (q Query) OriginLt(v string) Query          { return q.Where(Origin.Lt(v)) }
-func (q Query) OriginLte(v string) Query         { return q.Where(Origin.Lte(v)) }
-func (q Query) OriginLike(v string) Query        { return q.Where(Origin.Like(v)) }
-func (q Query) OriginILike(v string) Query       { return q.Where(Origin.ILike(v)) }
-func (q Query) OriginIn(v ...string) Query       { return q.Where(Origin.In(v...)) }
-func (q Query) OriginNotIn(v ...string) Query    { return q.Where(Origin.NotIn(v...)) }
-func (q Query) PayloadEq(v string) Query         { return q.Where(Payload.Eq(v)) }
-func (q Query) PayloadNotEq(v string) Query      { return q.Where(Payload.NotEq(v)) }
-func (q Query) PayloadGt(v string) Query         { return q.Where(Payload.Gt(v)) }
-func (q Query) PayloadGte(v string) Query        { return q.Where(Payload.Gte(v)) }
-func (q Query) PayloadLt(v string) Query         { return q.Where(Payload.Lt(v)) }
-func (q Query) PayloadLte(v string) Query        { return q.Where(Payload.Lte(v)) }
-func (q Query) PayloadLike(v string) Query       { return q.Where(Payload.Like(v)) }
-func (q Query) PayloadILike(v string) Query      { return q.Where(Payload.ILike(v)) }
-func (q Query) PayloadIn(v ...string) Query      { return q.Where(Payload.In(v...)) }
-func (q Query) PayloadNotIn(v ...string) Query   { return q.Where(Payload.NotIn(v...)) }
-func (q Query) CreatedAtEq(v time.Time) Query    { return q.Where(CreatedAt.Eq(v)) }
-func (q Query) CreatedAtNotEq(v time.Time) Query { return q.Where(CreatedAt.NotEq(v)) }
-func (q Query) CreatedAtGt(v time.Time) Query    { return q.Where(CreatedAt.Gt(v)) }
-func (q Query) CreatedAtGte(v time.Time) Query   { return q.Where(CreatedAt.Gte(v)) }
-func (q Query) CreatedAtLt(v time.Time) Query    { return q.Where(CreatedAt.Lt(v)) }
-func (q Query) CreatedAtLte(v time.Time) Query   { return q.Where(CreatedAt.Lte(v)) }
+func (q Query) IDEq(v int64) Query                      { return q.Where(ID.Eq(v)) }
+func (q Query) IDNotEq(v int64) Query                   { return q.Where(ID.NotEq(v)) }
+func (q Query) IDGt(v int64) Query                      { return q.Where(ID.Gt(v)) }
+func (q Query) IDGte(v int64) Query                     { return q.Where(ID.Gte(v)) }
+func (q Query) IDLt(v int64) Query                      { return q.Where(ID.Lt(v)) }
+func (q Query) IDLte(v int64) Query                     { return q.Where(ID.Lte(v)) }
+func (q Query) IDIn(v ...int64) Query                   { return q.Where(ID.In(v...)) }
+func (q Query) IDNotIn(v ...int64) Query                { return q.Where(ID.NotIn(v...)) }
+func (q Query) OriginEq(v string) Query                 { return q.Where(Origin.Eq(v)) }
+func (q Query) OriginNotEq(v string) Query              { return q.Where(Origin.NotEq(v)) }
+func (q Query) OriginGt(v string) Query                 { return q.Where(Origin.Gt(v)) }
+func (q Query) OriginGte(v string) Query                { return q.Where(Origin.Gte(v)) }
+func (q Query) OriginLt(v string) Query                 { return q.Where(Origin.Lt(v)) }
+func (q Query) OriginLte(v string) Query                { return q.Where(Origin.Lte(v)) }
+func (q Query) OriginLike(v string) Query               { return q.Where(Origin.Like(v)) }
+func (q Query) OriginILike(v string) Query              { return q.Where(Origin.ILike(v)) }
+func (q Query) OriginIn(v ...string) Query              { return q.Where(Origin.In(v...)) }
+func (q Query) OriginNotIn(v ...string) Query           { return q.Where(Origin.NotIn(v...)) }
+func (q Query) PayloadEq(v string) Query                { return q.Where(Payload.Eq(v)) }
+func (q Query) PayloadNotEq(v string) Query             { return q.Where(Payload.NotEq(v)) }
+func (q Query) PayloadGt(v string) Query                { return q.Where(Payload.Gt(v)) }
+func (q Query) PayloadGte(v string) Query               { return q.Where(Payload.Gte(v)) }
+func (q Query) PayloadLt(v string) Query                { return q.Where(Payload.Lt(v)) }
+func (q Query) PayloadLte(v string) Query               { return q.Where(Payload.Lte(v)) }
+func (q Query) PayloadLike(v string) Query              { return q.Where(Payload.Like(v)) }
+func (q Query) PayloadILike(v string) Query             { return q.Where(Payload.ILike(v)) }
+func (q Query) PayloadIn(v ...string) Query             { return q.Where(Payload.In(v...)) }
+func (q Query) PayloadNotIn(v ...string) Query          { return q.Where(Payload.NotIn(v...)) }
+func (q Query) OrganizationIDEq(v [16]byte) Query       { return q.Where(OrganizationID.Eq(v)) }
+func (q Query) OrganizationIDNotEq(v [16]byte) Query    { return q.Where(OrganizationID.NotEq(v)) }
+func (q Query) OrganizationIDIn(v ...[16]byte) Query    { return q.Where(OrganizationID.In(v...)) }
+func (q Query) OrganizationIDNotIn(v ...[16]byte) Query { return q.Where(OrganizationID.NotIn(v...)) }
+func (q Query) OrganizationIDIsNull() Query             { return q.Where(OrganizationID.IsNull()) }
+func (q Query) OrganizationIDIsNotNull() Query          { return q.Where(OrganizationID.IsNotNull()) }
+func (q Query) EnvironmentIDEq(v [16]byte) Query        { return q.Where(EnvironmentID.Eq(v)) }
+func (q Query) EnvironmentIDNotEq(v [16]byte) Query     { return q.Where(EnvironmentID.NotEq(v)) }
+func (q Query) EnvironmentIDIn(v ...[16]byte) Query     { return q.Where(EnvironmentID.In(v...)) }
+func (q Query) EnvironmentIDNotIn(v ...[16]byte) Query  { return q.Where(EnvironmentID.NotIn(v...)) }
+func (q Query) EnvironmentIDIsNull() Query              { return q.Where(EnvironmentID.IsNull()) }
+func (q Query) EnvironmentIDIsNotNull() Query           { return q.Where(EnvironmentID.IsNotNull()) }
+func (q Query) CreatedAtEq(v time.Time) Query           { return q.Where(CreatedAt.Eq(v)) }
+func (q Query) CreatedAtNotEq(v time.Time) Query        { return q.Where(CreatedAt.NotEq(v)) }
+func (q Query) CreatedAtGt(v time.Time) Query           { return q.Where(CreatedAt.Gt(v)) }
+func (q Query) CreatedAtGte(v time.Time) Query          { return q.Where(CreatedAt.Gte(v)) }
+func (q Query) CreatedAtLt(v time.Time) Query           { return q.Where(CreatedAt.Lt(v)) }
+func (q Query) CreatedAtLte(v time.Time) Query          { return q.Where(CreatedAt.Lte(v)) }
 
-const selectPrefix = `SELECT "id", "origin", "payload", "created_at" FROM "broadcast_events"`
+const selectPrefix = `SELECT "id", "origin", "payload", "organization_id", "environment_id", "created_at" FROM "broadcast_events"`
 const countPrefix = `SELECT count(*) FROM "broadcast_events"`
 const existsPrefix = `SELECT 1 FROM "broadcast_events"`
 const existsSuffix = ` LIMIT 1`
@@ -725,6 +810,18 @@ var orderTable = [nCols][4]string{
 		"\"payload\" ASC NULLS FIRST",
 		"\"payload\" DESC NULLS LAST",
 	},
+	{ // organization_id
+		"\"organization_id\"",
+		"\"organization_id\" DESC",
+		"\"organization_id\" ASC NULLS FIRST",
+		"\"organization_id\" DESC NULLS LAST",
+	},
+	{ // environment_id
+		"\"environment_id\"",
+		"\"environment_id\" DESC",
+		"\"environment_id\" ASC NULLS FIRST",
+		"\"environment_id\" DESC NULLS LAST",
+	},
 	{ // created_at
 		"\"created_at\"",
 		"\"created_at\" DESC",
@@ -739,6 +836,8 @@ var identTable = [nCols]string{
 	"\"id\"",
 	"\"origin\"",
 	"\"payload\"",
+	"\"organization_id\"",
+	"\"environment_id\"",
 	"\"created_at\"",
 }
 
@@ -772,7 +871,7 @@ func orderOf(dir, col uint32) string {
 
 // fragTable is every predicate this table can produce, lowered at build
 // time. Runtime splices; it never formats.
-var fragTable = [4][27]runtime.Frag{
+var fragTable = [6][27]runtime.Frag{
 	{ // id
 		{}, // opNone
 		{A: "\"id\" = $", B: ""},
@@ -857,6 +956,64 @@ var fragTable = [4][27]runtime.Frag{
 		{},
 		{},
 		{},
+		{},
+		{},
+	},
+	{ // organization_id
+		{}, // opNone
+		{A: "\"organization_id\" = $", B: ""},
+		{A: "\"organization_id\" <> $", B: ""},
+		{},
+		{},
+		{},
+		{},
+		{},
+		{},
+		{},
+		{},
+		{},
+		{},
+		{},
+		{A: "\"organization_id\" = ANY($", B: ")"},
+		{A: "\"organization_id\" <> ALL($", B: ")"},
+		{},
+		{},
+		{},
+		{},
+		{},
+		{},
+		{},
+		{A: "\"organization_id\" IS NULL", B: ""},
+		{A: "\"organization_id\" IS NOT NULL", B: ""},
+		{},
+		{},
+	},
+	{ // environment_id
+		{}, // opNone
+		{A: "\"environment_id\" = $", B: ""},
+		{A: "\"environment_id\" <> $", B: ""},
+		{},
+		{},
+		{},
+		{},
+		{},
+		{},
+		{},
+		{},
+		{},
+		{},
+		{},
+		{A: "\"environment_id\" = ANY($", B: ")"},
+		{A: "\"environment_id\" <> ALL($", B: ")"},
+		{},
+		{},
+		{},
+		{},
+		{},
+		{},
+		{},
+		{A: "\"environment_id\" IS NULL", B: ""},
+		{A: "\"environment_id\" IS NOT NULL", B: ""},
 		{},
 		{},
 	},
@@ -1047,7 +1204,9 @@ func scan(rv [][]byte, r *Row, sl *runtime.Slab) error {
 	r.ID = runtime.Int8(rv[0])
 	r.Origin = sl.Str(rv[1])
 	r.Payload = sl.Str(rv[2])
-	r.CreatedAt = runtime.Timestamptz(rv[3])
+	r.OrganizationID = runtime.Nullable(rv[3], runtime.UUID)
+	r.EnvironmentID = runtime.Nullable(rv[4], runtime.UUID)
+	r.CreatedAt = runtime.Timestamptz(rv[5])
 	return nil
 }
 
@@ -1055,7 +1214,9 @@ type binder struct {
 	vals   []any
 	strs   [6]string
 	nums   [6]int64
+	raws   [4][16]byte
 	tims   [4]time.Time
+	anyRaw [3][][16]byte
 	anyStr [3][]string
 	anyI64 [3][]int64
 	limit  int64
@@ -1082,6 +1243,9 @@ func putBinder(b *binder) {
 	for i := range b.strs {
 		b.strs[i] = ""
 	}
+	for i := range b.anyRaw {
+		b.anyRaw[i] = nil
+	}
 	for i := range b.anyStr {
 		b.anyStr[i] = nil
 	}
@@ -1096,7 +1260,7 @@ func putBinder(b *binder) {
 // Count and Exists stop here: their statements carry no LIMIT or OFFSET.
 func (q Query) bindPreds(b *binder) []any {
 	v := b.vals[:0]
-	var ns, nn, ntm, nas, nai64 uint8
+	var ns, nn, nr, ntm, nar, nas, nai64 uint8
 	for i := uint8(0); i < q.nt; i++ {
 		t := q.toks[i]
 		// KLeaf binds a predicate's value; KCol binds a keyset cursor's.
@@ -1124,6 +1288,14 @@ func (q Query) bindPreds(b *binder) []any {
 				b.anyStr[nas] = q.anyStr[nas]
 				v = append(v, &b.anyStr[nas])
 				nas++
+			case 3:
+				b.anyRaw[nar] = q.anyRaw[nar]
+				v = append(v, &b.anyRaw[nar])
+				nar++
+			case 4:
+				b.anyRaw[nar] = q.anyRaw[nar]
+				v = append(v, &b.anyRaw[nar])
+				nar++
 			}
 			continue
 		}
@@ -1141,6 +1313,14 @@ func (q Query) bindPreds(b *binder) []any {
 			v = append(v, &b.strs[ns])
 			ns++
 		case 3:
+			b.raws[nr] = q.raws[nr]
+			v = append(v, &b.raws[nr])
+			nr++
+		case 4:
+			b.raws[nr] = q.raws[nr]
+			v = append(v, &b.raws[nr])
+			nr++
+		case 5:
 			b.tims[ntm] = q.tims[ntm]
 			v = append(v, &b.tims[ntm])
 			ntm++
@@ -1281,7 +1461,7 @@ func (q Query) Prepare(b *Binder) (string, []any) {
 
 // insertSQL does not vary: the column list is fixed by the table, so
 // the placeholders are known at build time and nothing is spliced.
-const insertSQL = `INSERT INTO "broadcast_events" ("id", "origin", "payload", "created_at") VALUES ($1, $2, $3, $4) RETURNING "id", "origin", "payload", "created_at"`
+const insertSQL = `INSERT INTO "broadcast_events" ("id", "origin", "payload", "organization_id", "environment_id", "created_at") VALUES ($1, $2, $3, $4, $5, $6) RETURNING "id", "origin", "payload", "organization_id", "environment_id", "created_at"`
 
 const updatePrefix = `UPDATE "broadcast_events" SET `
 const deletePrefix = `DELETE FROM "broadcast_events"`
@@ -1289,18 +1469,22 @@ const deletePrefix = `DELETE FROM "broadcast_events"`
 // Dirty bits. One per updatable column; the set of them is an UPDATE's
 // identity, exactly as a token stream is a SELECT's.
 const (
-	dOrigin    uint64 = 1 << 0
-	dPayload   uint64 = 1 << 1
-	dCreatedAt uint64 = 1 << 2
+	dOrigin         uint64 = 1 << 0
+	dPayload        uint64 = 1 << 1
+	dOrganizationID uint64 = 1 << 2
+	dEnvironmentID  uint64 = 1 << 3
+	dCreatedAt      uint64 = 1 << 4
 )
 
-const nUpdatable = 3
+const nUpdatable = 5
 
 // setFrags is every assignment this table can make, lowered at build time.
 var setFrags = [nUpdatable]runtime.Frag{
-	{A: "\"origin\" = $", B: ""},     // origin
-	{A: "\"payload\" = $", B: ""},    // payload
-	{A: "\"created_at\" = $", B: ""}, // created_at
+	{A: "\"origin\" = $", B: ""},          // origin
+	{A: "\"payload\" = $", B: ""},         // payload
+	{A: "\"organization_id\" = $", B: ""}, // organization_id
+	{A: "\"environment_id\" = $", B: ""},  // environment_id
+	{A: "\"created_at\" = $", B: ""},      // created_at
 }
 
 // pkFrags addresses one row.
@@ -1312,19 +1496,23 @@ var pkFrags = [1]runtime.Frag{
 // assigned, so every other column takes its database default — which is
 // the only way a DEFAULT gen_random_uuid() can ever fire.
 const (
-	iID        uint64 = 1 << 0
-	iOrigin    uint64 = 1 << 1
-	iPayload   uint64 = 1 << 2
-	iCreatedAt uint64 = 1 << 3
+	iID             uint64 = 1 << 0
+	iOrigin         uint64 = 1 << 1
+	iPayload        uint64 = 1 << 2
+	iOrganizationID uint64 = 1 << 3
+	iEnvironmentID  uint64 = 1 << 4
+	iCreatedAt      uint64 = 1 << 5
 )
 
-const nInsertable = 4
+const nInsertable = 6
 
 // insCols is the quoted column name for each insert bit.
 var insCols = [nInsertable]string{
 	"\"id\"",
 	"\"origin\"",
 	"\"payload\"",
+	"\"organization_id\"",
+	"\"environment_id\"",
 	"\"created_at\"",
 }
 
@@ -1334,7 +1522,7 @@ var insParts = runtime.InsertParts{Open: " (", Sep: ", ", Mid: ") VALUES (", Clo
 
 const insPlaceholder = "$"
 const insPrefix = "INSERT INTO \"broadcast_events\""
-const insReturning = " RETURNING \"id\", \"origin\", \"payload\", \"created_at\""
+const insReturning = " RETURNING \"id\", \"origin\", \"payload\", \"organization_id\", \"environment_id\", \"created_at\""
 
 var insCache = runtime.NewMaskCache()
 
@@ -1375,6 +1563,30 @@ func (m *Mut) SetOrigin(v string) {
 func (m *Mut) SetPayload(v string) {
 	m.row.Payload = v
 	m.dirty |= dPayload
+}
+
+func (m *Mut) SetOrganizationID(v [16]byte) {
+	m.row.OrganizationID = runtime.Null[[16]byte]{V: v, Valid: true}
+	m.dirty |= dOrganizationID
+}
+
+// SetOrganizationIDNull writes SQL NULL. It is a separate method because a
+// zero value and an absent value are different facts.
+func (m *Mut) SetOrganizationIDNull() {
+	m.row.OrganizationID = runtime.Null[[16]byte]{}
+	m.dirty |= dOrganizationID
+}
+
+func (m *Mut) SetEnvironmentID(v [16]byte) {
+	m.row.EnvironmentID = runtime.Null[[16]byte]{V: v, Valid: true}
+	m.dirty |= dEnvironmentID
+}
+
+// SetEnvironmentIDNull writes SQL NULL. It is a separate method because a
+// zero value and an absent value are different facts.
+func (m *Mut) SetEnvironmentIDNull() {
+	m.row.EnvironmentID = runtime.Null[[16]byte]{}
+	m.dirty |= dEnvironmentID
 }
 
 func (m *Mut) SetCreatedAt(v time.Time) {
@@ -1420,6 +1632,30 @@ func (n *Ins) SetOrigin(v string) {
 func (n *Ins) SetPayload(v string) {
 	n.row.Payload = v
 	n.set |= iPayload
+}
+
+func (n *Ins) SetOrganizationID(v [16]byte) {
+	n.row.OrganizationID = runtime.Null[[16]byte]{V: v, Valid: true}
+	n.set |= iOrganizationID
+}
+
+// SetOrganizationIDNull writes SQL NULL explicitly, which is not the same as
+// leaving the column unset and taking its default.
+func (n *Ins) SetOrganizationIDNull() {
+	n.row.OrganizationID = runtime.Null[[16]byte]{}
+	n.set |= iOrganizationID
+}
+
+func (n *Ins) SetEnvironmentID(v [16]byte) {
+	n.row.EnvironmentID = runtime.Null[[16]byte]{V: v, Valid: true}
+	n.set |= iEnvironmentID
+}
+
+// SetEnvironmentIDNull writes SQL NULL explicitly, which is not the same as
+// leaving the column unset and taking its default.
+func (n *Ins) SetEnvironmentIDNull() {
+	n.row.EnvironmentID = runtime.Null[[16]byte]{}
+	n.set |= iEnvironmentID
 }
 
 func (n *Ins) SetCreatedAt(v time.Time) {
@@ -1472,7 +1708,7 @@ var conflictSpecs = []string{
 
 // assignable is the columns target i may overwrite, given the mask.
 func assignable(i uint8, mask uint64) []string {
-	set := make([]string, 0, 3)
+	set := make([]string, 0, 5)
 	switch i {
 	case 0:
 		if mask&(1<<1) != 0 {
@@ -1482,6 +1718,12 @@ func assignable(i uint8, mask uint64) []string {
 			set = append(set, "payload")
 		}
 		if mask&(1<<3) != 0 {
+			set = append(set, "organization_id")
+		}
+		if mask&(1<<4) != 0 {
+			set = append(set, "environment_id")
+		}
+		if mask&(1<<5) != 0 {
 			set = append(set, "created_at")
 		}
 	}
@@ -1532,9 +1774,11 @@ func joinAssign(set []string) string {
 }
 
 var assignFor = map[string]string{
-	"origin":     "\"origin\" = EXCLUDED.\"origin\"",
-	"payload":    "\"payload\" = EXCLUDED.\"payload\"",
-	"created_at": "\"created_at\" = EXCLUDED.\"created_at\"",
+	"origin":          "\"origin\" = EXCLUDED.\"origin\"",
+	"payload":         "\"payload\" = EXCLUDED.\"payload\"",
+	"organization_id": "\"organization_id\" = EXCLUDED.\"organization_id\"",
+	"environment_id":  "\"environment_id\" = EXCLUDED.\"environment_id\"",
+	"created_at":      "\"created_at\" = EXCLUDED.\"created_at\"",
 }
 
 func assignExcluded(c string) string { return assignFor[c] }
@@ -1585,6 +1829,10 @@ func (n *Ins) Insert(ctx context.Context, ex runtime.Executor) (Row, error) {
 		case 2:
 			args = append(args, n.row.Payload)
 		case 3:
+			args = append(args, n.row.OrganizationID.Arg())
+		case 4:
+			args = append(args, n.row.EnvironmentID.Arg())
+		case 5:
 			args = append(args, n.row.CreatedAt)
 		}
 	}
@@ -1623,10 +1871,12 @@ func Inserts() int { return insCache.Masks() }
 // not treat a zero as 'unset': that guess is why other ORMs cannot insert
 // a false, a 0 or an empty string into a column with a default.
 func Insert(ctx context.Context, ex runtime.Executor, r *Row) error {
-	args := make([]any, 0, 4)
+	args := make([]any, 0, 6)
 	args = append(args, r.ID)
 	args = append(args, r.Origin)
 	args = append(args, r.Payload)
+	args = append(args, r.OrganizationID.Arg())
+	args = append(args, r.EnvironmentID.Arg())
 	args = append(args, r.CreatedAt)
 	rows, err := ex.Query(ctx, insertSQL, args)
 	if err != nil {
@@ -1657,6 +1907,8 @@ var copyCols = []string{
 	"id",
 	"origin",
 	"payload",
+	"organization_id",
+	"environment_id",
 	"created_at",
 }
 
@@ -1664,7 +1916,7 @@ var copyCols = []string{
 type rowSource struct {
 	rows []Row
 	i    int
-	buf  [4]any
+	buf  [6]any
 }
 
 func (s *rowSource) Next() bool {
@@ -1685,7 +1937,9 @@ func (s *rowSource) Values() []any {
 	s.buf[0] = &r.ID
 	s.buf[1] = &r.Origin
 	s.buf[2] = &r.Payload
-	s.buf[3] = &r.CreatedAt
+	s.buf[3] = r.OrganizationID.Ptr()
+	s.buf[4] = r.EnvironmentID.Ptr()
+	s.buf[5] = &r.CreatedAt
 	return s.buf[:]
 }
 
@@ -1720,11 +1974,15 @@ func InsertOp(r Row) runtime.BatchOp {
 	mask |= 1 << 1
 	mask |= 1 << 2
 	mask |= 1 << 3
+	mask |= 1 << 4
+	mask |= 1 << 5
 	st := stmtForInsert(mask, 0)
-	args := make([]any, 0, 4)
+	args := make([]any, 0, 6)
 	args = append(args, r.ID)
 	args = append(args, r.Origin)
 	args = append(args, r.Payload)
+	args = append(args, r.OrganizationID.Arg())
+	args = append(args, r.EnvironmentID.Arg())
 	args = append(args, r.CreatedAt)
 	return runtime.BatchOp{SQL: st.SQL, Args: args}
 }
@@ -1766,6 +2024,10 @@ func (n *Ins) Op() (runtime.BatchOp, error) {
 		case 2:
 			args = append(args, n.row.Payload)
 		case 3:
+			args = append(args, n.row.OrganizationID.Arg())
+		case 4:
+			args = append(args, n.row.EnvironmentID.Arg())
+		case 5:
 			args = append(args, n.row.CreatedAt)
 		}
 	}
@@ -1814,6 +2076,10 @@ func (m *Mut) UpdateOp() (runtime.BatchOp, bool) {
 		case 1:
 			args = append(args, m.row.Payload)
 		case 2:
+			args = append(args, m.row.OrganizationID.Arg())
+		case 3:
+			args = append(args, m.row.EnvironmentID.Arg())
+		case 4:
 			args = append(args, m.row.CreatedAt)
 		}
 	}
@@ -1875,6 +2141,10 @@ func (m *Mut) Update(ctx context.Context, ex runtime.Executor) error {
 		case 1:
 			args = append(args, m.row.Payload)
 		case 2:
+			args = append(args, m.row.OrganizationID.Arg())
+		case 3:
+			args = append(args, m.row.EnvironmentID.Arg())
+		case 4:
 			args = append(args, m.row.CreatedAt)
 		}
 	}
