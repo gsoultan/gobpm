@@ -66,7 +66,7 @@ func NewRepository(db *gorm.DB, conn *stormdb.Conn) Repository {
 		externalTask:          pg.NewExternalTaskRepository(conn),
 		form:                  pg.NewFormRepository(conn),
 		incident:              pg.NewIncidentRepository(conn),
-		job:                   gorms.NewJobRepository(db),
+		job:                   pg.NewJobRepository(conn),
 		organization:          pg.NewOrganizationRepository(conn),
 		process:               gorms.NewProcessRepository(db),
 		serviceCall:           pg.NewServiceCallRepository(conn),
