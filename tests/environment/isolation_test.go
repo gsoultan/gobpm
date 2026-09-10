@@ -33,7 +33,7 @@ func TestARequestOnAnEnvironmentPortReadsThatEnvironmentsDatabase(t *testing.T) 
 		t.Fatalf("the registry already held a connection for %s", environmentID)
 	}
 
-	repo := repositories.NewRepository(mainDB)
+	repo := repositories.NewRepository(mainDB, testutils.StormConn(mainDB))
 	system := entities.WithSystemContext(context.Background())
 
 	// One definition in each database, with different keys, so which database
@@ -84,7 +84,7 @@ func TestIdentityStillResolvesAgainstTheMainDatabase(t *testing.T) {
 	environmentID := uuid.New()
 	gorms.RegisterEnvironmentDB(environmentID, stagingDB)
 
-	repo := repositories.NewRepository(mainDB)
+	repo := repositories.NewRepository(mainDB, testutils.StormConn(mainDB))
 	account := models.UserModel{
 		Base:     models.Base{ID: models.FromUUID(uuid.New())},
 		Username: "ada",
@@ -119,7 +119,7 @@ func TestAnEnvironmentWithNoConnectionIsRefusedNotServedFromMain(t *testing.T) {
 	mainDB := testutils.SetupTestDB(t)
 	t.Cleanup(gorms.ResetEnvironmentDBs)
 
-	repo := repositories.NewRepository(mainDB)
+	repo := repositories.NewRepository(mainDB, testutils.StormConn(mainDB))
 	writeDefinition(t, mainDB, "lives-in-main")
 
 	// Registered nowhere: this is an environment whose database would not open.

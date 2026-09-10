@@ -1,10 +1,9 @@
-package gorms
+package tenantscope
 
 import (
 	"bytes"
 	"encoding/json"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/gsoultan/metis/internal/pkg/features"
@@ -35,8 +34,8 @@ func captureLogs(t *testing.T) *bytes.Buffer {
 // each other's order.
 func forgetReportedSites(t *testing.T) {
 	t.Helper()
-	reportedSites = sync.Map{}
-	t.Cleanup(func() { reportedSites = sync.Map{} })
+	ForgetForTest()
+	t.Cleanup(ForgetForTest)
 }
 
 func TestADeniedQueryNamesTheCallerThatNeedsAnIdentity(t *testing.T) {
@@ -44,7 +43,7 @@ func TestADeniedQueryNamesTheCallerThatNeedsAnIdentity(t *testing.T) {
 	defer features.OverrideForTest(features.StrictTenantScope, true)()
 	logs := captureLogs(t)
 
-	if unscopedAccessAllowed(t.Context()) {
+	if Allowed(t.Context()) {
 		t.Fatal("a context with no identity was allowed while the strict scope was on")
 	}
 
@@ -53,8 +52,8 @@ func TestADeniedQueryNamesTheCallerThatNeedsAnIdentity(t *testing.T) {
 		t.Fatalf("expected one log line, got %q", logs.String())
 	}
 	repository, _ := entry["repository"].(string)
-	if !strings.Contains(repository, "gorms.") {
-		t.Errorf("repository = %q; the warning must name the repository method, which is what says *what* came back empty", repository)
+	if !strings.Contains(repository, "tenantscope.TestADenied") {
+		t.Errorf("repository = %q; the warning must name the caller that reached a repository with no identity", repository)
 	}
 	if entry["at"] == nil {
 		t.Error("the warning does not give a file and line")
@@ -76,7 +75,7 @@ func TestASiteIsNamedOnceHoweverOftenItRuns(t *testing.T) {
 	logs := captureLogs(t)
 
 	for range 50 {
-		_ = unscopedAccessAllowed(t.Context())
+		_ = Allowed(t.Context())
 	}
 
 	if lines := strings.Count(strings.TrimSpace(logs.String()), "\n") + 1; lines != 1 {
@@ -92,7 +91,7 @@ func TestNothingIsReportedWhileTheFlagIsOff(t *testing.T) {
 	defer features.OverrideForTest(features.StrictTenantScope, false)()
 	logs := captureLogs(t)
 
-	if !unscopedAccessAllowed(t.Context()) {
+	if !Allowed(t.Context()) {
 		t.Fatal("the default refused an unidentified query")
 	}
 	if logs.Len() != 0 {
@@ -107,7 +106,7 @@ func TestSystemWorkIsNotReported(t *testing.T) {
 	defer features.OverrideForTest(features.StrictTenantScope, true)()
 	logs := captureLogs(t)
 
-	if !unscopedAccessAllowed(entities.WithSystemContext(t.Context())) {
+	if !Allowed(entities.WithSystemContext(t.Context())) {
 		t.Fatal("marked system work was refused")
 	}
 	if logs.Len() != 0 {

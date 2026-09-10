@@ -23,7 +23,7 @@ import (
 // Seeding is a callable operation for that reason: the swap calls it again.
 func TestEnsureDefaultConnectors_PopulatesTheDatabaseInUse(t *testing.T) {
 	// A second, empty database standing in for the one setup swaps to.
-	repo := repositories.NewRepository(testutils.SetupTestDB(t))
+	repo := repositories.NewRepository(testutils.SetupTestStore(t))
 	svc := serviceimpl.NewConnectorService(repo)
 	ctx := t.Context()
 
@@ -50,7 +50,7 @@ func TestEnsureDefaultConnectors_PopulatesTheDatabaseInUse(t *testing.T) {
 // The swap calls this on a database that may already hold the catalogue — for
 // instance when an existing installation restarts.
 func TestEnsureDefaultConnectors_IsSafeToRunTwice(t *testing.T) {
-	repo := repositories.NewRepository(testutils.SetupTestDB(t))
+	repo := repositories.NewRepository(testutils.SetupTestStore(t))
 	svc := serviceimpl.NewConnectorService(repo)
 	ctx := t.Context()
 
@@ -77,7 +77,7 @@ func TestEnsureDefaultConnectors_IsSafeToRunTwice(t *testing.T) {
 // connector objects, so the ids were dropped and every instance created through
 // the connector page was stored orphaned — with a 200 and a real id in reply.
 func TestCreateConnectorInstance_RequiresAProjectAndAConnector(t *testing.T) {
-	repo := repositories.NewRepository(testutils.SetupTestDB(t))
+	repo := repositories.NewRepository(testutils.SetupTestStore(t))
 	svc := serviceimpl.NewConnectorService(repo)
 	ctx := t.Context()
 
@@ -132,7 +132,7 @@ func TestCreateConnectorInstance_RequiresAProjectAndAConnector(t *testing.T) {
 }
 
 func TestCreateConnectorInstance_AcceptsAWiredUpInstance(t *testing.T) {
-	repo := repositories.NewRepository(testutils.SetupTestDB(t))
+	repo := repositories.NewRepository(testutils.SetupTestStore(t))
 	svc := serviceimpl.NewConnectorService(repo)
 	ctx := t.Context()
 
@@ -186,7 +186,7 @@ func hasConnector(list []entities.Connector, key string) bool {
 // catalogue it already has, but anything else reading the API sees an instance
 // that names nothing, and the key is what a service task refers to.
 func TestListConnectorInstances_NamesTheConnectorEachOneConfigures(t *testing.T) {
-	repo := repositories.NewRepository(testutils.SetupTestDB(t))
+	repo := repositories.NewRepository(testutils.SetupTestStore(t))
 	svc := serviceimpl.NewConnectorService(repo)
 	ctx := t.Context()
 

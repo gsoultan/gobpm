@@ -3,15 +3,12 @@ package gorms
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"strings"
-	"sync"
 
 	"github.com/google/uuid"
-	"github.com/gsoultan/metis/internal/pkg/features"
+	"github.com/gsoultan/metis/internal/pkg/tenantscope"
 	"github.com/gsoultan/metis/server/domains/entities"
 	"github.com/gsoultan/metis/server/repositories/models"
-	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
 
@@ -21,74 +18,24 @@ import (
 // finding none.
 const QueryDenyAll = "1 = 0"
 
+// tableProjects is the table every scoped read joins through. It used to live
+// beside the project repository, which has moved to storm.
+const tableProjects = "projects"
+
 // unscopedAccessAllowed decides what a context carrying no tenant may see.
 //
-// System work — the engine, the job worker, message consumers, migrations —
-// legitimately spans every tenant and says so explicitly. Anything else is a
-// path that failed to resolve a tenant, which AGENTS §2.3 says must deny.
-//
-// Behind a flag because the failure mode of getting it wrong is quiet: a
-// background entry point that forgets to mark itself does not error, it reads
-// nothing, and an engine that reads nothing looks like an engine with no work.
-// Off by default, so upgrading changes nothing until someone decides otherwise.
-func unscopedAccessAllowed(ctx context.Context) bool {
-	if entities.IsSystemContext(ctx) {
-		return true
-	}
-	if !features.Enabled(features.StrictTenantScope) {
-		return true
-	}
-	reportUnidentifiedAccess()
-	return false
-}
+// The decision, the reporting and the call-site attribution now live in
+// internal/pkg/tenantscope, because the storm repositories replacing this
+// package need exactly the same answer — and two copies of "may this query run"
+// is one answer that will drift.
+func unscopedAccessAllowed(ctx context.Context) bool { return tenantscope.Allowed(ctx) }
 
-// reportedSites remembers which call sites have already been named.
-//
-// Keyed by program counter, so it is bounded by the amount of code that can
-// reach here rather than by traffic — this is not a map keyed on anything a
-// caller supplies.
-var reportedSites sync.Map
+// DeniedSites is every path that reached a repository with no identity.
+// Re-exported because the strict-scope harness and several tests name it here.
+func DeniedSites() []string { return tenantscope.DeniedSites() }
 
-// reportUnidentifiedAccess names the code path that reached a repository with
-// neither a tenant nor a system identity.
-//
-// **The strict scope's failure mode is silence.** A background entry point that
-// forgets to mark itself does not error — it reads nothing, and an engine that
-// reads nothing looks like an engine with no work to do. That is precisely what
-// makes turning this flag on hard to evaluate: an operator watching a staging
-// environment has to notice an *absence*, and absences are what people miss.
-//
-// So each distinct site says so. Once, not every time: these sit on poll loops
-// that run every couple of seconds, and the useful output is the list of paths
-// that still need an identity — not a count of how often they ran. Turning a
-// rollout from "watch for something that stops happening" into "read this list"
-// is the whole point.
-//
-// Nothing is logged while the flag is off, because this is unreachable then.
-func reportUnidentifiedAccess() {
-	site, from, ok := deniedCallSite()
-	if !ok {
-		return
-	}
-	denial := fmt.Sprintf("%s (%s:%d)", site.Function, site.File, site.Line)
-	if from != "" {
-		denial += " called from " + from
-	}
-	if _, seen := reportedSites.LoadOrStore(site.PC, denial); seen {
-		return
-	}
-	event := log.Warn().
-		Str("repository", site.Function).
-		Str("at", fmt.Sprintf("%s:%d", site.File, site.Line)).
-		Str("flag", features.EnvName(features.StrictTenantScope))
-	if from != "" {
-		// The repository method says *what* was denied; its caller says which
-		// path forgot an identity, which is the thing that has to change.
-		event = event.Str("called_from", from)
-	}
-	event.Msg("A repository query carried neither a tenant nor a system identity, so it was answered with nothing. " +
-		"This path needs entities.WithSystemContext if it is background work, or a resolved tenant if it serves a request.")
-}
+// ResetDeniedSites forgets what has been reported.
+func ResetDeniedSites() { tenantscope.ResetDeniedSites() }
 
 // denyAll returns a query guaranteed to match nothing.
 //
@@ -98,43 +45,6 @@ func reportUnidentifiedAccess() {
 // without an identity.
 func denyAll(db *gorm.DB) *gorm.DB {
 	return db.Where(QueryDenyAll)
-}
-
-// scopeHelperFile is where the tenant-scope helpers live. Frames from it are
-// skipped when naming a denial: they are the same three functions every time
-// and identify nothing.
-const scopeHelperFile = "/gorms/tenant.go"
-
-// deniedCallSite returns the repository method that was denied and, when it can
-// be told, the caller outside this package that invoked it.
-//
-// Both, because they answer different questions. The repository method says
-// what came back empty; its caller is the path that failed to carry an identity
-// and therefore the code that has to change.
-func deniedCallSite() (site runtime.Frame, calledFrom string, ok bool) {
-	pc := make([]uintptr, 24)
-	// Skip runtime.Callers, this function and reportUnidentifiedAccess.
-	n := runtime.Callers(3, pc)
-	if n == 0 {
-		return runtime.Frame{}, "", false
-	}
-
-	frames := runtime.CallersFrames(pc[:n])
-	const gormsPackage = "/server/repositories/gorms."
-	for {
-		frame, more := frames.Next()
-		switch {
-		case strings.HasSuffix(frame.File, scopeHelperFile):
-			// A scope helper — keep looking for the repository method.
-		case site.PC == 0:
-			site = frame
-		case !strings.Contains(frame.Function, gormsPackage):
-			return site, frame.Function, true
-		}
-		if !more {
-			return site, calledFrom, site.PC != 0
-		}
-	}
 }
 
 // tenantScopeDB returns a *gorm.DB scoped to the active tenant (organization)
@@ -235,27 +145,6 @@ func tenantScopeMembership(ctx context.Context, db *gorm.DB, table, joinTable, f
 	return db.Where(
 		table+".id IN (SELECT "+foreignKey+" FROM "+joinTable+" WHERE organization_model_id = ?)",
 		tc.TenantID)
-}
-
-// requireOwnOrganization refuses a write that names an organization other than
-// the caller's. It is the create-side counterpart of the read scope: the scope
-// stops a caller reading another tenant's rows, this stops them writing rows
-// into it.
-func requireOwnOrganization(ctx context.Context, organizationID uuid.UUID) error {
-	tc, ok := entities.TenantContextFrom(ctx)
-	if !ok || tc.TenantID == "" {
-		if unscopedAccessAllowed(ctx) {
-			return nil
-		}
-		return gorm.ErrRecordNotFound
-	}
-	if organizationID == uuid.Nil {
-		return nil
-	}
-	if organizationID.String() != tc.TenantID {
-		return gorm.ErrRecordNotFound
-	}
-	return nil
 }
 
 // requireProjectInTenant returns ErrRecordNotFound unless the project belongs to
@@ -373,41 +262,4 @@ func tenantScopeDeploymentResources(ctx context.Context, db *gorm.DB) *gorm.DB {
 	}
 
 	return db.Joins(QueryTenantScopeViaDeployment, tc.TenantID)
-}
-
-// DeniedSites returns the distinct paths the strict scope has refused so far,
-// in no particular order.
-//
-// This exists because the flag's failure mode is silence. Turning it on and
-// watching a staging environment means noticing an *absence* — work that quietly
-// stops happening — and absences are what people miss. The warning log names
-// each site, but reading it means grepping, and a log line cannot be asserted
-// on. This is the same information as a value: a rollout becomes "run the
-// product, then check this is empty", and a test can make that a build failure
-// rather than a judgement call.
-//
-// Empty is the goal. Anything in here is a path that needs
-// entities.WithSystemContext if it is background work, or a resolved tenant if
-// it serves a request.
-func DeniedSites() []string {
-	var sites []string
-	reportedSites.Range(func(_, value any) bool {
-		if denial, ok := value.(string); ok {
-			sites = append(sites, denial)
-		}
-		return true
-	})
-	return sites
-}
-
-// ResetDeniedSites forgets what has been reported.
-//
-// Only useful to a test that wants to attribute denials to one specific
-// exercise: the deduplication is per process, so without a reset the second
-// test to run sees whatever the first provoked and cannot tell them apart.
-func ResetDeniedSites() {
-	reportedSites.Range(func(key, _ any) bool {
-		reportedSites.Delete(key)
-		return true
-	})
 }

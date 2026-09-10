@@ -157,7 +157,7 @@ func TestServiceTask_ToleratesADefinitionWithNoProject(t *testing.T) {
 
 func jobServiceForConnectorTest(t *testing.T) (*jobService, uuid.UUID) {
 	t.Helper()
-	repo := repositories.NewRepository(testutils.SetupTestDB(t))
+	repo := repositories.NewRepository(testutils.SetupTestStore(t))
 	engine := NewExecutionEngine(repo, observerimpl.NewEventDispatcher())
 	svc := NewJobService(repo, engine, NewConnectorService(repo), NewNoOpLocker(), handlersimpl.NewErrorBoundaryMatcher())
 	js, ok := svc.(*jobService)

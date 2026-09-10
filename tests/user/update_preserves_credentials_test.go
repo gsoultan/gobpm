@@ -30,7 +30,7 @@ import (
 // server; "admin/admin no longer works" is the symptom that reaches the user,
 // which says nothing about a save having caused it.
 func TestUpdateUser_KeepsTheUsernameAndPasswordItWasNotGiven(t *testing.T) {
-	repo := repositories.NewRepository(testutils.SetupTestDB(t))
+	repo := repositories.NewRepository(testutils.SetupTestStore(t))
 	svc := serviceimpl.NewUserService(repo, "test-jwt-secret")
 	ctx := t.Context()
 
@@ -79,7 +79,7 @@ func TestUpdateUser_KeepsTheUsernameAndPasswordItWasNotGiven(t *testing.T) {
 // Clearing a name is a legitimate edit and must still work; the rule is that
 // fields the request did not carry are left alone, not that nothing changes.
 func TestUpdateUser_StillAppliesTheFieldsItWasGiven(t *testing.T) {
-	repo := repositories.NewRepository(testutils.SetupTestDB(t))
+	repo := repositories.NewRepository(testutils.SetupTestStore(t))
 	svc := serviceimpl.NewUserService(repo, "test-jwt-secret")
 	ctx := t.Context()
 
@@ -119,7 +119,7 @@ func TestUpdateUser_StillAppliesTheFieldsItWasGiven(t *testing.T) {
 // Roles omitted entirely is different from roles set to none: a client that
 // does not know about roles must not silently strip them.
 func TestUpdateUser_LeavesRolesAloneWhenTheyAreNotSupplied(t *testing.T) {
-	repo := repositories.NewRepository(testutils.SetupTestDB(t))
+	repo := repositories.NewRepository(testutils.SetupTestStore(t))
 	svc := serviceimpl.NewUserService(repo, "test-jwt-secret")
 	ctx := t.Context()
 
@@ -144,7 +144,7 @@ func TestUpdateUser_LeavesRolesAloneWhenTheyAreNotSupplied(t *testing.T) {
 }
 
 func TestUpdateUser_RejectsAnUpdateWithNoID(t *testing.T) {
-	repo := repositories.NewRepository(testutils.SetupTestDB(t))
+	repo := repositories.NewRepository(testutils.SetupTestStore(t))
 	svc := serviceimpl.NewUserService(repo, "test-jwt-secret")
 
 	if err := svc.UpdateUser(t.Context(), entities.User{FullName: "Nobody"}); err == nil {

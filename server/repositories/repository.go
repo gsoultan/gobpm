@@ -2,7 +2,9 @@ package repositories
 
 import (
 	"github.com/gsoultan/metis/server/repositories/contracts"
+	stormdb "github.com/gsoultan/metis/server/repositories/db"
 	"github.com/gsoultan/metis/server/repositories/gorms"
+	"github.com/gsoultan/metis/server/repositories/pg"
 	"gorm.io/gorm"
 )
 
@@ -37,7 +39,20 @@ type gormRepository struct {
 }
 
 // NewRepository creates a new composite repository.
-func NewRepository(db *gorm.DB) Repository {
+//
+// Two connections while the port is under way: the GORM one for the
+// repositories that have not moved and the storm one for those that have. They
+// are the same database — the composition root resolves the DSN once — which is
+// what lets a repository move without the services calling it changing.
+//
+// A nil storm connection means the ported repositories are unavailable, which
+// is a programming error rather than a configuration one now that PostgreSQL is
+// the only engine. It panics rather than falling back to GORM: a fallback would
+// mean the tests exercise one implementation and production the other.
+func NewRepository(db *gorm.DB, conn *stormdb.Conn) Repository {
+	if conn == nil {
+		panic("repositories: a storm connection is required; the ported repositories have no GORM implementation left")
+	}
 	return &gormRepository{
 		audit:                 gorms.NewAuditRepository(db),
 		broadcast:             gorms.NewBroadcastRepository(db),
@@ -52,12 +67,12 @@ func NewRepository(db *gorm.DB) Repository {
 		form:                  gorms.NewFormRepository(db),
 		incident:              gorms.NewIncidentRepository(db),
 		job:                   gorms.NewJobRepository(db),
-		organization:          gorms.NewOrganizationRepository(db),
+		organization:          pg.NewOrganizationRepository(conn),
 		process:               gorms.NewProcessRepository(db),
 		serviceCall:           gorms.NewServiceCallRepository(db),
 		webhook:               gorms.NewWebhookRepository(db),
 		connectorManifest:     gorms.NewConnectorManifestRepository(db),
-		project:               gorms.NewProjectRepository(db),
+		project:               pg.NewProjectRepository(conn),
 		subscription:          gorms.NewSubscriptionRepository(db),
 		task:                  gorms.NewTaskRepository(db),
 		user:                  gorms.NewUserRepository(db),

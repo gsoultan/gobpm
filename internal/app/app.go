@@ -550,7 +550,7 @@ func (a *App) migrationList() []migrations.Migration {
 			// inbound correlation value can match. Until they are repaired every
 			// instance waiting on a message event hangs.
 			Run: func(ctx context.Context, tx *gorm.DB) error {
-				_, err := serviceimpl.BackfillMessageCorrelationKeys(ctx, repositories.NewRepository(tx))
+				_, err := serviceimpl.BackfillMessageCorrelationKeys(ctx, repositories.NewRepository(tx, a.storm))
 				return err
 			},
 		},
@@ -564,7 +564,7 @@ func (a *App) migrationList() []migrations.Migration {
 			// recorded: restarting its iterations from zero, or forgetting the
 			// branches that had already reached a waiting gateway.
 			Run: func(ctx context.Context, tx *gorm.DB) error {
-				_, err := serviceimpl.BackfillEngineBookkeeping(ctx, repositories.NewRepository(tx))
+				_, err := serviceimpl.BackfillEngineBookkeeping(ctx, repositories.NewRepository(tx, a.storm))
 				return err
 			},
 		},
@@ -607,7 +607,7 @@ func refuseSchemaDrift() bool {
 }
 
 func (a *App) setupService(ctx context.Context) error {
-	a.repo = repositories.NewRepository(a.db)
+	a.repo = repositories.NewRepository(a.db, a.storm)
 
 	dispatcher := impl.NewEventDispatcher()
 	dispatcher.Register(impl.NewAuditLogObserver(a.repo.Audit()))

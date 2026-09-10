@@ -29,7 +29,7 @@ func TestAnExecutorSurvivesAPayloadOfTheWrongType(t *testing.T) {
 	wrongTypes := []any{42, 3.5, true, []any{"a"}, map[string]any{"k": "v"}}
 	fields := []string{"content", "text", "to", "subject", "body", "message", "url", "title"}
 
-	repo := repositories.NewRepository(testutils.SetupTestDB(t))
+	repo := repositories.NewRepository(testutils.SetupTestStore(t))
 
 	for _, executor := range serviceimpl.BuiltInConnectorKeys() {
 		t.Run(executor, func(t *testing.T) {

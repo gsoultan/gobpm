@@ -14,9 +14,11 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/gsoultan/metis/internal/pkg/apierr"
 	"github.com/gsoultan/metis/server/domains/entities"
 	"github.com/gsoultan/metis/server/repositories/gorms"
 	"github.com/gsoultan/metis/server/repositories/models"
+	"github.com/gsoultan/metis/server/repositories/pg"
 	"github.com/gsoultan/metis/tests/testutils"
 	"gorm.io/gorm"
 )
@@ -662,7 +664,9 @@ func TestTenantIsolation_ProjectsAreScoped(t *testing.T) {
 	forEachDialect(t, func(t *testing.T, db *gorm.DB) {
 		f := seedTenantFixture(t, db)
 		ctx := f.ctxAsA(t)
-		repo := gorms.NewProjectRepository(db)
+		// Projects have moved to storm; the scoping property is the same and
+		// is asserted through the same contract.
+		repo := pg.NewProjectRepository(testutils.StormConn(db))
 
 		t.Run("list returns only the caller's projects", func(t *testing.T) {
 			rows, err := repo.List(ctx)
@@ -682,8 +686,8 @@ func TestTenantIsolation_ProjectsAreScoped(t *testing.T) {
 		})
 
 		t.Run("get denies another tenant's project", func(t *testing.T) {
-			if _, err := repo.Get(ctx, f.projectB); !errors.Is(err, gorm.ErrRecordNotFound) {
-				t.Fatalf("got %v, want %v", err, gorm.ErrRecordNotFound)
+			if _, err := repo.Get(ctx, f.projectB); !errors.Is(err, apierr.ErrNotFound) {
+				t.Fatalf("got %v, want %v", err, apierr.ErrNotFound)
 			}
 		})
 
@@ -694,8 +698,8 @@ func TestTenantIsolation_ProjectsAreScoped(t *testing.T) {
 		})
 
 		t.Run("delete denies another tenant's project", func(t *testing.T) {
-			if err := repo.Delete(ctx, f.projectB); !errors.Is(err, gorm.ErrRecordNotFound) {
-				t.Errorf("got %v, want %v", err, gorm.ErrRecordNotFound)
+			if err := repo.Delete(ctx, f.projectB); !errors.Is(err, apierr.ErrNotFound) {
+				t.Errorf("got %v, want %v", err, apierr.ErrNotFound)
 			}
 			if !rowExists(t, db, &models.ProjectModel{}, "projects", f.projectB) {
 				t.Fatal("the delete was refused but the project is gone")
@@ -708,8 +712,8 @@ func TestTenantIsolation_ProjectsAreScoped(t *testing.T) {
 				OrganizationID: models.FromUUID(f.orgB),
 				Name:           "planted",
 			})
-			if !errors.Is(err, gorm.ErrRecordNotFound) {
-				t.Fatalf("got %v, want %v", err, gorm.ErrRecordNotFound)
+			if !errors.Is(err, apierr.ErrNotFound) {
+				t.Fatalf("got %v, want %v", err, apierr.ErrNotFound)
 			}
 		})
 	})

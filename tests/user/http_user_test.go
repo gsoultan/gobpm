@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	"github.com/gsoultan/metis/server/domains/entities"
 	handlersimpl "github.com/gsoultan/metis/server/domains/handlers/impl"
 	"github.com/gsoultan/metis/server/domains/observers/impl"
@@ -16,45 +15,19 @@ import (
 	service_impl "github.com/gsoultan/metis/server/domains/services/impl"
 	"github.com/gsoultan/metis/server/endpoints"
 	"github.com/gsoultan/metis/server/repositories"
-	models2 "github.com/gsoultan/metis/server/repositories/models"
 	"github.com/gsoultan/metis/server/transports/https"
-	"gorm.io/gorm"
+	"github.com/gsoultan/metis/tests/testutils"
 )
 
 func setupHTTPTestService(t *testing.T) (services.ServiceFacade, http.Handler) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("failed to open db: %v", err)
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatalf("failed to get sql.DB: %v", err)
-	}
-	sqlDB.SetMaxOpenConns(1)
-	err = db.AutoMigrate(
-		&models2.OrganizationModel{},
-		&models2.ProcessInstanceModel{},
-		&models2.TaskModel{},
-		&models2.ProcessDefinitionModel{},
-		&models2.ProjectModel{},
-		&models2.AuditModel{},
-		&models2.JobModel{},
-		&models2.IncidentModel{},
-		&models2.ExternalTaskModel{},
-		&models2.Subscription{},
-		&models2.DecisionDefinitionModel{},
-		&models2.Connector{},
-		&models2.ConnectorInstance{},
-		&models2.UserModel{},
-		&models2.GroupModel{},
-		&models2.MembershipModel{},
-	)
-	if err != nil {
-		t.Fatalf("failed to migrate: %v", err)
-	}
+	// The shared harness rather than a hand-rolled database and model list.
+	// Its own list drifted from the real one — a model added to the schema was
+	// simply absent here — and it opened SQLite, which the product no longer
+	// runs on and which has no storm connection for the ported repositories.
+	db := testutils.SetupTestDB(t)
 
-	repo := repositories.NewRepository(db)
+	repo := repositories.NewRepository(db, testutils.StormConn(db))
 	dispatcher := impl.NewEventDispatcher()
 
 	orgSvc := service_impl.NewOrganizationService(repo)

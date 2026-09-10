@@ -88,7 +88,7 @@ func jobServiceWithLocker(t *testing.T, locker interface {
 	Release(context.Context, string) error
 }) (*jobService, repositories.Repository) {
 	t.Helper()
-	repo := repositories.NewRepository(testutils.SetupTestDB(t))
+	repo := repositories.NewRepository(testutils.SetupTestStore(t))
 	engine := NewExecutionEngine(repo, observerimpl.NewEventDispatcher())
 	svc := NewJobService(repo, engine, NewConnectorService(repo), locker, handlersimpl.NewErrorBoundaryMatcher())
 	js, ok := svc.(*jobService)

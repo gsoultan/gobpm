@@ -20,7 +20,7 @@ import (
 // produces — that made the whole thing unreachable, permanently. There is no
 // default account to fall back to, by design.
 func TestSetPassword_ReplacesTheOldOne(t *testing.T) {
-	repo := repositories.NewRepository(testutils.SetupTestDB(t))
+	repo := repositories.NewRepository(testutils.SetupTestStore(t))
 	svc := serviceimpl.NewUserService(repo, "test-jwt-secret")
 	ctx := t.Context()
 
@@ -40,7 +40,7 @@ func TestSetPassword_ReplacesTheOldOne(t *testing.T) {
 
 // Everything else about the account stays as it was: a reset is not an edit.
 func TestSetPassword_LeavesTheRestOfTheAccountAlone(t *testing.T) {
-	repo := repositories.NewRepository(testutils.SetupTestDB(t))
+	repo := repositories.NewRepository(testutils.SetupTestStore(t))
 	svc := serviceimpl.NewUserService(repo, "test-jwt-secret")
 	ctx := t.Context()
 
@@ -63,7 +63,7 @@ func TestSetPassword_LeavesTheRestOfTheAccountAlone(t *testing.T) {
 }
 
 func TestSetPassword_RejectsAPasswordTooShortToBeWorthHaving(t *testing.T) {
-	repo := repositories.NewRepository(testutils.SetupTestDB(t))
+	repo := repositories.NewRepository(testutils.SetupTestStore(t))
 	svc := serviceimpl.NewUserService(repo, "test-jwt-secret")
 	ctx := t.Context()
 
@@ -82,7 +82,7 @@ func TestSetPassword_RejectsAPasswordTooShortToBeWorthHaving(t *testing.T) {
 }
 
 func TestSetPassword_ReportsAnUnknownUser(t *testing.T) {
-	repo := repositories.NewRepository(testutils.SetupTestDB(t))
+	repo := repositories.NewRepository(testutils.SetupTestStore(t))
 	svc := serviceimpl.NewUserService(repo, "test-jwt-secret")
 
 	err := svc.SetPassword(t.Context(), "nobody", "a-brand-new-password")

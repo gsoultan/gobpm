@@ -16,7 +16,7 @@ func TestBPMNEvents(t *testing.T) {
 	ctx := t.Context()
 	db := testutils.SetupTestDB(t)
 
-	repo := repositories.NewRepository(db)
+	repo := repositories.NewRepository(db, testutils.StormConn(db))
 	dispatcher := impl.NewEventDispatcher()
 
 	orgSvc := service_impl2.NewOrganizationService(repo)

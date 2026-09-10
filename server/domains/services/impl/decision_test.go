@@ -13,7 +13,7 @@ import (
 func TestDecisionService_FullDMN(t *testing.T) {
 	ctx := context.Background()
 	db := testutils.SetupTestDB(t)
-	repo := repositories.NewRepository(db)
+	repo := repositories.NewRepository(db, testutils.StormConn(db))
 	svc := NewDecisionService(repo, NewDecisionTableEvaluator(NewFEELEvaluator()))
 
 	projectID, _ := uuid.NewV7()

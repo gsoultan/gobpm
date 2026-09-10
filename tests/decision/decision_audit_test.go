@@ -173,7 +173,7 @@ func buildBusinessRuleHarness(t *testing.T, audit servicecontracts.AuditWriter) 
 	t.Helper()
 	db := testutils.SetupTestDB(t)
 	ctx := t.Context()
-	repo := repositories.NewRepository(db)
+	repo := repositories.NewRepository(db, testutils.StormConn(db))
 
 	if audit == nil {
 		audit = serviceimpl.NewAuditWriter(repo.Audit())

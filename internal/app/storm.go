@@ -78,6 +78,18 @@ func (a *App) ensureStormSchema(ctx context.Context) error {
 		log.Info().Strs("tables", created).Msg("Created tables for the storm repositories")
 	}
 
+	// The tables GORM made have no database defaults on the columns storm
+	// expects the database to supply. Reconciled here rather than left to drift,
+	// because the symptom is a decode panic on a NULL timestamp rather than
+	// anything that reads like a schema problem.
+	defaulted, err := db.EnsureColumnDefaults(ctx, a.storm.Main(), want)
+	if err != nil {
+		return fmt.Errorf("could not reconcile the storm column defaults: %w", err)
+	}
+	if len(defaulted) > 0 {
+		log.Info().Strs("columns", defaulted).Msg("Gave shared columns the defaults storm writes against")
+	}
+
 	// Named, not fixed, and not fatal. An installation whose tables predate a
 	// model change keeps working; what it must not do is keep working while
 	// nobody can tell. See db.ReportDrift for why the alternative fails late and

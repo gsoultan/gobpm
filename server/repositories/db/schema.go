@@ -155,3 +155,68 @@ func ReportDrift(ctx context.Context, pool *pgxpool.Pool, want *schema.Schema) (
 	}
 	return drift, nil
 }
+
+// EnsureColumnDefaults gives the columns storm writes the database defaults its
+// own DDL would have given them.
+//
+// storm omits a column from an INSERT when the model says the database supplies
+// it — an identifier, a created_at — and reads the value back from RETURNING.
+// GORM fills those in Go instead and creates the column with no default, so a
+// table GORM made and storm writes to hands back NULL and the decoder panics on
+// a zero-length timestamp.
+//
+// This is the reconciliation, and it is additive: it adds a default where there
+// is none and never changes one that is already there. Both layers then agree
+// about who supplies the value, which is the property that lets a repository
+// move from one to the other without its table changing underneath it.
+//
+// Derived from the model rather than a hand-written list, so a table added to
+// the model layer is covered without anybody remembering to add it here.
+func EnsureColumnDefaults(ctx context.Context, pool *pgxpool.Pool, want *schema.Schema) ([]string, error) {
+	if pool == nil || want == nil {
+		return nil, nil
+	}
+
+	var applied []string
+	for _, table := range want.Tables {
+		present, err := tableExists(ctx, pool, table.Name)
+		if err != nil {
+			return applied, err
+		}
+		if !present {
+			continue
+		}
+		for _, column := range table.Columns {
+			if column.Default == "" {
+				continue
+			}
+			has, err := columnHasDefault(ctx, pool, table.Name, column.Name)
+			if err != nil {
+				return applied, err
+			}
+			if has {
+				continue
+			}
+			statement := fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s SET DEFAULT %s",
+				pgddl.Ident(table.Name), pgddl.Ident(column.Name), column.Default)
+			if _, err := pool.Exec(ctx, statement); err != nil {
+				return applied, fmt.Errorf("could not default %s.%s: %w", table.Name, column.Name, err)
+			}
+			applied = append(applied, table.Name+"."+column.Name)
+		}
+	}
+	return applied, nil
+}
+
+func columnHasDefault(ctx context.Context, pool *pgxpool.Pool, table, column string) (bool, error) {
+	var has bool
+	err := pool.QueryRow(ctx,
+		`SELECT column_default IS NOT NULL
+		   FROM information_schema.columns
+		  WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2`,
+		table, column).Scan(&has)
+	if err != nil {
+		return false, fmt.Errorf("could not read the default on %s.%s: %w", table, column, err)
+	}
+	return has, nil
+}

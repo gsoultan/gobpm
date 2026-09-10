@@ -95,6 +95,25 @@ jobs:
     name: Go (build, vet, race, vuln)
     needs: ui
     runs-on: ubuntu-latest
+
+    env:
+      METIS_TEST_POSTGRES_DSN: "host=127.0.0.1 port=5432 user=postgres password=gobpm dbname=gobpm sslmode=disable"
+      STORM_DSN: "postgres://postgres:gobpm@127.0.0.1:5432/gobpm?sslmode=disable"
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: gobpm
+          POSTGRES_DB: gobpm
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d gobpm"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 24
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -144,8 +163,31 @@ jobs:
       # race pass is not a race pass at all.
       #
       # The default stays cached for local runs; only CI opts out.
+      # The test harness is PostgreSQL: a suite with no DSN skips, so this job
+      # would go green having run nothing. That is why there is no longer a
+      # separate "databases" job — every suite needs one now, and a split where
+      # only half the tests met a database is how three dialect suites went
+      # years without running.
+      #
+      # -p 2 because every package opens its own pool against one server and the
+      # default parallelism exhausts PostgreSQL's connections; the dial timeout
+      # that produces reads exactly like a defect.
       - name: Tests
-        run: make test GO_TEST_FLAGS=-count=1
+        run: make test GO_TEST_FLAGS="-count=1 -p 2"
+
+      # A skip means a DSN did not reach the tests, which is the failure this
+      # guards. Asserted rather than eyeballed, and -count=1 above because a
+      # cached run prints no test lines at all — so the assertion would pass by
+      # having nothing to read.
+      - name: No suite skipped for want of a database
+        run: |
+          set -o pipefail
+          go test -count=1 -p 2 ./... 2>&1 | tee /tmp/suite.log
+          if grep -q -- "--- SKIP" /tmp/suite.log; then
+            echo "::error::A test skipped, which means its DSN did not reach it:"
+            grep -- "--- SKIP" /tmp/suite.log
+            exit 1
+          fi
 
       - name: Race detector
         run: make race GO_TEST_FLAGS=-count=1
@@ -173,92 +215,6 @@ jobs:
           # arguments, and govulncheck would scan neither.
           mapfile -t packages < <(go list ./... | grep -v '/node_modules/')
           govulncheck "${packages[@]}"
-
-  database:
-    name: Database (PostgreSQL)
-    needs: ui
-    runs-on: ubuntu-latest
-
-    # This used to start PostgreSQL, MySQL and SQL Server, because the engine
-    # supported all three and every dialect-specific test skipped when its DSN
-    # was unset — which none of them was, anywhere, so "this query behaves
-    # differently on MySQL" was a class of bug nothing looked for. It is one
-    # engine now, and the suites that proved portability are gone with the
-    # portability.
-    #
-    # What is left is the part that mattered: the tests that need a real
-    # database run against one, and a skip is a failure rather than a line
-    # nobody reads.
-
-    env:
-      METIS_TEST_POSTGRES_DSN: "host=127.0.0.1 port=5432 user=postgres password=gobpm dbname=gobpm sslmode=disable"
-      STORM_DSN: "postgres://postgres:gobpm@127.0.0.1:5432/gobpm?sslmode=disable"
-
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_PASSWORD: gobpm
-          POSTGRES_DB: gobpm
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d gobpm"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 24
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-
-      - name: Download UI dist
-        uses: actions/download-artifact@v4
-        with:
-          name: ui-dist
-          path: ui/dist
-
-      # A skip here means a DSN did not reach the tests, which is the failure
-      # this job exists to prevent — so the count is asserted rather than eyeballed.
-      #
-      # -count=1 for the same reason. Go's test cache is content-addressed over
-      # the code and models nothing about which database answered: on a runner
-      # whose GOCACHE survives between runs, an unchanged tree returns
-      # "ok ... (cached)" without opening a connection. That is not a hypothesis
-      # — it is what this job did on the run that added it, going green in 34s
-      # having started a database and talked to it not at all. Worse, a cached
-      # run prints no test lines, so the skip assertion passes by having nothing
-      # to read. Both are checked because both look exactly like success.
-      #
-      # -p 4 because every package opens its own pool against one server, and
-      # the default parallelism exhausts its connections — a dial timeout that
-      # reads like a defect and is not.
-      - name: Run the suites that need a database
-        run: |
-          set -o pipefail
-          # tests/slo is here rather than only in the module-wide run because
-          # that run has no DSN, and the targets in roadmap.md §1 are stated for
-          # the database people actually deploy.
-          go test -count=1 -p 4 -v ./tests/postgres/... \
-            ./tests/tenant/... ./tests/migrations/... ./tests/replicas/... ./tests/outage/... \
-            ./tests/slo/... ./tests/model/... ./tests/userimport/... ./tests/participantsource/... \
-            ./tests/environment/... \
-            2>&1 | tee /tmp/database.log
-          if grep -q -- "--- SKIP" /tmp/database.log; then
-            echo "::error::A test skipped, which means its DSN did not reach it:"
-            grep -- "--- SKIP" /tmp/database.log
-            exit 1
-          fi
-          if grep -q -- "(cached)" /tmp/database.log; then
-            echo "::error::A suite was served from the test cache, so no database was contacted:"
-            grep -- "(cached)" /tmp/database.log
-            exit 1
-          fi
 
   golangci-lint:
     name: golangci-lint

@@ -46,7 +46,7 @@ response:
 `)
 
 	// One service installs it…
-	installed, err := serviceimpl.NewConnectorService(repositories.NewRepository(db)).
+	installed, err := serviceimpl.NewConnectorService(repositories.NewRepository(db, testutils.StormConn(db))).
 		InstallManifest(ctx, document)
 	if err != nil {
 		t.Fatalf("install: %v", err)
@@ -58,7 +58,7 @@ response:
 	// …and a completely separate one — a different replica, or this one after a
 	// restart — can call it, because the manifest is in the database rather than
 	// in the first service's memory.
-	afterRestart := serviceimpl.NewConnectorService(repositories.NewRepository(db))
+	afterRestart := serviceimpl.NewConnectorService(repositories.NewRepository(db, testutils.StormConn(db)))
 	outputs, err := afterRestart.ExecuteConnector(ctx, "crm.create-lead", nil, map[string]any{"name": "Rex"})
 	if err != nil {
 		t.Fatalf("execute after restart: %v", err)
@@ -83,7 +83,7 @@ func TestInstallingTheSameKeyAgainReplacesIt(t *testing.T) {
 	}))
 	defer api.Close()
 
-	svc := serviceimpl.NewConnectorService(repositories.NewRepository(testutils.SetupTestDB(t)))
+	svc := serviceimpl.NewConnectorService(repositories.NewRepository(testutils.SetupTestStore(t)))
 	ctx := t.Context()
 
 	first := []byte("key: crm.x\nversion: 1\nrequest:\n  url: \"" + api.URL + "/old\"\n")
@@ -124,7 +124,7 @@ func TestASwitchedOffManifestIsNotUsed(t *testing.T) {
 	}))
 	defer api.Close()
 
-	svc := serviceimpl.NewConnectorService(repositories.NewRepository(testutils.SetupTestDB(t)))
+	svc := serviceimpl.NewConnectorService(repositories.NewRepository(testutils.SetupTestStore(t)))
 	ctx := t.Context()
 
 	installed, err := svc.InstallManifest(ctx, []byte("key: crm.y\nversion: 1\nrequest:\n  url: \""+api.URL+"\"\n"))
@@ -161,7 +161,7 @@ func TestAManifestReplacesABuiltIn(t *testing.T) {
 	}))
 	defer api.Close()
 
-	svc := serviceimpl.NewConnectorService(repositories.NewRepository(testutils.SetupTestDB(t)))
+	svc := serviceimpl.NewConnectorService(repositories.NewRepository(testutils.SetupTestStore(t)))
 	ctx := t.Context()
 
 	// "http-json" is registered as a built-in Go executor.
@@ -178,7 +178,7 @@ func TestAManifestReplacesABuiltIn(t *testing.T) {
 
 // An OpenAPI document installs one connector per operation, in one action.
 func TestImportingASpecificationInstallsEveryOperation(t *testing.T) {
-	svc := serviceimpl.NewConnectorService(repositories.NewRepository(testutils.SetupTestDB(t)))
+	svc := serviceimpl.NewConnectorService(repositories.NewRepository(testutils.SetupTestStore(t)))
 
 	spec := []byte(`
 openapi: 3.0.3
@@ -209,7 +209,7 @@ paths:
 // A manifest is stored as its author wrote it, so what an operator reads back is
 // what they installed — comments and all.
 func TestAManifestIsReadBackAsItWasWritten(t *testing.T) {
-	svc := serviceimpl.NewConnectorService(repositories.NewRepository(testutils.SetupTestDB(t)))
+	svc := serviceimpl.NewConnectorService(repositories.NewRepository(testutils.SetupTestStore(t)))
 	ctx := t.Context()
 
 	document := "# the vendor's own notes\nkey: crm.z\nversion: 1\nrequest:\n  url: https://example.com\n"
@@ -228,7 +228,7 @@ func TestAManifestIsReadBackAsItWasWritten(t *testing.T) {
 
 // A document that could not work is refused at install, not at 3am.
 func TestABrokenManifestIsRefusedAtInstall(t *testing.T) {
-	svc := serviceimpl.NewConnectorService(repositories.NewRepository(testutils.SetupTestDB(t)))
+	svc := serviceimpl.NewConnectorService(repositories.NewRepository(testutils.SetupTestStore(t)))
 
 	if _, err := svc.InstallManifest(t.Context(), []byte("key: broken\nversion: 1\n")); err == nil {
 		t.Error("a manifest with no request URL was installed")
