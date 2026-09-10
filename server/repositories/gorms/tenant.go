@@ -207,18 +207,3 @@ func requireVisible(
 	}
 	return nil
 }
-
-// tenantScopeDeploymentResources scopes deployment_resources through their
-// parent deployment, which is where the project — and therefore the tenant —
-// actually lives.
-func tenantScopeDeploymentResources(ctx context.Context, db *gorm.DB) *gorm.DB {
-	tc, ok := entities.TenantContextFrom(ctx)
-	if !ok || tc.TenantID == "" {
-		if unscopedAccessAllowed(ctx) {
-			return db
-		}
-		return denyAll(db)
-	}
-
-	return db.Joins(QueryTenantScopeViaDeployment, tc.TenantID)
-}

@@ -218,3 +218,12 @@ func (r *conn) scopedProjects(ctx context.Context, requested uuid.UUID) (project
 	}
 	return nil, false, nil
 }
+
+// canSeeInstance answers requireInstanceInTenant as a boolean.
+//
+// For the lists that turn "not yours" into no rows rather than an error. A
+// function whose error the caller must discard reads like a mistake, and is one
+// often enough that the linter refuses it.
+func (r *conn) canSeeInstance(ctx context.Context, instanceID uuid.UUID) bool {
+	return r.requireInstanceInTenant(ctx, instanceID) == nil
+}

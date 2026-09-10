@@ -68,15 +68,15 @@ var FlushOrder = map[string]int{
 	"process_definition_releases": 18,
 	"process_definitions":         19,
 	"process_instances":           20,
-	"resources":                   21,
-	"service_calls":               22,
-	"tasks":                       23,
-	"variable_snapshots":          24,
-	"webhook_deliveries":          25,
-	"workflow_group_memberships":  26,
-	"audit_logs":                  27,
-	"broadcast_events":            28,
-	"compensatable_activities":    29,
+	"service_calls":               21,
+	"tasks":                       22,
+	"variable_snapshots":          23,
+	"webhook_deliveries":          24,
+	"workflow_group_memberships":  25,
+	"audit_logs":                  26,
+	"broadcast_events":            27,
+	"compensatable_activities":    28,
+	"deployment_resources":        29,
 	"event_subscriptions":         30,
 	"external_tasks":              31,
 	"jobs":                        32,
@@ -4327,7 +4327,7 @@ func (p ProjectWithOrganizationQuery) All(ctx context.Context, ex runtime.Execut
 	return out, nil
 }
 
-// ResourceWithDeploymentRow is resources with its Deployment loaded.
+// ResourceWithDeploymentRow is deployment_resources with its Deployment loaded.
 type ResourceWithDeploymentRow struct {
 	resource.Row
 	Deployment deployment.Row
@@ -4437,7 +4437,7 @@ func (p ResourceWithDeploymentQuery) All(ctx context.Context, ex runtime.Executo
 		if !ok {
 			// A foreign key pointing at a row that is not there. The database
 			// forbids it, so reaching this means the constraint was dropped.
-			return nil, fmt.Errorf("storm: %s references a missing %s row", "resources", "deployments")
+			return nil, fmt.Errorf("storm: %s references a missing %s row", "deployment_resources", "deployments")
 		}
 		out[i].Deployment = targets[j]
 	}
@@ -6326,7 +6326,7 @@ func (p WorkflowUserWithProjectQuery) All(ctx context.Context, ex runtime.Execut
 }
 
 // DeploymentResourcesProbeQuery is a parent query with one or more existence probes against
-// resources, combined with AND. Build it with DeploymentHavingResources or
+// deployment_resources, combined with AND. Build it with DeploymentHavingResources or
 // DeploymentNotHavingResources and extend it with AndHaving/AndNotHaving.
 type DeploymentResourcesProbeQuery struct {
 	q deployment.Query
@@ -6338,18 +6338,18 @@ type deploymentResourcesProbeQueryProbe struct {
 	neg bool
 }
 
-// DeploymentHavingResources narrows q to rows with at least one matching resources row —
+// DeploymentHavingResources narrows q to rows with at least one matching deployment_resources row —
 // the filtered semi-join, in one statement. The child predicates are
 // typed by the child's own package; ids and values meet only here.
 func DeploymentHavingResources(q deployment.Query, ps ...resource.Pred) DeploymentResourcesProbeQuery {
 	return DeploymentResourcesProbeQuery{q: q}.AndHaving(ps...)
 }
 
-// DeploymentNotHavingResources narrows q to rows with NO matching resources row — the
+// DeploymentNotHavingResources narrows q to rows with NO matching deployment_resources row — the
 // filtered anti-join.
 //
-// Read the predicates carefully: this is "has no resources row matching
-// these", not "has a resources row that does not match". With no predicates
+// Read the predicates carefully: this is "has no deployment_resources row matching
+// these", not "has a deployment_resources row that does not match". With no predicates
 // at all it is "has none". The two questions have different answers
 // whenever a parent has several children, and SQL spells them the same
 // way round.
@@ -6357,13 +6357,13 @@ func DeploymentNotHavingResources(q deployment.Query, ps ...resource.Pred) Deplo
 	return DeploymentResourcesProbeQuery{q: q}.AndNotHaving(ps...)
 }
 
-// AndHaving adds another EXISTS probe against resources, ANDed with the
+// AndHaving adds another EXISTS probe against deployment_resources, ANDed with the
 // ones already there.
 func (h DeploymentResourcesProbeQuery) AndHaving(ps ...resource.Pred) DeploymentResourcesProbeQuery {
 	return h.probe(false, ps...)
 }
 
-// AndNotHaving adds a NOT EXISTS probe against resources. This is how
+// AndNotHaving adds a NOT EXISTS probe against deployment_resources. This is how
 // "has one of these but none of those" is one statement:
 //
 //	DeploymentHavingResources(q, bought).AndNotHaving(alsoBought)
@@ -6393,9 +6393,9 @@ var deploymentResourcesProbeQueryLowering = func() runtime.Lowering {
 	// Both probes are the same relation, so only the polarity varies.
 	lw.Exists = func(rel uint32) string {
 		if rel == 1 {
-			return "NOT EXISTS (SELECT 1 FROM \"resources\" AS \"_storm_e\" WHERE \"_storm_e\".\"deployment_id\" = \"deployments\".\"id\" AND \"_storm_e\".\"deleted_at\" IS NULL"
+			return "NOT EXISTS (SELECT 1 FROM \"deployment_resources\" AS \"_storm_e\" WHERE \"_storm_e\".\"deployment_id\" = \"deployments\".\"id\" AND \"_storm_e\".\"deleted_at\" IS NULL"
 		}
-		return "EXISTS (SELECT 1 FROM \"resources\" AS \"_storm_e\" WHERE \"_storm_e\".\"deployment_id\" = \"deployments\".\"id\" AND \"_storm_e\".\"deleted_at\" IS NULL"
+		return "EXISTS (SELECT 1 FROM \"deployment_resources\" AS \"_storm_e\" WHERE \"_storm_e\".\"deployment_id\" = \"deployments\".\"id\" AND \"_storm_e\".\"deleted_at\" IS NULL"
 	}
 	return lw
 }()

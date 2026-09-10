@@ -220,7 +220,7 @@ func TestTenantIsolation_ListsExcludeOtherTenants(t *testing.T) {
 			{
 				name: "deployments across all projects",
 				read: func() ([]uuid.UUID, error) {
-					rows, err := gorms.NewDeploymentRepository(db).ListByProject(ctx, uuid.Nil)
+					rows, err := pg.NewDeploymentRepository(testutils.StormConn(db)).ListByProject(ctx, uuid.Nil)
 					return idsOf(rows, func(m models.DeploymentModel) uuid.UUID { return uuid.UUID(m.ID) }), err
 				},
 				want: []uuid.UUID{f.deploymentA},
@@ -228,7 +228,7 @@ func TestTenantIsolation_ListsExcludeOtherTenants(t *testing.T) {
 			{
 				name: "deployment resources of another tenant's deployment",
 				read: func() ([]uuid.UUID, error) {
-					rows, err := gorms.NewDeploymentRepository(db).ListResources(ctx, f.deploymentB)
+					rows, err := pg.NewDeploymentRepository(testutils.StormConn(db)).ListResources(ctx, f.deploymentB)
 					return idsOf(rows, func(m models.ResourceModel) uuid.UUID { return uuid.UUID(m.ID) }), err
 				},
 				want: nil,
@@ -252,7 +252,7 @@ func TestTenantIsolation_ListsExcludeOtherTenants(t *testing.T) {
 			{
 				name: "external tasks of another tenant's instance",
 				read: func() ([]uuid.UUID, error) {
-					rows, err := gorms.NewExternalTaskRepository(db).ListByProcessInstance(ctx, f.instanceB)
+					rows, err := pg.NewExternalTaskRepository(testutils.StormConn(db)).ListByProcessInstance(ctx, f.instanceB)
 					return idsOf(rows, func(m *models.ExternalTaskModel) uuid.UUID { return uuid.UUID(m.ID) }), err
 				},
 				want: nil,
@@ -263,7 +263,7 @@ func TestTenantIsolation_ListsExcludeOtherTenants(t *testing.T) {
 				// B's task, and both tasks are unlocked and eligible here.
 				name: "worker long-poll on a topic both tenants use",
 				read: func() ([]uuid.UUID, error) {
-					rows, err := gorms.NewExternalTaskRepository(db).FetchAndLock(ctx, sharedTopic, "worker-a", 10, 30_000)
+					rows, err := pg.NewExternalTaskRepository(testutils.StormConn(db)).FetchAndLock(ctx, sharedTopic, "worker-a", 10, 30_000)
 					return idsOf(rows, func(m *models.ExternalTaskModel) uuid.UUID { return uuid.UUID(m.ID) }), err
 				},
 				want: []uuid.UUID{f.externalTaskA},
@@ -315,12 +315,18 @@ func TestTenantIsolation_GetByIDDeniesOtherTenants(t *testing.T) {
 				_, err := pg.NewFormRepository(testutils.StormConn(db)).GetByKey(ctx, f.projectB, sharedFormKey)
 				return err
 			}},
-			{"deployment", func() error { _, err := gorms.NewDeploymentRepository(db).Get(ctx, f.deploymentB); return err }},
-			{"deployment resource", func() error {
-				_, err := gorms.NewDeploymentRepository(db).GetResource(ctx, f.resourceB)
+			{"deployment", func() error {
+				_, err := pg.NewDeploymentRepository(testutils.StormConn(db)).Get(ctx, f.deploymentB)
 				return err
 			}},
-			{"external task", func() error { _, err := gorms.NewExternalTaskRepository(db).Get(ctx, f.extB); return err }},
+			{"deployment resource", func() error {
+				_, err := pg.NewDeploymentRepository(testutils.StormConn(db)).GetResource(ctx, f.resourceB)
+				return err
+			}},
+			{"external task", func() error {
+				_, err := pg.NewExternalTaskRepository(testutils.StormConn(db)).Get(ctx, f.extB)
+				return err
+			}},
 			{"connector instance", func() error {
 				_, err := pg.NewConnectorInstanceRepository(testutils.StormConn(db)).Get(ctx, f.connInstB)
 				return err
@@ -517,7 +523,7 @@ func TestTenantIsolation_WritesDenyOtherTenants(t *testing.T) {
 			{
 				name: "resolve another tenant's external task",
 				write: func() error {
-					return gorms.NewExternalTaskRepository(db).Update(ctx, &models.ExternalTaskModel{
+					return pg.NewExternalTaskRepository(testutils.StormConn(db)).Update(ctx, &models.ExternalTaskModel{
 						Base:      models.Base{ID: models.FromUUID(f.extB)},
 						ProjectID: models.FromUUID(f.projectA),
 						Topic:     "stolen",
@@ -533,7 +539,7 @@ func TestTenantIsolation_WritesDenyOtherTenants(t *testing.T) {
 			},
 			{
 				name:  "delete another tenant's external task",
-				write: func() error { return gorms.NewExternalTaskRepository(db).Delete(ctx, f.extB) },
+				write: func() error { return pg.NewExternalTaskRepository(testutils.StormConn(db)).Delete(ctx, f.extB) },
 				unchanged: func() bool {
 					return rowExists(t, db, &models.ExternalTaskModel{}, "external_tasks", f.extB)
 				},
@@ -754,7 +760,7 @@ func TestTenantIsolation_CreateDeniesForeignProject(t *testing.T) {
 					models.FormModel{Base: newID(), ProjectID: foreign, Key: "planted"})
 			}},
 			{"deployment", func() error {
-				return gorms.NewDeploymentRepository(db).Create(ctx,
+				return pg.NewDeploymentRepository(testutils.StormConn(db)).Create(ctx,
 					models.DeploymentModel{Base: newID(), ProjectID: foreign, Name: "planted"})
 			}},
 			{"task", func() error {
@@ -832,13 +838,16 @@ func TestTenantIsolation_OwnRowsStillReadable(t *testing.T) {
 				_, err := pg.NewFormRepository(testutils.StormConn(db)).GetByKey(ctx, f.projectA, sharedFormKey)
 				return err
 			}},
-			{"deployment", func() error { _, err := gorms.NewDeploymentRepository(db).Get(ctx, f.deploymentA); return err }},
+			{"deployment", func() error {
+				_, err := pg.NewDeploymentRepository(testutils.StormConn(db)).Get(ctx, f.deploymentA)
+				return err
+			}},
 			{"deployment resource", func() error {
-				_, err := gorms.NewDeploymentRepository(db).GetResource(ctx, f.resourceA)
+				_, err := pg.NewDeploymentRepository(testutils.StormConn(db)).GetResource(ctx, f.resourceA)
 				return err
 			}},
 			{"external task", func() error {
-				_, err := gorms.NewExternalTaskRepository(db).Get(ctx, f.externalTaskA)
+				_, err := pg.NewExternalTaskRepository(testutils.StormConn(db)).Get(ctx, f.externalTaskA)
 				return err
 			}},
 			{"connector instance", func() error {
@@ -859,7 +868,7 @@ func TestTenantIsolation_OwnRowsStillReadable(t *testing.T) {
 		}
 
 		t.Run("own deployment resources", func(t *testing.T) {
-			rows, err := gorms.NewDeploymentRepository(db).ListResources(ctx, f.deploymentA)
+			rows, err := pg.NewDeploymentRepository(testutils.StormConn(db)).ListResources(ctx, f.deploymentA)
 			if err != nil {
 				t.Fatalf("list: %v", err)
 			}

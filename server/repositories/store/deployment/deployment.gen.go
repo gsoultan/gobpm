@@ -1052,8 +1052,8 @@ var fragTable = [7][27]runtime.Frag{
 		{},
 		{},
 		{},
-		{A: "EXISTS (SELECT 1 FROM \"resources\" AS \"_storm_e\" WHERE \"_storm_e\".\"deployment_id\" = \"deployments\".\"id\" AND \"_storm_e\".\"deleted_at\" IS NULL)"},
-		{A: "NOT EXISTS (SELECT 1 FROM \"resources\" AS \"_storm_e\" WHERE \"_storm_e\".\"deployment_id\" = \"deployments\".\"id\" AND \"_storm_e\".\"deleted_at\" IS NULL)"},
+		{A: "EXISTS (SELECT 1 FROM \"deployment_resources\" AS \"_storm_e\" WHERE \"_storm_e\".\"deployment_id\" = \"deployments\".\"id\" AND \"_storm_e\".\"deleted_at\" IS NULL)"},
+		{A: "NOT EXISTS (SELECT 1 FROM \"deployment_resources\" AS \"_storm_e\" WHERE \"_storm_e\".\"deployment_id\" = \"deployments\".\"id\" AND \"_storm_e\".\"deleted_at\" IS NULL)"},
 	},
 }
 

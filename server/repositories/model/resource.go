@@ -22,6 +22,11 @@ type Resource struct {
 }
 
 func (r *Resource) Schema(t *storm.Table) {
+	// deployment_resources, not resources. The table exists and holds data;
+	// storm would derive the generic name from the type, and a table with two
+	// names is the drift this port exists to end — but renaming a live table for
+	// tidiness is not worth the lock, and the longer name says more.
+	t.Name("deployment_resources")
 	t.Col(&r.Name).Size(255)
 	t.Col(&r.Type).Size(64)
 	t.Col(&r.DeletedAt).Index()
