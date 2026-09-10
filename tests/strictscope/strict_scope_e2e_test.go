@@ -51,7 +51,7 @@ func newHarness(t *testing.T) *harness {
 	t.Helper()
 
 	db := testutils.SetupTestDB(t)
-	repo := repositories.NewRepository(db, testutils.StormConn(db))
+	repo := repositories.NewRepository(testutils.StormConn(db))
 	dispatcher := observersimpl.NewEventDispatcher()
 	sse := observersimpl.NewSSEObserver()
 	svc := services.NewServiceFacade(repo, dispatcher, sse, "strict-scope-test-secret", nil, nil, nil, func(*gorm.DB) {})

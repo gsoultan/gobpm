@@ -7,7 +7,6 @@ import (
 
 	"github.com/gsoultan/metis/server/repositories/contracts"
 	"github.com/gsoultan/storm/runtime"
-	"gorm.io/gorm"
 )
 
 // Deploying a process or a decision allocates a version number by reading the
@@ -69,11 +68,9 @@ func allocateVersion(
 		if err == nil {
 			return nil
 		}
-		// Either layer's way of saying "that number is taken": GORM translates
-		// the constraint into ErrDuplicatedKey, storm classifies it as
-		// ErrUniqueViolation. Both mean another deploy won the race, and both
-		// mean the answer is to propose the next number rather than to fail.
-		if !errors.Is(err, gorm.ErrDuplicatedKey) && !errors.Is(err, runtime.ErrUniqueViolation) {
+		// Another deploy won the race for that number, which is contention
+		// rather than a bad request: the answer is to propose the next one.
+		if !errors.Is(err, runtime.ErrUniqueViolation) {
 			return err
 		}
 		lastErr = err

@@ -345,7 +345,7 @@ func TestAdvancedTasks(t *testing.T) {
 // how three connector bugs shipped with this suite green.
 func newHandlerHarness(t *testing.T) (services.ServiceFacade, servicecontracts.JobService) {
 	t.Helper()
-	repo := repositories.NewRepository(testutils.SetupTestStore(t))
+	repo := repositories.NewRepository(testutils.SetupTestConn(t))
 	dispatcher := impl.NewEventDispatcher()
 
 	engine := service_impl2.NewExecutionEngine(repo, dispatcher)

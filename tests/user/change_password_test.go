@@ -20,7 +20,7 @@ import (
 // access to the machine — including the administrator's own, which the setup
 // wizard sets once and could never rotate.
 func TestChangePassword_ReplacesTheOldOne(t *testing.T) {
-	repo := repositories.NewRepository(testutils.SetupTestStore(t))
+	repo := repositories.NewRepository(testutils.SetupTestConn(t))
 	svc := serviceimpl.NewUserService(repo, "test-jwt-secret")
 	ctx := t.Context()
 	id := seedUser(t, repo, "alice", "the-old-password")
@@ -44,7 +44,7 @@ func TestChangePassword_ReplacesTheOldOne(t *testing.T) {
 // account permanently. Session theft should cost access until the token
 // expires, not the account.
 func TestChangePassword_RefusesWithoutTheCurrentPassword(t *testing.T) {
-	repo := repositories.NewRepository(testutils.SetupTestStore(t))
+	repo := repositories.NewRepository(testutils.SetupTestConn(t))
 	svc := serviceimpl.NewUserService(repo, "test-jwt-secret")
 	ctx := t.Context()
 	id := seedUser(t, repo, "alice", "the-old-password")
@@ -69,7 +69,7 @@ func TestChangePassword_RefusesWithoutTheCurrentPassword(t *testing.T) {
 // exactly wrong after a suspected compromise: the user believes they have
 // locked the attacker out.
 func TestChangePassword_RefusesANoOpRotation(t *testing.T) {
-	repo := repositories.NewRepository(testutils.SetupTestStore(t))
+	repo := repositories.NewRepository(testutils.SetupTestConn(t))
 	svc := serviceimpl.NewUserService(repo, "test-jwt-secret")
 	ctx := t.Context()
 	id := seedUser(t, repo, "alice", "the-old-password")
@@ -81,7 +81,7 @@ func TestChangePassword_RefusesANoOpRotation(t *testing.T) {
 
 // A short password is refused on the way in, not stored and discovered later.
 func TestChangePassword_EnforcesTheMinimumLength(t *testing.T) {
-	repo := repositories.NewRepository(testutils.SetupTestStore(t))
+	repo := repositories.NewRepository(testutils.SetupTestConn(t))
 	svc := serviceimpl.NewUserService(repo, "test-jwt-secret")
 	ctx := t.Context()
 	id := seedUser(t, repo, "alice", "the-old-password")
@@ -136,7 +136,7 @@ func TestLocalUserIDFromContext_RefusesAnAnonymousCaller(t *testing.T) {
 // against the attacker already holding a session. That is the one thing they
 // were trying to do, and the change reported success while not doing it.
 func TestChangePassword_InvalidatesTokensIssuedBeforeIt(t *testing.T) {
-	repo := repositories.NewRepository(testutils.SetupTestStore(t))
+	repo := repositories.NewRepository(testutils.SetupTestConn(t))
 	svc := serviceimpl.NewUserService(repo, "test-jwt-secret")
 	ctx := t.Context()
 	id := seedUser(t, repo, "alice", "the-old-password")
@@ -167,7 +167,7 @@ func TestChangePassword_InvalidatesTokensIssuedBeforeIt(t *testing.T) {
 // the path used when the account holder cannot get in, which is exactly the
 // situation where somebody else can.
 func TestSetPassword_InvalidatesTokensIssuedBeforeIt(t *testing.T) {
-	repo := repositories.NewRepository(testutils.SetupTestStore(t))
+	repo := repositories.NewRepository(testutils.SetupTestConn(t))
 	svc := serviceimpl.NewUserService(repo, "test-jwt-secret")
 	ctx := t.Context()
 	seedUser(t, repo, "alice", "the-old-password")
@@ -190,7 +190,7 @@ func TestSetPassword_InvalidatesTokensIssuedBeforeIt(t *testing.T) {
 // The account holder is not locked out by their own change: a token issued
 // after it is honoured.
 func TestChangePassword_LeavesLaterTokensWorking(t *testing.T) {
-	repo := repositories.NewRepository(testutils.SetupTestStore(t))
+	repo := repositories.NewRepository(testutils.SetupTestConn(t))
 	svc := serviceimpl.NewUserService(repo, "test-jwt-secret")
 	ctx := t.Context()
 	id := seedUser(t, repo, "alice", "the-old-password")
@@ -213,7 +213,7 @@ func TestChangePassword_LeavesLaterTokensWorking(t *testing.T) {
 // would have signed out every user on the installation at the moment of an
 // upgrade — a self-inflicted outage in the name of a fix.
 func TestTokensSurviveWhenTheAccountHasNoRecordedChange(t *testing.T) {
-	repo := repositories.NewRepository(testutils.SetupTestStore(t))
+	repo := repositories.NewRepository(testutils.SetupTestConn(t))
 	svc := serviceimpl.NewUserService(repo, "test-jwt-secret")
 	ctx := t.Context()
 	seedUser(t, repo, "alice", "the-old-password")

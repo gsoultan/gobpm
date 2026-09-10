@@ -51,7 +51,7 @@ func newSLOHarnessWithService(t *testing.T) (*sloHarness, services.ServiceFacade
 
 	// 16 connections, so a measurement is not queueing behind itself.
 	db := testutils.SetupPostgresDB(t, 16)
-	repo := repositories.NewRepository(db, testutils.StormConn(db))
+	repo := repositories.NewRepository(testutils.StormConn(db))
 	sse := observersimpl.NewSSEObserver()
 	svc := services.NewServiceFacade(repo, observersimpl.NewEventDispatcher(), sse, "loadtest-secret", nil, nil, nil, func(*gorm.DB) {})
 

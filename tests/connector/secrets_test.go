@@ -33,7 +33,7 @@ type secretFixture struct {
 func newSecretFixture(t *testing.T) *secretFixture {
 	t.Helper()
 	db := testutils.SetupTestDB(t)
-	repo := repositories.NewRepository(db, testutils.StormConn(db))
+	repo := repositories.NewRepository(testutils.StormConn(db))
 	svc := services.NewServiceFacade(repo, nil, nil, "connector-secret-test", nil, nil, nil, func(*gorm.DB) {})
 	eps := connector.MakeEndpoints(svc)
 
@@ -165,7 +165,7 @@ func TestATypedReplacementIsSaved(t *testing.T) {
 // over every credential in the installation.
 func TestTheStoredConfigIsNotReadableAsPlainText(t *testing.T) {
 	db := testutils.SetupTestDB(t)
-	repo := repositories.NewRepository(db, testutils.StormConn(db))
+	repo := repositories.NewRepository(testutils.StormConn(db))
 	svc := serviceimpl.NewConnectorService(repo)
 	ctx := context.Background()
 

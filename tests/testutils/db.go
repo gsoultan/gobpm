@@ -182,7 +182,7 @@ func createStormTables(t *testing.T, conn *db.Conn) error {
 // one, keyed by the GORM handle a test already holds.
 //
 // A registry rather than a second return value because fifty-three call sites
-// already say `repositories.NewRepository(db, testutils.StormConn(db))`, and threading a second handle
+// already say `repositories.NewRepository(testutils.StormConn(db))`, and threading a second handle
 // through all of them by hand is fifty-three chances to pair a GORM connection
 // with somebody else's schema. Looking it up cannot get that wrong: the key is
 // the connection the test was given.
@@ -200,4 +200,15 @@ func StormConn(gormDB *gorm.DB) *db.Conn {
 		}
 	}
 	return nil
+}
+
+// SetupTestConn gives one test its own schema and the storm connection onto it.
+//
+// The repository facade takes only this now — no repository reads through GORM,
+// so handing one out alongside it invited a test to write through a connection
+// nothing else was looking at.
+func SetupTestConn(t *testing.T) *db.Conn {
+	t.Helper()
+	_, conn := setupTestSchema(t)
+	return conn
 }

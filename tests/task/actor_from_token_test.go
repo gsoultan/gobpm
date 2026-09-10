@@ -70,7 +70,7 @@ type taskHarness struct {
 func newTaskHarness(t *testing.T) *taskHarness {
 	t.Helper()
 	db := testutils.SetupTestDB(t)
-	repo := repositories.NewRepository(db, testutils.StormConn(db))
+	repo := repositories.NewRepository(testutils.StormConn(db))
 	sse := observersimpl.NewSSEObserver()
 	svc := services.NewServiceFacade(repo, observersimpl.NewEventDispatcher(), sse, "actor-test-secret", nil, nil, nil, func(*gorm.DB) {})
 

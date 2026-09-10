@@ -41,7 +41,7 @@ func TestAProcessRunsInAnEnvironment(t *testing.T) {
 		conn.RegisterEnvironment(environmentID, pool.Main())
 	}
 
-	repo := repositories.NewRepository(mainDB, testutils.StormConn(mainDB))
+	repo := repositories.NewRepository(testutils.StormConn(mainDB))
 	sse := observersimpl.NewSSEObserver()
 	svc := services.NewServiceFacade(repo, observersimpl.NewEventDispatcher(), sse, "env-e2e", nil, nil, nil, func(*gorm.DB) {})
 

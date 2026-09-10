@@ -230,7 +230,7 @@ func newEngine(t *testing.T, db *gorm.DB) (repositories.Repository, *serviceimpl
 	t.Helper()
 	ctx := t.Context()
 
-	repo := repositories.NewRepository(db, testutils.StormConn(db))
+	repo := repositories.NewRepository(testutils.StormConn(db))
 	dispatcher := observersimpl.NewEventDispatcher()
 	engine := serviceimpl.NewExecutionEngine(repo, dispatcher)
 	connectorSvc := serviceimpl.NewConnectorService(repo)

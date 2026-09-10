@@ -23,7 +23,7 @@ import (
 func TestALimitIsSharedRatherThanAppliedTwice(t *testing.T) {
 	forEachDialect(t, func(t *testing.T, db *gorm.DB) {
 		const limit = 10
-		repo := repositories.NewRepository(db, testutils.StormConn(db))
+		repo := repositories.NewRepository(testutils.StormConn(db))
 		now := time.Now()
 
 		a := sharedcount.New(repo.SharedCounter(), "http-rate", "replica-a", time.Minute)
@@ -70,7 +70,7 @@ func TestALimitIsSharedRatherThanAppliedTwice(t *testing.T) {
 // value is a SUM at read time.
 func TestEachReplicaOwnsItsOwnRow(t *testing.T) {
 	forEachDialect(t, func(t *testing.T, db *gorm.DB) {
-		repo := repositories.NewRepository(db, testutils.StormConn(db)).SharedCounter()
+		repo := repositories.NewRepository(testutils.StormConn(db)).SharedCounter()
 		window := time.Now().Truncate(time.Minute)
 		ctx := t.Context()
 
@@ -99,7 +99,7 @@ func TestEachReplicaOwnsItsOwnRow(t *testing.T) {
 // A different scope must not collide with another's keys.
 func TestScopesDoNotShareAKeySpace(t *testing.T) {
 	forEachDialect(t, func(t *testing.T, db *gorm.DB) {
-		repo := repositories.NewRepository(db, testutils.StormConn(db)).SharedCounter()
+		repo := repositories.NewRepository(testutils.StormConn(db)).SharedCounter()
 		window := time.Now().Truncate(time.Minute)
 		ctx := t.Context()
 
@@ -124,7 +124,7 @@ func TestScopesDoNotShareAKeySpace(t *testing.T) {
 // ever been seen.
 func TestClosedWindowsArePruned(t *testing.T) {
 	forEachDialect(t, func(t *testing.T, db *gorm.DB) {
-		repo := repositories.NewRepository(db, testutils.StormConn(db)).SharedCounter()
+		repo := repositories.NewRepository(testutils.StormConn(db)).SharedCounter()
 		ctx := t.Context()
 		old := time.Now().Add(-2 * time.Hour).Truncate(time.Minute)
 

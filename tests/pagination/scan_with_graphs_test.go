@@ -43,7 +43,7 @@ func seedDefinitionsWithFlows(t *testing.T, repo repositories.Repository, projec
 // TestScanWithGraphs_CrossesBatchBoundariesWithoutLosingRows seeds more than
 // the internal batch size so the scan must page at least three times.
 func TestScanWithGraphs_CrossesBatchBoundariesWithoutLosingRows(t *testing.T) {
-	repo := repositories.NewRepository(testutils.SetupTestStore(t))
+	repo := repositories.NewRepository(testutils.SetupTestConn(t))
 	projectID := uuid.Must(uuid.NewV7())
 
 	const seeded = 451 // > 2 × the 200-row batch size, so the tail is a partial batch
@@ -85,7 +85,7 @@ func TestScanWithGraphs_CrossesBatchBoundariesWithoutLosingRows(t *testing.T) {
 // callback ends the scan instead of being swallowed and reported as a
 // complete, and therefore empty, result.
 func TestScanWithGraphs_StopsWhenTheVisitorFails(t *testing.T) {
-	repo := repositories.NewRepository(testutils.SetupTestStore(t))
+	repo := repositories.NewRepository(testutils.SetupTestConn(t))
 	projectID := uuid.Must(uuid.NewV7())
 	seedDefinitionsWithFlows(t, repo, projectID, 250)
 

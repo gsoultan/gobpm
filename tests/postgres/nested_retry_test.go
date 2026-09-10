@@ -25,7 +25,7 @@ import (
 // one transaction — recover from losing a version race.
 func TestAttemptLeavesAnEnclosingTransactionUsable(t *testing.T) {
 	db := testutils.SetupPostgresDB(t, 4)
-	repo := repositories.NewRepository(db, testutils.StormConn(db))
+	repo := repositories.NewRepository(testutils.StormConn(db))
 	uow := repo.UnitOfWork()
 
 	project := models.UUID(uuid.New())

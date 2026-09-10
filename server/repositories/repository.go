@@ -4,10 +4,9 @@ import (
 	"github.com/gsoultan/metis/server/repositories/contracts"
 	stormdb "github.com/gsoultan/metis/server/repositories/db"
 	"github.com/gsoultan/metis/server/repositories/pg"
-	"gorm.io/gorm"
 )
 
-type gormRepository struct {
+type repository struct {
 	audit                 contracts.AuditRepository
 	broadcast             contracts.BroadcastRepository
 	sharedCounter         contracts.SharedCounterRepository
@@ -48,11 +47,11 @@ type gormRepository struct {
 // is a programming error rather than a configuration one now that PostgreSQL is
 // the only engine. It panics rather than falling back to GORM: a fallback would
 // mean the tests exercise one implementation and production the other.
-func NewRepository(db *gorm.DB, conn *stormdb.Conn) Repository {
+func NewRepository(conn *stormdb.Conn) Repository {
 	if conn == nil {
 		panic("repositories: a storm connection is required; the ported repositories have no GORM implementation left")
 	}
-	return &gormRepository{
+	return &repository{
 		audit:                 pg.NewAuditRepository(conn),
 		broadcast:             pg.NewBroadcastRepository(conn),
 		sharedCounter:         pg.NewSharedCounterRepository(conn),
@@ -83,40 +82,40 @@ func NewRepository(db *gorm.DB, conn *stormdb.Conn) Repository {
 	}
 }
 
-func (r *gormRepository) Audit() contracts.AuditRepository         { return r.audit }
-func (r *gormRepository) Broadcast() contracts.BroadcastRepository { return r.broadcast }
-func (r *gormRepository) SharedCounter() contracts.SharedCounterRepository {
+func (r *repository) Audit() contracts.AuditRepository         { return r.audit }
+func (r *repository) Broadcast() contracts.BroadcastRepository { return r.broadcast }
+func (r *repository) SharedCounter() contracts.SharedCounterRepository {
 	return r.sharedCounter
 }
-func (r *gormRepository) Connector() contracts.ConnectorRepository { return r.connector }
-func (r *gormRepository) ConnectorInstance() contracts.ConnectorInstanceRepository {
+func (r *repository) Connector() contracts.ConnectorRepository { return r.connector }
+func (r *repository) ConnectorInstance() contracts.ConnectorInstanceRepository {
 	return r.connectorInstance
 }
-func (r *gormRepository) Decision() contracts.DecisionRepository         { return r.decision }
-func (r *gormRepository) Definition() contracts.DefinitionRepository     { return r.definition }
-func (r *gormRepository) Environment() contracts.EnvironmentRepository   { return r.environment }
-func (r *gormRepository) Deployment() contracts.DeploymentRepository     { return r.deployment }
-func (r *gormRepository) ExternalTask() contracts.ExternalTaskRepository { return r.externalTask }
-func (r *gormRepository) Form() contracts.FormRepository                 { return r.form }
-func (r *gormRepository) Incident() contracts.IncidentRepository         { return r.incident }
-func (r *gormRepository) Job() contracts.JobRepository                   { return r.job }
-func (r *gormRepository) Organization() contracts.OrganizationRepository { return r.organization }
-func (r *gormRepository) Process() contracts.ProcessRepository           { return r.process }
-func (r *gormRepository) ServiceCall() contracts.ServiceCallRepository   { return r.serviceCall }
-func (r *gormRepository) Webhook() contracts.WebhookRepository           { return r.webhook }
-func (r *gormRepository) ConnectorManifest() contracts.ConnectorManifestRepository {
+func (r *repository) Decision() contracts.DecisionRepository         { return r.decision }
+func (r *repository) Definition() contracts.DefinitionRepository     { return r.definition }
+func (r *repository) Environment() contracts.EnvironmentRepository   { return r.environment }
+func (r *repository) Deployment() contracts.DeploymentRepository     { return r.deployment }
+func (r *repository) ExternalTask() contracts.ExternalTaskRepository { return r.externalTask }
+func (r *repository) Form() contracts.FormRepository                 { return r.form }
+func (r *repository) Incident() contracts.IncidentRepository         { return r.incident }
+func (r *repository) Job() contracts.JobRepository                   { return r.job }
+func (r *repository) Organization() contracts.OrganizationRepository { return r.organization }
+func (r *repository) Process() contracts.ProcessRepository           { return r.process }
+func (r *repository) ServiceCall() contracts.ServiceCallRepository   { return r.serviceCall }
+func (r *repository) Webhook() contracts.WebhookRepository           { return r.webhook }
+func (r *repository) ConnectorManifest() contracts.ConnectorManifestRepository {
 	return r.connectorManifest
 }
-func (r *gormRepository) Project() contracts.ProjectRepository           { return r.project }
-func (r *gormRepository) Subscription() contracts.SubscriptionRepository { return r.subscription }
-func (r *gormRepository) Task() contracts.TaskRepository                 { return r.task }
-func (r *gormRepository) User() contracts.UserRepository                 { return r.user }
-func (r *gormRepository) Group() contracts.GroupRepository               { return r.group }
-func (r *gormRepository) Notification() contracts.NotificationRepository { return r.notification }
-func (r *gormRepository) CompensatableActivity() contracts.CompensatableActivityRepository {
+func (r *repository) Project() contracts.ProjectRepository           { return r.project }
+func (r *repository) Subscription() contracts.SubscriptionRepository { return r.subscription }
+func (r *repository) Task() contracts.TaskRepository                 { return r.task }
+func (r *repository) User() contracts.UserRepository                 { return r.user }
+func (r *repository) Group() contracts.GroupRepository               { return r.group }
+func (r *repository) Notification() contracts.NotificationRepository { return r.notification }
+func (r *repository) CompensatableActivity() contracts.CompensatableActivityRepository {
 	return r.compensatableActivity
 }
-func (r *gormRepository) VariableSnapshot() contracts.VariableSnapshotRepository {
+func (r *repository) VariableSnapshot() contracts.VariableSnapshotRepository {
 	return r.variableSnapshot
 }
-func (r *gormRepository) UnitOfWork() contracts.UnitOfWork { return r.uow }
+func (r *repository) UnitOfWork() contracts.UnitOfWork { return r.uow }

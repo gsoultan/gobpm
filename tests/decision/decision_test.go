@@ -14,7 +14,7 @@ import (
 func TestDecisionEvaluation(t *testing.T) {
 	db := testutils.SetupTestDB(t)
 
-	repo := repositories.NewRepository(db, testutils.StormConn(db))
+	repo := repositories.NewRepository(testutils.StormConn(db))
 	svc := impl.NewDecisionService(repo, impl.NewDecisionTableEvaluator(impl.NewFEELEvaluator()))
 
 	id, _ := uuid.NewV7()
