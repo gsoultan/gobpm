@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+	"github.com/gsoultan/metis/server/domains/entities"
 	"github.com/gsoultan/storm/runtime"
 )
 
@@ -40,4 +41,18 @@ func WithEnvironment(ctx context.Context, environmentID uuid.UUID) context.Conte
 func EnvironmentFrom(ctx context.Context) (uuid.UUID, bool) {
 	id, ok := ctx.Value(environmentKey{}).(uuid.UUID)
 	return id, ok && id != uuid.Nil
+}
+
+// Bind attaches an environment to work, for both persistence layers at once.
+//
+// There are two bindings while the port is under way — this package's, read by
+// the storm repositories, and entities', read by the GORM ones — and a context
+// carrying only one reaches the right database through half the code and the
+// main database through the other half. That is not a hypothetical: it showed
+// up as a foreign key violation, where a definition had been written to an
+// environment and the instance referencing it went to main.
+//
+// So callers bind through here rather than either package directly.
+func Bind(ctx context.Context, environmentID uuid.UUID) context.Context {
+	return WithEnvironment(entities.WithEnvironment(ctx, environmentID), environmentID)
 }

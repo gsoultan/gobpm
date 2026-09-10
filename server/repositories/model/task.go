@@ -35,9 +35,13 @@ type Task struct {
 	FormKey        *string
 	FormDefinition *string
 
-	// Variables is jsonb, encrypted by the repository for the same reason an
+	// Variables is encrypted by the repository for the same reason an
 	// instance's are.
-	Variables storm.JSON
+	// A string, not storm.JSON: process variables are encrypted at rest by
+	// models.EncryptedMap, so the column holds ciphertext. Declaring it jsonb
+	// would fail to parse and, on the day the column types are reconciled,
+	// destroy every running instance's data.
+	Variables string
 
 	DeletedAt *time.Time
 }

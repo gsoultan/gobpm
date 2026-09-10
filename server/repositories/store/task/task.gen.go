@@ -37,7 +37,7 @@ type Row struct {
 	DueDate         runtime.Null[time.Time]
 	FormKey         runtime.Null[string]
 	FormDefinition  runtime.Null[string]
-	Variables       runtime.JSON
+	Variables       string
 	DeletedAt       runtime.Null[time.Time]
 }
 
@@ -296,6 +296,13 @@ func (q *Query) cursor(col uint32, r Row) {
 		}
 		q.strs[q.ns] = r.FormDefinition.V
 		q.ns++
+	case 17:
+		if int(q.ns) >= len(q.strs) {
+			q.over = true
+			return
+		}
+		q.strs[q.ns] = r.Variables
+		q.ns++
 	case 18:
 		if int(q.ntm) >= len(q.tims) {
 			q.over = true
@@ -480,7 +487,7 @@ var (
 	DueDate         = NullTimeCol{14}
 	FormKey         = NullTextCol{15}
 	FormDefinition  = NullTextCol{16}
-	Variables       = JSONCol{17}
+	Variables       = TextCol{17}
 	DeletedAt       = NullTimeCol{18}
 )
 
@@ -1016,12 +1023,12 @@ func (q *Query) leaf(p Pred) {
 		q.strs[q.ns] = p.str
 		q.ns++
 	case 17:
-		if int(q.njs) >= 2 {
+		if int(q.ns) >= 6 {
 			q.over = true
 			return
 		}
-		q.jsns[q.njs] = p.jsn
-		q.njs++
+		q.strs[q.ns] = p.str
+		q.ns++
 	case 18:
 		if int(q.ntm) >= 4 {
 			q.over = true
@@ -1146,58 +1153,64 @@ func (q Query) CandidateGroupsHasAnyKey(v ...string) Query {
 func (q Query) CandidateGroupsHasAllKeys(v ...string) Query {
 	return q.Where(CandidateGroups.HasAllKeys(v...))
 }
-func (q Query) PriorityEq(v int64) Query                  { return q.Where(Priority.Eq(v)) }
-func (q Query) PriorityNotEq(v int64) Query               { return q.Where(Priority.NotEq(v)) }
-func (q Query) PriorityGt(v int64) Query                  { return q.Where(Priority.Gt(v)) }
-func (q Query) PriorityGte(v int64) Query                 { return q.Where(Priority.Gte(v)) }
-func (q Query) PriorityLt(v int64) Query                  { return q.Where(Priority.Lt(v)) }
-func (q Query) PriorityLte(v int64) Query                 { return q.Where(Priority.Lte(v)) }
-func (q Query) PriorityIn(v ...int64) Query               { return q.Where(Priority.In(v...)) }
-func (q Query) PriorityNotIn(v ...int64) Query            { return q.Where(Priority.NotIn(v...)) }
-func (q Query) DueDateEq(v time.Time) Query               { return q.Where(DueDate.Eq(v)) }
-func (q Query) DueDateNotEq(v time.Time) Query            { return q.Where(DueDate.NotEq(v)) }
-func (q Query) DueDateGt(v time.Time) Query               { return q.Where(DueDate.Gt(v)) }
-func (q Query) DueDateGte(v time.Time) Query              { return q.Where(DueDate.Gte(v)) }
-func (q Query) DueDateLt(v time.Time) Query               { return q.Where(DueDate.Lt(v)) }
-func (q Query) DueDateLte(v time.Time) Query              { return q.Where(DueDate.Lte(v)) }
-func (q Query) DueDateIsNull() Query                      { return q.Where(DueDate.IsNull()) }
-func (q Query) DueDateIsNotNull() Query                   { return q.Where(DueDate.IsNotNull()) }
-func (q Query) FormKeyEq(v string) Query                  { return q.Where(FormKey.Eq(v)) }
-func (q Query) FormKeyNotEq(v string) Query               { return q.Where(FormKey.NotEq(v)) }
-func (q Query) FormKeyGt(v string) Query                  { return q.Where(FormKey.Gt(v)) }
-func (q Query) FormKeyGte(v string) Query                 { return q.Where(FormKey.Gte(v)) }
-func (q Query) FormKeyLt(v string) Query                  { return q.Where(FormKey.Lt(v)) }
-func (q Query) FormKeyLte(v string) Query                 { return q.Where(FormKey.Lte(v)) }
-func (q Query) FormKeyLike(v string) Query                { return q.Where(FormKey.Like(v)) }
-func (q Query) FormKeyILike(v string) Query               { return q.Where(FormKey.ILike(v)) }
-func (q Query) FormKeyIn(v ...string) Query               { return q.Where(FormKey.In(v...)) }
-func (q Query) FormKeyNotIn(v ...string) Query            { return q.Where(FormKey.NotIn(v...)) }
-func (q Query) FormKeyIsNull() Query                      { return q.Where(FormKey.IsNull()) }
-func (q Query) FormKeyIsNotNull() Query                   { return q.Where(FormKey.IsNotNull()) }
-func (q Query) FormDefinitionEq(v string) Query           { return q.Where(FormDefinition.Eq(v)) }
-func (q Query) FormDefinitionNotEq(v string) Query        { return q.Where(FormDefinition.NotEq(v)) }
-func (q Query) FormDefinitionGt(v string) Query           { return q.Where(FormDefinition.Gt(v)) }
-func (q Query) FormDefinitionGte(v string) Query          { return q.Where(FormDefinition.Gte(v)) }
-func (q Query) FormDefinitionLt(v string) Query           { return q.Where(FormDefinition.Lt(v)) }
-func (q Query) FormDefinitionLte(v string) Query          { return q.Where(FormDefinition.Lte(v)) }
-func (q Query) FormDefinitionLike(v string) Query         { return q.Where(FormDefinition.Like(v)) }
-func (q Query) FormDefinitionILike(v string) Query        { return q.Where(FormDefinition.ILike(v)) }
-func (q Query) FormDefinitionIn(v ...string) Query        { return q.Where(FormDefinition.In(v...)) }
-func (q Query) FormDefinitionNotIn(v ...string) Query     { return q.Where(FormDefinition.NotIn(v...)) }
-func (q Query) FormDefinitionIsNull() Query               { return q.Where(FormDefinition.IsNull()) }
-func (q Query) FormDefinitionIsNotNull() Query            { return q.Where(FormDefinition.IsNotNull()) }
-func (q Query) VariablesContains(v runtime.JSON) Query    { return q.Where(Variables.Contains(v)) }
-func (q Query) VariablesContainedBy(v runtime.JSON) Query { return q.Where(Variables.ContainedBy(v)) }
-func (q Query) VariablesHasAnyKey(v ...string) Query      { return q.Where(Variables.HasAnyKey(v...)) }
-func (q Query) VariablesHasAllKeys(v ...string) Query     { return q.Where(Variables.HasAllKeys(v...)) }
-func (q Query) DeletedAtEq(v time.Time) Query             { return q.Where(DeletedAt.Eq(v)) }
-func (q Query) DeletedAtNotEq(v time.Time) Query          { return q.Where(DeletedAt.NotEq(v)) }
-func (q Query) DeletedAtGt(v time.Time) Query             { return q.Where(DeletedAt.Gt(v)) }
-func (q Query) DeletedAtGte(v time.Time) Query            { return q.Where(DeletedAt.Gte(v)) }
-func (q Query) DeletedAtLt(v time.Time) Query             { return q.Where(DeletedAt.Lt(v)) }
-func (q Query) DeletedAtLte(v time.Time) Query            { return q.Where(DeletedAt.Lte(v)) }
-func (q Query) DeletedAtIsNull() Query                    { return q.Where(DeletedAt.IsNull()) }
-func (q Query) DeletedAtIsNotNull() Query                 { return q.Where(DeletedAt.IsNotNull()) }
+func (q Query) PriorityEq(v int64) Query              { return q.Where(Priority.Eq(v)) }
+func (q Query) PriorityNotEq(v int64) Query           { return q.Where(Priority.NotEq(v)) }
+func (q Query) PriorityGt(v int64) Query              { return q.Where(Priority.Gt(v)) }
+func (q Query) PriorityGte(v int64) Query             { return q.Where(Priority.Gte(v)) }
+func (q Query) PriorityLt(v int64) Query              { return q.Where(Priority.Lt(v)) }
+func (q Query) PriorityLte(v int64) Query             { return q.Where(Priority.Lte(v)) }
+func (q Query) PriorityIn(v ...int64) Query           { return q.Where(Priority.In(v...)) }
+func (q Query) PriorityNotIn(v ...int64) Query        { return q.Where(Priority.NotIn(v...)) }
+func (q Query) DueDateEq(v time.Time) Query           { return q.Where(DueDate.Eq(v)) }
+func (q Query) DueDateNotEq(v time.Time) Query        { return q.Where(DueDate.NotEq(v)) }
+func (q Query) DueDateGt(v time.Time) Query           { return q.Where(DueDate.Gt(v)) }
+func (q Query) DueDateGte(v time.Time) Query          { return q.Where(DueDate.Gte(v)) }
+func (q Query) DueDateLt(v time.Time) Query           { return q.Where(DueDate.Lt(v)) }
+func (q Query) DueDateLte(v time.Time) Query          { return q.Where(DueDate.Lte(v)) }
+func (q Query) DueDateIsNull() Query                  { return q.Where(DueDate.IsNull()) }
+func (q Query) DueDateIsNotNull() Query               { return q.Where(DueDate.IsNotNull()) }
+func (q Query) FormKeyEq(v string) Query              { return q.Where(FormKey.Eq(v)) }
+func (q Query) FormKeyNotEq(v string) Query           { return q.Where(FormKey.NotEq(v)) }
+func (q Query) FormKeyGt(v string) Query              { return q.Where(FormKey.Gt(v)) }
+func (q Query) FormKeyGte(v string) Query             { return q.Where(FormKey.Gte(v)) }
+func (q Query) FormKeyLt(v string) Query              { return q.Where(FormKey.Lt(v)) }
+func (q Query) FormKeyLte(v string) Query             { return q.Where(FormKey.Lte(v)) }
+func (q Query) FormKeyLike(v string) Query            { return q.Where(FormKey.Like(v)) }
+func (q Query) FormKeyILike(v string) Query           { return q.Where(FormKey.ILike(v)) }
+func (q Query) FormKeyIn(v ...string) Query           { return q.Where(FormKey.In(v...)) }
+func (q Query) FormKeyNotIn(v ...string) Query        { return q.Where(FormKey.NotIn(v...)) }
+func (q Query) FormKeyIsNull() Query                  { return q.Where(FormKey.IsNull()) }
+func (q Query) FormKeyIsNotNull() Query               { return q.Where(FormKey.IsNotNull()) }
+func (q Query) FormDefinitionEq(v string) Query       { return q.Where(FormDefinition.Eq(v)) }
+func (q Query) FormDefinitionNotEq(v string) Query    { return q.Where(FormDefinition.NotEq(v)) }
+func (q Query) FormDefinitionGt(v string) Query       { return q.Where(FormDefinition.Gt(v)) }
+func (q Query) FormDefinitionGte(v string) Query      { return q.Where(FormDefinition.Gte(v)) }
+func (q Query) FormDefinitionLt(v string) Query       { return q.Where(FormDefinition.Lt(v)) }
+func (q Query) FormDefinitionLte(v string) Query      { return q.Where(FormDefinition.Lte(v)) }
+func (q Query) FormDefinitionLike(v string) Query     { return q.Where(FormDefinition.Like(v)) }
+func (q Query) FormDefinitionILike(v string) Query    { return q.Where(FormDefinition.ILike(v)) }
+func (q Query) FormDefinitionIn(v ...string) Query    { return q.Where(FormDefinition.In(v...)) }
+func (q Query) FormDefinitionNotIn(v ...string) Query { return q.Where(FormDefinition.NotIn(v...)) }
+func (q Query) FormDefinitionIsNull() Query           { return q.Where(FormDefinition.IsNull()) }
+func (q Query) FormDefinitionIsNotNull() Query        { return q.Where(FormDefinition.IsNotNull()) }
+func (q Query) VariablesEq(v string) Query            { return q.Where(Variables.Eq(v)) }
+func (q Query) VariablesNotEq(v string) Query         { return q.Where(Variables.NotEq(v)) }
+func (q Query) VariablesGt(v string) Query            { return q.Where(Variables.Gt(v)) }
+func (q Query) VariablesGte(v string) Query           { return q.Where(Variables.Gte(v)) }
+func (q Query) VariablesLt(v string) Query            { return q.Where(Variables.Lt(v)) }
+func (q Query) VariablesLte(v string) Query           { return q.Where(Variables.Lte(v)) }
+func (q Query) VariablesLike(v string) Query          { return q.Where(Variables.Like(v)) }
+func (q Query) VariablesILike(v string) Query         { return q.Where(Variables.ILike(v)) }
+func (q Query) VariablesIn(v ...string) Query         { return q.Where(Variables.In(v...)) }
+func (q Query) VariablesNotIn(v ...string) Query      { return q.Where(Variables.NotIn(v...)) }
+func (q Query) DeletedAtEq(v time.Time) Query         { return q.Where(DeletedAt.Eq(v)) }
+func (q Query) DeletedAtNotEq(v time.Time) Query      { return q.Where(DeletedAt.NotEq(v)) }
+func (q Query) DeletedAtGt(v time.Time) Query         { return q.Where(DeletedAt.Gt(v)) }
+func (q Query) DeletedAtGte(v time.Time) Query        { return q.Where(DeletedAt.Gte(v)) }
+func (q Query) DeletedAtLt(v time.Time) Query         { return q.Where(DeletedAt.Lt(v)) }
+func (q Query) DeletedAtLte(v time.Time) Query        { return q.Where(DeletedAt.Lte(v)) }
+func (q Query) DeletedAtIsNull() Query                { return q.Where(DeletedAt.IsNull()) }
+func (q Query) DeletedAtIsNotNull() Query             { return q.Where(DeletedAt.IsNotNull()) }
 
 // softDeleteWhere keeps marked rows out of every read in this package.
 // The splice ANDs it AHEAD of the caller's predicates, so a call site
@@ -1907,6 +1920,21 @@ var fragTable = [19][27]runtime.Frag{
 	},
 	{ // variables
 		{}, // opNone
+		{A: "\"variables\" = $", B: ""},
+		{A: "\"variables\" <> $", B: ""},
+		{A: "\"variables\" > $", B: ""},
+		{A: "\"variables\" >= $", B: ""},
+		{A: "\"variables\" < $", B: ""},
+		{A: "\"variables\" <= $", B: ""},
+		{A: "\"variables\" LIKE $", B: ""},
+		{A: "\"variables\" ILIKE $", B: ""},
+		{},
+		{},
+		{},
+		{},
+		{},
+		{A: "\"variables\" = ANY($", B: ")"},
+		{A: "\"variables\" <> ALL($", B: ")"},
 		{},
 		{},
 		{},
@@ -1914,21 +1942,6 @@ var fragTable = [19][27]runtime.Frag{
 		{},
 		{},
 		{},
-		{},
-		{},
-		{},
-		{},
-		{},
-		{},
-		{},
-		{},
-		{},
-		{},
-		{},
-		{A: "\"variables\" @> $", B: ""},
-		{A: "\"variables\" <@ $", B: ""},
-		{A: "\"variables\" ?| $", B: ""},
-		{A: "\"variables\" ?& $", B: ""},
 		{},
 		{},
 		{},
@@ -2135,7 +2148,7 @@ func scan(rv [][]byte, r *Row, sl *runtime.Slab) error {
 	r.DueDate = runtime.Nullable(rv[14], runtime.Timestamptz)
 	r.FormKey = runtime.NullText(rv[15], sl)
 	r.FormDefinition = runtime.NullText(rv[16], sl)
-	r.Variables = runtime.JSON(runtime.JSONB(rv[17], sl))
+	r.Variables = sl.Str(rv[17])
 	r.DeletedAt = runtime.Nullable(rv[18], runtime.Timestamptz)
 	return nil
 }
@@ -2340,9 +2353,9 @@ func (q Query) bindPreds(b *binder) []any {
 			v = append(v, &b.strs[ns])
 			ns++
 		case 17:
-			b.jsns[njs] = q.jsns[njs]
-			v = append(v, &b.jsns[njs])
-			njs++
+			b.strs[ns] = q.strs[ns]
+			v = append(v, &b.strs[ns])
+			ns++
 		case 18:
 			b.tims[ntm] = q.tims[ntm]
 			v = append(v, &b.tims[ntm])
@@ -2738,7 +2751,7 @@ func (m *Mut) SetFormDefinitionNull() {
 	m.dirty |= dFormDefinition
 }
 
-func (m *Mut) SetVariables(v runtime.JSON) {
+func (m *Mut) SetVariables(v string) {
 	m.row.Variables = v
 	m.dirty |= dVariables
 }
@@ -2900,7 +2913,7 @@ func (n *Ins) SetFormDefinitionNull() {
 	n.set |= iFormDefinition
 }
 
-func (n *Ins) SetVariables(v runtime.JSON) {
+func (n *Ins) SetVariables(v string) {
 	n.row.Variables = v
 	n.set |= iVariables
 }

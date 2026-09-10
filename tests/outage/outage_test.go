@@ -341,7 +341,11 @@ func TestEngineSurvivesADatabaseOutage(t *testing.T) {
 	for time.Now().Before(deadline) {
 		_, gormErr := engine.GetInstance(ctx, instanceID)
 		_, stormErr := repo.Subscription().ListByInstance(ctx, instanceID)
-		if gormErr == nil && stormErr == nil {
+		// A write as well as two reads. Every unit of work opens a storm
+		// transaction now, and a pool can hand out a live connection for a read
+		// and a dead one for the write that follows.
+		txErr := repo.UnitOfWork().Do(ctx, func(context.Context) error { return nil })
+		if gormErr == nil && stormErr == nil && txErr == nil {
 			recovered = true
 			break
 		}

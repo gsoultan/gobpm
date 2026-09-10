@@ -24,10 +24,14 @@ type ProcessInstance struct {
 
 	Status ProcessStatus
 
-	// Variables is the business data, jsonb and encrypted by the repository:
+	// Variables is the business data, encrypted by the repository:
 	// it holds whatever the process was started with, which is routinely
 	// personal or commercial.
-	Variables storm.JSON
+	// A string, not storm.JSON: process variables are encrypted at rest by
+	// models.EncryptedMap, so the column holds ciphertext. Declaring it jsonb
+	// would fail to parse and, on the day the column types are reconciled,
+	// destroy every running instance's data.
+	Variables string
 
 	// Tokens are the live points of execution — see the Token payload struct.
 	Tokens storm.JSON

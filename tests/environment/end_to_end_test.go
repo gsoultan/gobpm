@@ -10,6 +10,7 @@ import (
 	observersimpl "github.com/gsoultan/metis/server/domains/observers/impl"
 	"github.com/gsoultan/metis/server/domains/services"
 	"github.com/gsoultan/metis/server/repositories"
+	"github.com/gsoultan/metis/server/repositories/db"
 	"github.com/gsoultan/metis/server/repositories/gorms"
 	"github.com/gsoultan/metis/server/repositories/models"
 	"github.com/gsoultan/metis/tests/testutils"
@@ -28,12 +29,17 @@ import (
 // fresh environment database, so every scoped read matched nothing and every
 // create was refused with "record not found".
 func TestAProcessRunsInAnEnvironment(t *testing.T) {
-	mainDB := testutils.SetupTestDB(t)
+	mainDB, conn := testutils.SetupTestStore(t)
 	stagingDB := testutils.SetupTestDB(t)
 	t.Cleanup(gorms.ResetEnvironmentDBs)
 
 	environmentID := uuid.New()
+	// Both layers, the way the boot sequence registers them: a half-open
+	// environment reaches one and refuses on the other.
 	gorms.RegisterEnvironmentDB(environmentID, stagingDB)
+	if pool := testutils.StormConn(stagingDB); pool != nil {
+		conn.RegisterEnvironment(environmentID, pool.Main())
+	}
 
 	repo := repositories.NewRepository(mainDB, testutils.StormConn(mainDB))
 	sse := observersimpl.NewSSEObserver()
@@ -66,7 +72,7 @@ func TestAProcessRunsInAnEnvironment(t *testing.T) {
 	}
 
 	// Everything from here happens on the staging port.
-	stagingCtx := entities.WithEnvironment(tenantCtx, environmentID)
+	stagingCtx := db.Bind(tenantCtx, environmentID)
 
 	def := &entities.ProcessDefinition{
 		Project: &entities.Project{ID: project.ID},

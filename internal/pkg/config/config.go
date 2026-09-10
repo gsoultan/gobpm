@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/gsoultan/metis/internal/pkg/crypto"
 	"gopkg.in/yaml.v3"
@@ -185,4 +186,35 @@ func NewConfig(driver, connectionString, encryptionKey, jwtSecret string) (*Conf
 		EncryptionKey: encryptionKey,
 		JWTSecret:     jwtSecret,
 	}, nil
+}
+
+// PostgresURL converts a key/value connection string into the URL form pgx
+// takes.
+//
+// Two formats for one database is not a choice anybody made; it is what the two
+// drivers accept. Converting in one place means an environment is configured
+// once and both layers reach the same database — resolving it twice is how one
+// ends up on the configured database and the other somewhere else.
+func PostgresURL(dsn string) string {
+	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
+		return dsn
+	}
+	fields := map[string]string{}
+	for _, pair := range strings.Fields(dsn) {
+		key, value, ok := strings.Cut(pair, "=")
+		if ok {
+			fields[key] = value
+		}
+	}
+	sslMode := fields["sslmode"]
+	if sslMode == "" {
+		sslMode = "disable"
+	}
+	url := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s",
+		fields["user"], fields["password"], fields["host"], fields["port"],
+		fields["dbname"], sslMode)
+	if searchPath := fields["search_path"]; searchPath != "" {
+		url += "&search_path=" + searchPath
+	}
+	return url
 }

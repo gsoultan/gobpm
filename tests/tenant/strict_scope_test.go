@@ -6,7 +6,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/gsoultan/metis/internal/pkg/features"
 	"github.com/gsoultan/metis/server/domains/entities"
-	"github.com/gsoultan/metis/server/repositories/gorms"
 	"github.com/gsoultan/metis/server/repositories/models"
 	"github.com/gsoultan/metis/server/repositories/pg"
 	"github.com/gsoultan/metis/tests/testutils"
@@ -84,14 +83,14 @@ func TestStrictScope_SystemWorkStillSeesEverything(t *testing.T) {
 			[]uuid.UUID{f.formA, f.formB})
 
 		// Both tenants' instances, which is what a job worker needs to see.
-		instances, err := gorms.NewProcessRepository(db).List(ctx)
+		instances, err := pg.NewProcessRepository(testutils.StormConn(db)).List(ctx)
 		if err != nil {
 			t.Fatalf("list instances as system: %v", err)
 		}
 		assertSameIDs(t, idsOf(instances, func(m models.ProcessInstanceModel) uuid.UUID { return uuid.UUID(m.ID) }),
 			[]uuid.UUID{f.instanceA, f.instanceB})
 
-		if _, err := gorms.NewProcessRepository(db).Get(ctx, f.instanceB); err != nil {
+		if _, err := pg.NewProcessRepository(testutils.StormConn(db)).Get(ctx, f.instanceB); err != nil {
 			t.Errorf("system work could not read an instance: %v", err)
 		}
 	})

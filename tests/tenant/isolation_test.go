@@ -336,9 +336,12 @@ func TestTenantIsolation_GetByIDDeniesOtherTenants(t *testing.T) {
 				return err
 			}},
 			{"task", func() error { _, err := gorms.NewTaskRepository(db).Get(ctx, f.taskB); return err }},
-			{"process instance", func() error { _, err := gorms.NewProcessRepository(db).Get(ctx, f.instanceB); return err }},
+			{"process instance", func() error {
+				_, err := pg.NewProcessRepository(testutils.StormConn(db)).Get(ctx, f.instanceB)
+				return err
+			}},
 			{"process instance for update", func() error {
-				_, err := gorms.NewProcessRepository(db).GetForUpdate(ctx, f.instanceB)
+				_, err := pg.NewProcessRepository(testutils.StormConn(db)).GetForUpdate(ctx, f.instanceB)
 				return err
 			}},
 			{"process definition", func() error {
@@ -580,7 +583,7 @@ func TestTenantIsolation_WritesDenyOtherTenants(t *testing.T) {
 			{
 				name: "rewrite another tenant's process instance",
 				write: func() error {
-					return gorms.NewProcessRepository(db).Update(ctx, models.ProcessInstanceModel{
+					return pg.NewProcessRepository(testutils.StormConn(db)).Update(ctx, models.ProcessInstanceModel{
 						Base:      models.Base{ID: models.FromUUID(f.instanceB)},
 						ProjectID: models.FromUUID(f.projectA),
 						Status:    models.ProcessFailed,
@@ -771,7 +774,7 @@ func TestTenantIsolation_CreateDeniesForeignProject(t *testing.T) {
 					models.TaskModel{Base: newID(), ProjectID: foreign, Name: "planted"})
 			}},
 			{"process instance", func() error {
-				_, err := gorms.NewProcessRepository(db).Create(ctx,
+				_, err := pg.NewProcessRepository(testutils.StormConn(db)).Create(ctx,
 					models.ProcessInstanceModel{Base: newID(), ProjectID: foreign, Status: models.ProcessActive})
 				return err
 			}},

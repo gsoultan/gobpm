@@ -68,7 +68,7 @@ func NewRepository(db *gorm.DB, conn *stormdb.Conn) Repository {
 		incident:              pg.NewIncidentRepository(conn),
 		job:                   pg.NewJobRepository(conn),
 		organization:          pg.NewOrganizationRepository(conn),
-		process:               gorms.NewProcessRepository(db),
+		process:               pg.NewProcessRepository(conn),
 		serviceCall:           pg.NewServiceCallRepository(conn),
 		webhook:               pg.NewWebhookRepository(conn),
 		connectorManifest:     pg.NewConnectorManifestRepository(conn),
@@ -80,7 +80,7 @@ func NewRepository(db *gorm.DB, conn *stormdb.Conn) Repository {
 		notification:          pg.NewNotificationRepository(conn),
 		compensatableActivity: pg.NewCompensatableActivityRepository(conn),
 		variableSnapshot:      pg.NewVariableSnapshotRepository(conn),
-		uow:                   gorms.NewUnitOfWork(db),
+		uow:                   newSpanningUnitOfWork(gorms.NewUnitOfWork(db), conn),
 	}
 }
 

@@ -28,7 +28,7 @@ type Row struct {
 	ParentInstanceID runtime.Null[[16]byte]
 	ParentNodeID     runtime.Null[string]
 	Status           string
-	Variables        runtime.JSON
+	Variables        string
 	Tokens           runtime.JSON
 	CompletedNodes   runtime.JSON
 	CompensatedNodes runtime.JSON
@@ -241,6 +241,13 @@ func (q *Query) cursor(col uint32, r Row) {
 		}
 		q.strs[q.ns] = r.Status
 		q.ns++
+	case 8:
+		if int(q.ns) >= len(q.strs) {
+			q.over = true
+			return
+		}
+		q.strs[q.ns] = r.Variables
+		q.ns++
 	case 14:
 		if int(q.ntm) >= len(q.tims) {
 			q.over = true
@@ -414,7 +421,7 @@ var (
 	ParentInstanceID = NullUUIDCol{5}
 	ParentNodeID     = NullTextCol{6}
 	Status           = TextCol{7}
-	Variables        = JSONCol{8}
+	Variables        = TextCol{8}
 	Tokens           = JSONCol{9}
 	CompletedNodes   = JSONCol{10}
 	CompensatedNodes = JSONCol{11}
@@ -869,12 +876,12 @@ func (q *Query) leaf(p Pred) {
 		q.strs[q.ns] = p.str
 		q.ns++
 	case 8:
-		if int(q.njs) >= 2 {
+		if int(q.ns) >= 6 {
 			q.over = true
 			return
 		}
-		q.jsns[q.njs] = p.jsn
-		q.njs++
+		q.strs[q.ns] = p.str
+		q.ns++
 	case 9:
 		if int(q.njs) >= 2 {
 			q.over = true
@@ -952,38 +959,44 @@ func (q Query) ParentInstanceIDIn(v ...[16]byte) Query { return q.Where(ParentIn
 func (q Query) ParentInstanceIDNotIn(v ...[16]byte) Query {
 	return q.Where(ParentInstanceID.NotIn(v...))
 }
-func (q Query) ParentInstanceIDIsNull() Query             { return q.Where(ParentInstanceID.IsNull()) }
-func (q Query) ParentInstanceIDIsNotNull() Query          { return q.Where(ParentInstanceID.IsNotNull()) }
-func (q Query) ParentNodeIDEq(v string) Query             { return q.Where(ParentNodeID.Eq(v)) }
-func (q Query) ParentNodeIDNotEq(v string) Query          { return q.Where(ParentNodeID.NotEq(v)) }
-func (q Query) ParentNodeIDGt(v string) Query             { return q.Where(ParentNodeID.Gt(v)) }
-func (q Query) ParentNodeIDGte(v string) Query            { return q.Where(ParentNodeID.Gte(v)) }
-func (q Query) ParentNodeIDLt(v string) Query             { return q.Where(ParentNodeID.Lt(v)) }
-func (q Query) ParentNodeIDLte(v string) Query            { return q.Where(ParentNodeID.Lte(v)) }
-func (q Query) ParentNodeIDLike(v string) Query           { return q.Where(ParentNodeID.Like(v)) }
-func (q Query) ParentNodeIDILike(v string) Query          { return q.Where(ParentNodeID.ILike(v)) }
-func (q Query) ParentNodeIDIn(v ...string) Query          { return q.Where(ParentNodeID.In(v...)) }
-func (q Query) ParentNodeIDNotIn(v ...string) Query       { return q.Where(ParentNodeID.NotIn(v...)) }
-func (q Query) ParentNodeIDIsNull() Query                 { return q.Where(ParentNodeID.IsNull()) }
-func (q Query) ParentNodeIDIsNotNull() Query              { return q.Where(ParentNodeID.IsNotNull()) }
-func (q Query) StatusEq(v string) Query                   { return q.Where(Status.Eq(v)) }
-func (q Query) StatusNotEq(v string) Query                { return q.Where(Status.NotEq(v)) }
-func (q Query) StatusGt(v string) Query                   { return q.Where(Status.Gt(v)) }
-func (q Query) StatusGte(v string) Query                  { return q.Where(Status.Gte(v)) }
-func (q Query) StatusLt(v string) Query                   { return q.Where(Status.Lt(v)) }
-func (q Query) StatusLte(v string) Query                  { return q.Where(Status.Lte(v)) }
-func (q Query) StatusLike(v string) Query                 { return q.Where(Status.Like(v)) }
-func (q Query) StatusILike(v string) Query                { return q.Where(Status.ILike(v)) }
-func (q Query) StatusIn(v ...string) Query                { return q.Where(Status.In(v...)) }
-func (q Query) StatusNotIn(v ...string) Query             { return q.Where(Status.NotIn(v...)) }
-func (q Query) VariablesContains(v runtime.JSON) Query    { return q.Where(Variables.Contains(v)) }
-func (q Query) VariablesContainedBy(v runtime.JSON) Query { return q.Where(Variables.ContainedBy(v)) }
-func (q Query) VariablesHasAnyKey(v ...string) Query      { return q.Where(Variables.HasAnyKey(v...)) }
-func (q Query) VariablesHasAllKeys(v ...string) Query     { return q.Where(Variables.HasAllKeys(v...)) }
-func (q Query) TokensContains(v runtime.JSON) Query       { return q.Where(Tokens.Contains(v)) }
-func (q Query) TokensContainedBy(v runtime.JSON) Query    { return q.Where(Tokens.ContainedBy(v)) }
-func (q Query) TokensHasAnyKey(v ...string) Query         { return q.Where(Tokens.HasAnyKey(v...)) }
-func (q Query) TokensHasAllKeys(v ...string) Query        { return q.Where(Tokens.HasAllKeys(v...)) }
+func (q Query) ParentInstanceIDIsNull() Query          { return q.Where(ParentInstanceID.IsNull()) }
+func (q Query) ParentInstanceIDIsNotNull() Query       { return q.Where(ParentInstanceID.IsNotNull()) }
+func (q Query) ParentNodeIDEq(v string) Query          { return q.Where(ParentNodeID.Eq(v)) }
+func (q Query) ParentNodeIDNotEq(v string) Query       { return q.Where(ParentNodeID.NotEq(v)) }
+func (q Query) ParentNodeIDGt(v string) Query          { return q.Where(ParentNodeID.Gt(v)) }
+func (q Query) ParentNodeIDGte(v string) Query         { return q.Where(ParentNodeID.Gte(v)) }
+func (q Query) ParentNodeIDLt(v string) Query          { return q.Where(ParentNodeID.Lt(v)) }
+func (q Query) ParentNodeIDLte(v string) Query         { return q.Where(ParentNodeID.Lte(v)) }
+func (q Query) ParentNodeIDLike(v string) Query        { return q.Where(ParentNodeID.Like(v)) }
+func (q Query) ParentNodeIDILike(v string) Query       { return q.Where(ParentNodeID.ILike(v)) }
+func (q Query) ParentNodeIDIn(v ...string) Query       { return q.Where(ParentNodeID.In(v...)) }
+func (q Query) ParentNodeIDNotIn(v ...string) Query    { return q.Where(ParentNodeID.NotIn(v...)) }
+func (q Query) ParentNodeIDIsNull() Query              { return q.Where(ParentNodeID.IsNull()) }
+func (q Query) ParentNodeIDIsNotNull() Query           { return q.Where(ParentNodeID.IsNotNull()) }
+func (q Query) StatusEq(v string) Query                { return q.Where(Status.Eq(v)) }
+func (q Query) StatusNotEq(v string) Query             { return q.Where(Status.NotEq(v)) }
+func (q Query) StatusGt(v string) Query                { return q.Where(Status.Gt(v)) }
+func (q Query) StatusGte(v string) Query               { return q.Where(Status.Gte(v)) }
+func (q Query) StatusLt(v string) Query                { return q.Where(Status.Lt(v)) }
+func (q Query) StatusLte(v string) Query               { return q.Where(Status.Lte(v)) }
+func (q Query) StatusLike(v string) Query              { return q.Where(Status.Like(v)) }
+func (q Query) StatusILike(v string) Query             { return q.Where(Status.ILike(v)) }
+func (q Query) StatusIn(v ...string) Query             { return q.Where(Status.In(v...)) }
+func (q Query) StatusNotIn(v ...string) Query          { return q.Where(Status.NotIn(v...)) }
+func (q Query) VariablesEq(v string) Query             { return q.Where(Variables.Eq(v)) }
+func (q Query) VariablesNotEq(v string) Query          { return q.Where(Variables.NotEq(v)) }
+func (q Query) VariablesGt(v string) Query             { return q.Where(Variables.Gt(v)) }
+func (q Query) VariablesGte(v string) Query            { return q.Where(Variables.Gte(v)) }
+func (q Query) VariablesLt(v string) Query             { return q.Where(Variables.Lt(v)) }
+func (q Query) VariablesLte(v string) Query            { return q.Where(Variables.Lte(v)) }
+func (q Query) VariablesLike(v string) Query           { return q.Where(Variables.Like(v)) }
+func (q Query) VariablesILike(v string) Query          { return q.Where(Variables.ILike(v)) }
+func (q Query) VariablesIn(v ...string) Query          { return q.Where(Variables.In(v...)) }
+func (q Query) VariablesNotIn(v ...string) Query       { return q.Where(Variables.NotIn(v...)) }
+func (q Query) TokensContains(v runtime.JSON) Query    { return q.Where(Tokens.Contains(v)) }
+func (q Query) TokensContainedBy(v runtime.JSON) Query { return q.Where(Tokens.ContainedBy(v)) }
+func (q Query) TokensHasAnyKey(v ...string) Query      { return q.Where(Tokens.HasAnyKey(v...)) }
+func (q Query) TokensHasAllKeys(v ...string) Query     { return q.Where(Tokens.HasAllKeys(v...)) }
 func (q Query) CompletedNodesContains(v runtime.JSON) Query {
 	return q.Where(CompletedNodes.Contains(v))
 }
@@ -1450,6 +1463,21 @@ var fragTable = [15][27]runtime.Frag{
 	},
 	{ // variables
 		{}, // opNone
+		{A: "\"variables\" = $", B: ""},
+		{A: "\"variables\" <> $", B: ""},
+		{A: "\"variables\" > $", B: ""},
+		{A: "\"variables\" >= $", B: ""},
+		{A: "\"variables\" < $", B: ""},
+		{A: "\"variables\" <= $", B: ""},
+		{A: "\"variables\" LIKE $", B: ""},
+		{A: "\"variables\" ILIKE $", B: ""},
+		{},
+		{},
+		{},
+		{},
+		{},
+		{A: "\"variables\" = ANY($", B: ")"},
+		{A: "\"variables\" <> ALL($", B: ")"},
 		{},
 		{},
 		{},
@@ -1457,21 +1485,6 @@ var fragTable = [15][27]runtime.Frag{
 		{},
 		{},
 		{},
-		{},
-		{},
-		{},
-		{},
-		{},
-		{},
-		{},
-		{},
-		{},
-		{},
-		{},
-		{A: "\"variables\" @> $", B: ""},
-		{A: "\"variables\" <@ $", B: ""},
-		{A: "\"variables\" ?| $", B: ""},
-		{A: "\"variables\" ?& $", B: ""},
 		{},
 		{},
 		{},
@@ -1814,7 +1827,7 @@ func scan(rv [][]byte, r *Row, sl *runtime.Slab) error {
 	r.ParentInstanceID = runtime.Nullable(rv[5], runtime.UUID)
 	r.ParentNodeID = runtime.NullText(rv[6], sl)
 	r.Status = sl.Str(rv[7])
-	r.Variables = runtime.JSON(runtime.JSONB(rv[8], sl))
+	r.Variables = sl.Str(rv[8])
 	r.Tokens = runtime.JSON(runtime.JSONB(rv[9], sl))
 	r.CompletedNodes = runtime.JSON(runtime.JSONB(rv[10], sl))
 	r.CompensatedNodes = runtime.JSON(runtime.JSONB(rv[11], sl))
@@ -1971,9 +1984,9 @@ func (q Query) bindPreds(b *binder) []any {
 			v = append(v, &b.strs[ns])
 			ns++
 		case 8:
-			b.jsns[njs] = q.jsns[njs]
-			v = append(v, &b.jsns[njs])
-			njs++
+			b.strs[ns] = q.strs[ns]
+			v = append(v, &b.strs[ns])
+			ns++
 		case 9:
 			b.jsns[njs] = q.jsns[njs]
 			v = append(v, &b.jsns[njs])
@@ -2389,7 +2402,7 @@ func (m *Mut) SetStatus(v string) {
 	m.dirty |= dStatus
 }
 
-func (m *Mut) SetVariables(v runtime.JSON) {
+func (m *Mut) SetVariables(v string) {
 	m.row.Variables = v
 	m.dirty |= dVariables
 }
@@ -2510,7 +2523,7 @@ func (n *Ins) SetStatus(v string) {
 	n.set |= iStatus
 }
 
-func (n *Ins) SetVariables(v runtime.JSON) {
+func (n *Ins) SetVariables(v string) {
 	n.row.Variables = v
 	n.set |= iVariables
 }

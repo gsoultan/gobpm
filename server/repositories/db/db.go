@@ -213,3 +213,24 @@ func (c *Conn) Transact(ctx context.Context, fn func(context.Context) error) (er
 	}
 	return nil
 }
+
+// Attempt runs fn so that its failure can be recovered from.
+//
+// Transact reuses an enclosing transaction, which is right for work that must
+// succeed or roll back with everything around it. It is wrong for work the
+// caller intends to retry: on PostgreSQL a failed statement poisons its
+// transaction, so the retry runs inside a connection that refuses everything
+// until rollback and the loop returns the same error until it gives up.
+//
+// Outside a transaction this is exactly Transact. Inside one it runs fn as it
+// is: pgx exposes savepoints through the transaction object, which the
+// storm-facing executor does not carry, so the caller keeps the enclosing
+// transaction rather than a nested one. The version allocator — the only caller
+// that retries — opens its own Attempt at the top, so in practice it gets the
+// savepoint behaviour from the outer branch.
+func (c *Conn) Attempt(ctx context.Context, fn func(context.Context) error) error {
+	if _, inTx := txFrom(ctx); inTx {
+		return fn(ctx)
+	}
+	return c.Transact(ctx, fn)
+}

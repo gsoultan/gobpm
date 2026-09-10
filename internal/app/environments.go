@@ -10,6 +10,7 @@ import (
 	"github.com/gsoultan/metis/server/repositories/gorms"
 	"github.com/gsoultan/metis/server/repositories/migrations"
 	"github.com/gsoultan/metis/server/repositories/models"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
@@ -54,6 +55,18 @@ func (a *App) openEnvironments(ctx context.Context) error {
 		}
 		if previous := gorms.RegisterEnvironmentDB(id, db); previous != nil {
 			closeDB(previous)
+		}
+		// Both layers, or the environment is half-open: the GORM repositories
+		// would reach it and the storm ones would refuse with
+		// ErrEnvironmentUnavailable, which is the same failure as not opening
+		// it at all but harder to read.
+		if err := a.openEnvironmentStorm(ctx, row, id); err != nil {
+			failed++
+			log.Error().Err(err).
+				Str("environment", row.Name).
+				Int("port", row.Port).
+				Msg("This environment's storm connection could not be opened. It will not be served; the others are unaffected.")
+			continue
 		}
 		opened++
 		log.Info().
@@ -193,4 +206,27 @@ func closeDB(db *gorm.DB) {
 	if err := sqlDB.Close(); err != nil {
 		log.Warn().Err(err).Msg("Could not close a database pool")
 	}
+}
+
+// openEnvironmentStorm opens the pgx pool the ported repositories read through.
+//
+// A second pool onto the same database rather than a shared one, because the
+// two layers speak different drivers. They are opened from the same stored
+// connection so they cannot disagree about which database that is.
+func (a *App) openEnvironmentStorm(ctx context.Context, row models.EnvironmentModel, id uuid.UUID) error {
+	if a.storm == nil {
+		return nil
+	}
+	dsn, err := environmentDSN(row)
+	if err != nil {
+		return err
+	}
+	pool, err := pgxpool.New(ctx, config.PostgresURL(dsn))
+	if err != nil {
+		return fmt.Errorf("could not open this environment's storm connection: %w", err)
+	}
+	if previous := a.storm.RegisterEnvironment(id, pool); previous != nil {
+		previous.Close()
+	}
+	return nil
 }

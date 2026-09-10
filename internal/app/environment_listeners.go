@@ -101,8 +101,7 @@ func (a *App) serveEnvironments(ctx context.Context, g *errgroup.Group, handler 
 // other half — which is the data mixing this whole design exists to prevent.
 func environmentHandler(id uuid.UUID, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := entities.WithEnvironment(r.Context(), id)
-		ctx = db.WithEnvironment(ctx, id)
+		ctx := db.Bind(r.Context(), id)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -131,7 +130,7 @@ func (a *App) startEnvironmentWorkers(ctx context.Context) {
 		// worker reads through the GORM repositories today and the storm ones
 		// as the port lands, and a worker that carried only one binding would
 		// poll one database and write to another.
-		environmentCtx := db.WithEnvironment(entities.WithEnvironment(ctx, id), id)
+		environmentCtx := db.Bind(ctx, id)
 		a.svc.StartWorkers(environmentCtx)
 		// No second SSE fan-out. The bus is one table in the main database and
 		// every row on it carries the environment it belongs to, so one reader
