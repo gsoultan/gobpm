@@ -345,7 +345,10 @@ func TestTenantIsolation_GetByIDDeniesOtherTenants(t *testing.T) {
 				_, err := gorms.NewDefinitionRepository(db).Get(ctx, f.definitionB)
 				return err
 			}},
-			{"decision", func() error { _, err := gorms.NewDecisionRepository(db).Get(ctx, f.decisionB); return err }},
+			{"decision", func() error {
+				_, err := pg.NewDecisionRepository(testutils.StormConn(db)).Get(ctx, f.decisionB)
+				return err
+			}},
 		}
 
 		for _, tc := range tests {
@@ -387,7 +390,7 @@ func TestTenantIsolation_KeyLookupsStayInTenant(t *testing.T) {
 		})
 
 		t.Run("decision by key resolves to own project", func(t *testing.T) {
-			got, err := gorms.NewDecisionRepository(db).GetByKey(ctx, sharedDecisionKey)
+			got, err := pg.NewDecisionRepository(testutils.StormConn(db)).GetByKey(ctx, sharedDecisionKey)
 			if err != nil {
 				t.Fatalf("get: %v", err)
 			}
@@ -397,7 +400,7 @@ func TestTenantIsolation_KeyLookupsStayInTenant(t *testing.T) {
 		})
 
 		t.Run("decision by key and version denies another tenant's version", func(t *testing.T) {
-			_, err := gorms.NewDecisionRepository(db).GetByKeyAndVersion(ctx, sharedDecisionKey, 2)
+			_, err := pg.NewDecisionRepository(testutils.StormConn(db)).GetByKeyAndVersion(ctx, sharedDecisionKey, 2)
 			if !isNotFound(err) {
 				t.Fatalf("got %v, want a not-found", err)
 			}
@@ -437,7 +440,7 @@ func TestTenantIsolation_WritesDenyOtherTenants(t *testing.T) {
 			},
 			{
 				name:  "delete another tenant's decision",
-				write: func() error { return gorms.NewDecisionRepository(db).Delete(ctx, f.decisionB) },
+				write: func() error { return pg.NewDecisionRepository(testutils.StormConn(db)).Delete(ctx, f.decisionB) },
 				unchanged: func() bool {
 					return rowExists(t, db, &models.DecisionDefinitionModel{}, "decision_definitions", f.decisionB)
 				},
@@ -445,7 +448,7 @@ func TestTenantIsolation_WritesDenyOtherTenants(t *testing.T) {
 			{
 				name: "rewrite another tenant's decision",
 				write: func() error {
-					return gorms.NewDecisionRepository(db).Update(ctx, f.decisionB,
+					return pg.NewDecisionRepository(testutils.StormConn(db)).Update(ctx, f.decisionB,
 						models.DecisionDefinitionModel{ProjectID: models.FromUUID(f.projectA), Name: "stolen"})
 				},
 				unchanged: func() bool {
@@ -752,7 +755,7 @@ func TestTenantIsolation_CreateDeniesForeignProject(t *testing.T) {
 					models.ProcessDefinitionModel{Base: newID(), ProjectID: foreign, Key: "planted"})
 			}},
 			{"decision", func() error {
-				return gorms.NewDecisionRepository(db).Create(ctx,
+				return pg.NewDecisionRepository(testutils.StormConn(db)).Create(ctx,
 					models.DecisionDefinitionModel{Base: newID(), ProjectID: foreign, Key: "planted"})
 			}},
 			{"form", func() error {

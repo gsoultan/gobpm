@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/gsoultan/metis/server/repositories/contracts"
+	"github.com/gsoultan/storm/runtime"
 	"gorm.io/gorm"
 )
 
@@ -68,7 +69,11 @@ func allocateVersion(
 		if err == nil {
 			return nil
 		}
-		if !errors.Is(err, gorm.ErrDuplicatedKey) {
+		// Either layer's way of saying "that number is taken": GORM translates
+		// the constraint into ErrDuplicatedKey, storm classifies it as
+		// ErrUniqueViolation. Both mean another deploy won the race, and both
+		// mean the answer is to propose the next number rather than to fail.
+		if !errors.Is(err, gorm.ErrDuplicatedKey) && !errors.Is(err, runtime.ErrUniqueViolation) {
 			return err
 		}
 		lastErr = err
