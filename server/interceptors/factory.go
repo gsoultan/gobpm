@@ -12,7 +12,7 @@ import (
 	"github.com/gsoultan/metis/server/interceptors/logging"
 	"github.com/gsoultan/metis/server/interceptors/security"
 	"github.com/gsoultan/metis/server/interceptors/tenant"
-	"gorm.io/gorm"
+	stormdb "github.com/gsoultan/metis/server/repositories/db"
 )
 
 // InterceptorFactory creates various interceptors.
@@ -63,11 +63,11 @@ func (f *InterceptorFactory) NewIdempotency(ttl time.Duration) contracts.Transpo
 
 // NewIdempotencyOver keeps idempotency records in the database, so every
 // replica gives the same answer to "has this already been done?".
-func (f *InterceptorFactory) NewIdempotencyOver(db *gorm.DB, ttl time.Duration) contracts.TransportInterceptor {
-	if db == nil {
+func (f *InterceptorFactory) NewIdempotencyOver(conn *stormdb.Conn, ttl time.Duration) contracts.TransportInterceptor {
+	if conn == nil {
 		return f.NewIdempotency(ttl)
 	}
-	return security.NewIdempotencyInterceptorWithStore(security.NewDBIdempotencyStore(db, ttl), ttl)
+	return security.NewIdempotencyInterceptorWithStore(security.NewDBIdempotencyStore(conn, ttl), ttl)
 }
 
 func (f *InterceptorFactory) NewJWTStrategy() authinterceptor.SecurityStrategy {

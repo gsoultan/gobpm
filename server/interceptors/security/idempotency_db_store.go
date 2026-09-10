@@ -4,15 +4,15 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
-	"github.com/gsoultan/metis/server/repositories/models"
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
+	"github.com/gsoultan/metis/server/repositories/db"
+	"github.com/gsoultan/metis/server/repositories/store/idempotencyrecord"
+	"github.com/gsoultan/storm/runtime"
 )
 
 // dbIdempotencyStore keeps records in the database, so every replica sees the
@@ -23,147 +23,163 @@ import (
 // replicas both find nothing and both execute, which is the duplicate write
 // this whole mechanism exists to prevent. The database decides, once.
 type dbIdempotencyStore struct {
-	db  *gorm.DB
-	ttl time.Duration
-	now func() time.Time
+	conn *db.Conn
+	ttl  time.Duration
+	now  func() time.Time
 }
 
-// NewDBIdempotencyStore returns a store shared by every replica on this
-// database.
-func NewDBIdempotencyStore(db *gorm.DB, ttl time.Duration) IdempotencyStore {
-	if ttl <= 0 {
-		ttl = defaultIdempotencyTTL
-	}
-	return &dbIdempotencyStore{db: db, ttl: ttl, now: time.Now}
+// NewDBIdempotencyStore returns the store that survives a restart.
+//
+// In the database rather than in memory, because the guarantee an
+// Idempotency-Key makes is about the operation, not about the process that
+// happened to receive it: a replica restarting between the claim and the
+// response must not let the same request run twice.
+func NewDBIdempotencyStore(conn *db.Conn, ttl time.Duration) IdempotencyStore {
+	return &dbIdempotencyStore{conn: conn, ttl: ttl, now: func() time.Time { return time.Now().UTC() }}
 }
 
-// storageKeyHash reduces an unbounded scoped key to a fixed-width primary key.
-// The parts — path, tenant, user, the client's chosen value — have no length
-// limit, and an indexed column does.
+// storageKeyHash is what is stored instead of the key itself.
+//
+// The key is chosen by the caller and can carry anything — an order number, an
+// email address. Hashing it means the table cannot become a list of whatever
+// clients happened to name their requests.
 func storageKeyHash(key string) string {
 	sum := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(sum[:])
 }
 
+// Claim tries to become the one caller that runs this request.
+//
+// A conditional insert, and the condition is the whole mechanism: two replicas
+// handed the same key both try, the primary key lets one through, and the loser
+// is told somebody else owns it. Reading first and inserting second leaves a
+// window where both read "absent" and both run.
 func (s *dbIdempotencyStore) Claim(ctx context.Context, key, requestHash string) (ClaimOutcome, error) {
 	hashed := storageKeyHash(key)
 	now := s.now()
 
-	record := models.IdempotencyRecordModel{
-		Key:         hashed,
-		RequestHash: requestHash,
-		CreatedAt:   now,
+	ex, err := s.conn.Executor(ctx)
+	if err != nil {
+		return ClaimOutcome{}, err
 	}
-
-	// DoNothing rather than an upsert: losing this race means somebody else
-	// owns the key, and overwriting their claim would let both callers execute.
-	result := s.db.WithContext(ctx).
-		Clauses(clause.OnConflict{DoNothing: true}).
-		Create(&record)
-
-	switch {
-	case result.Error == nil && result.RowsAffected > 0:
+	ins := idempotencyrecord.Create()
+	ins.SetRecordKey(hashed)
+	ins.SetRequestHash(requestHash)
+	ins.SetCreatedAt(now)
+	ins.SetCompleted(false)
+	// Set explicitly, not left to a default. A claim has no answer yet, but the
+	// column is NOT NULL — and the insert reads every column back through
+	// RETURNING, so a column this does not assign comes back NULL and the
+	// decoder panics on a zero-length integer rather than reporting anything a
+	// reader could act on.
+	ins.SetStatusCode(0)
+	ins.DoNothing()
+	if _, err := ins.Insert(ctx, ex); err == nil {
 		return ClaimOutcome{Owned: true}, nil
-	case result.Error != nil && !isDuplicateKey(result.Error):
-		return ClaimOutcome{}, fmt.Errorf("claim idempotency key: %w", result.Error)
+	} else if !errors.Is(err, runtime.ErrConflict) && !errors.Is(err, runtime.ErrUniqueViolation) {
+		return ClaimOutcome{}, fmt.Errorf("claim idempotency key: %w", err)
 	}
 
-	// Somebody holds it — either this insert conflicted, or a dialect without
-	// DO NOTHING support returned a duplicate-key error. Both mean: read what
-	// they recorded.
 	existing, err := s.get(ctx, hashed)
 	if err != nil {
 		return ClaimOutcome{}, err
 	}
 	if existing == nil {
-		// The holder finished and the row was swept between the failed insert
-		// and this read. Nothing is in flight and no answer survives, so the
-		// caller may execute — which is safe, since that is exactly the state a
-		// first-ever request is in.
+		// The row vanished between the refused insert and this read — a sweep
+		// removed it. Owning it is the right answer: nobody else is running.
 		return ClaimOutcome{Owned: true}, nil
 	}
-
-	return s.outcomeFor(ctx, existing, requestHash, now)
+	return s.outcomeFor(ctx, *existing, requestHash, now)
 }
 
-// outcomeFor turns a stored row into what the caller should do about it.
-func (s *dbIdempotencyStore) outcomeFor(ctx context.Context, existing *models.IdempotencyRecordModel, requestHash string, now time.Time) (ClaimOutcome, error) {
+// outcomeFor decides what an existing record means for this caller.
+func (s *dbIdempotencyStore) outcomeFor(ctx context.Context, existing idempotencyrecord.Row, requestHash string, now time.Time) (ClaimOutcome, error) {
 	if existing.RequestHash != requestHash {
+		// The same key with a different body. Refused rather than replayed:
+		// returning the first request's answer to a second, different request
+		// is worse than refusing either.
 		return ClaimOutcome{Conflict: true}, nil
 	}
 	if existing.Completed {
 		if now.Sub(existing.CreatedAt) > s.ttl {
-			// Aged out. Take it over rather than replaying an answer older than
-			// the retry window it was kept for.
-			if err := s.reclaim(ctx, existing.Key, requestHash, now); err != nil {
+			if err := s.reclaim(ctx, existing, requestHash, now); err != nil {
 				return ClaimOutcome{}, err
 			}
 			return ClaimOutcome{Owned: true}, nil
 		}
-		return ClaimOutcome{Response: responseFrom(existing)}, nil
+		response, err := responseFrom(existing)
+		if err != nil {
+			return ClaimOutcome{}, err
+		}
+		return ClaimOutcome{Response: response}, nil
 	}
-	return ClaimOutcome{}, nil // claimed elsewhere, still running
+	// Claimed elsewhere and still running. The caller waits.
+	return ClaimOutcome{}, nil
 }
 
-// reclaim resets an aged-out record for a new attempt.
-func (s *dbIdempotencyStore) reclaim(ctx context.Context, hashedKey, requestHash string, now time.Time) error {
-	err := s.db.WithContext(ctx).
-		Model(&models.IdempotencyRecordModel{}).
-		Where("record_key = ?", hashedKey).
-		Select("request_hash", "completed", "status_code", "headers", "body", "created_at", "completed_at").
-		Updates(models.IdempotencyRecordModel{
-			RequestHash: requestHash,
-			CreatedAt:   now,
-		}).Error
+// reclaim takes over a record whose answer has expired.
+func (s *dbIdempotencyStore) reclaim(ctx context.Context, existing idempotencyrecord.Row, requestHash string, now time.Time) error {
+	ex, err := s.conn.Executor(ctx)
 	if err != nil {
+		return err
+	}
+	mut := idempotencyrecord.Mutate(existing)
+	mut.SetRequestHash(requestHash)
+	mut.SetCompleted(false)
+	mut.SetStatusCode(0)
+	mut.SetHeaders(nil)
+	mut.SetBody(nil)
+	mut.SetCreatedAt(now)
+	mut.SetCompletedAtNull()
+	if err := mut.Update(ctx, ex); err != nil {
 		return fmt.Errorf("reclaim expired idempotency key: %w", err)
 	}
 	return nil
 }
 
+// Complete records the answer, so a retry replays it rather than running again.
 func (s *dbIdempotencyStore) Complete(ctx context.Context, key string, response StoredResponse) error {
-	now := s.now()
-
-	// A struct update with an explicit Select, not a map. GORM applies a
-	// field's serializer only when it can match the field, and a map keyed by
-	// column name bypasses that — the header map then reaches the driver raw
-	// and the write fails with "unsupported type map[string][]string". Select
-	// is what makes the false/zero fields land anyway, since a struct update
-	// otherwise skips zero values.
-	err := s.db.WithContext(ctx).
-		Model(&models.IdempotencyRecordModel{}).
-		Where("record_key = ? AND completed = ?", storageKeyHash(key), false).
-		Select("completed", "status_code", "headers", "body", "completed_at").
-		Updates(models.IdempotencyRecordModel{
-			Completed:   true,
-			StatusCode:  response.StatusCode,
-			Headers:     response.Header,
-			Body:        response.Body,
-			CompletedAt: &now,
-		}).Error
+	ex, err := s.conn.Executor(ctx)
 	if err != nil {
+		return err
+	}
+	headers, err := json.Marshal(response.Header)
+	if err != nil {
+		return fmt.Errorf("encode idempotency response headers: %w", err)
+	}
+	now := s.now()
+	// Conditional on still being incomplete, so a late writer cannot overwrite
+	// an answer somebody has already been given.
+	if _, err := ex.Exec(ctx,
+		`UPDATE idempotency_records
+		    SET completed = true, status_code = $1, headers = $2, body = $3, completed_at = $4
+		  WHERE record_key = $5 AND completed = false`,
+		[]any{int64(response.StatusCode), headers, response.Body, now, storageKeyHash(key)}); err != nil {
 		return fmt.Errorf("record idempotency response: %w", err)
 	}
 	return nil
 }
 
-// Abandon deletes an incomplete claim, so a request that died mid-flight does
-// not leave every retry waiting for an answer nobody will write.
+// Abandon releases a claim whose work did not finish, so the next caller can
+// run it rather than waiting for an answer that will never come.
 func (s *dbIdempotencyStore) Abandon(ctx context.Context, key string) error {
-	err := s.db.WithContext(ctx).
-		Where("record_key = ? AND completed = ?", storageKeyHash(key), false).
-		Delete(&models.IdempotencyRecordModel{}).Error
+	ex, err := s.conn.Executor(ctx)
 	if err != nil {
+		return err
+	}
+	if _, err := ex.Exec(ctx,
+		"DELETE FROM idempotency_records WHERE record_key = $1 AND completed = false",
+		[]any{storageKeyHash(key)}); err != nil {
 		return fmt.Errorf("abandon idempotency claim: %w", err)
 	}
 	return nil
 }
 
-// Await polls until the holder records a response or the budget runs out.
+// Await waits for whoever owns the claim to finish.
 //
-// Polling, because coordinating across processes without a broker leaves no
-// channel to wait on. The budget is bounded so a holder that died does not
-// strand its retries: the caller is told to retry, which the key makes safe.
+// Polling rather than a notification, and bounded: a caller that waits forever
+// on a replica that died holds a connection until something times out, which is
+// how one stuck request becomes an outage.
 func (s *dbIdempotencyStore) Await(ctx context.Context, key string) (*StoredResponse, error) {
 	hashed := storageKeyHash(key)
 
@@ -179,11 +195,10 @@ func (s *dbIdempotencyStore) Await(ctx context.Context, key string) (*StoredResp
 			return nil, err
 		}
 		if record == nil {
-			// The claim was abandoned or swept. Nothing is coming.
 			return nil, nil
 		}
 		if record.Completed {
-			return responseFrom(record), nil
+			return responseFrom(*record)
 		}
 
 		select {
@@ -194,47 +209,29 @@ func (s *dbIdempotencyStore) Await(ctx context.Context, key string) (*StoredResp
 	}
 }
 
-func (s *dbIdempotencyStore) get(ctx context.Context, hashedKey string) (*models.IdempotencyRecordModel, error) {
-	var record models.IdempotencyRecordModel
-	err := s.db.WithContext(ctx).Where("record_key = ?", hashedKey).Take(&record).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
+func (s *dbIdempotencyStore) get(ctx context.Context, hashedKey string) (*idempotencyrecord.Row, error) {
+	ex, err := s.conn.Executor(ctx)
+	if err != nil {
+		return nil, err
 	}
+	row, found, err := idempotencyrecord.New().
+		Where(idempotencyrecord.RecordKey.Eq(hashedKey)).
+		One(ctx, ex)
 	if err != nil {
 		return nil, fmt.Errorf("read idempotency record: %w", err)
 	}
-	return &record, nil
+	if !found {
+		return nil, nil
+	}
+	return &row, nil
 }
 
-func responseFrom(record *models.IdempotencyRecordModel) *StoredResponse {
-	header := make(http.Header, len(record.Headers))
-	for name, values := range record.Headers {
-		header[name] = values
-	}
-	return &StoredResponse{StatusCode: record.StatusCode, Header: header, Body: record.Body}
-}
-
-// isDuplicateKey reports whether an insert lost a race for the primary key.
-//
-// GORM surfaces this as ErrDuplicatedKey on the dialects that translate it, and
-// the message check covers the ones that do not: SQL Server's driver reports a
-// raw 2627/2601. A missed classification here turns ordinary contention into a
-// 500, so the net is deliberately wide — the fallback path re-reads the row and
-// behaves correctly either way.
-func isDuplicateKey(err error) bool {
-	if errors.Is(err, gorm.ErrDuplicatedKey) {
-		return true
-	}
-	message := strings.ToLower(err.Error())
-	for _, marker := range []string{
-		"duplicate key",        // PostgreSQL, SQL Server
-		"duplicate entry",      // MySQL
-		"unique constraint",    // SQLite
-		"violation of primary", // SQL Server
-	} {
-		if strings.Contains(message, marker) {
-			return true
+func responseFrom(record idempotencyrecord.Row) (*StoredResponse, error) {
+	header := http.Header{}
+	if len(record.Headers) > 0 {
+		if err := json.Unmarshal(record.Headers, &header); err != nil {
+			return nil, fmt.Errorf("decode idempotency response headers: %w", err)
 		}
 	}
-	return false
+	return &StoredResponse{StatusCode: int(record.StatusCode), Header: header, Body: record.Body}, nil
 }

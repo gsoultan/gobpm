@@ -42,7 +42,11 @@ func forEachDialect(t *testing.T, body func(t *testing.T, db *gorm.DB)) {
 		name string
 		open func(*testing.T) *gorm.DB
 	}{
-		{"sqlite", func(t *testing.T) *gorm.DB { return testutils.SetupTestDB(t) }},
+		// One engine. This ran each case against SQLite and then PostgreSQL,
+		// back when both were supported — and the SQLite pass was the only one
+		// that ever ran, because the PostgreSQL DSN was set nowhere. Both
+		// helpers open the same engine now, so running twice would assert the
+		// same thing twice under two names.
 		{"postgres", func(t *testing.T) *gorm.DB { return testutils.SetupPostgresDB(t, testMaxConns) }},
 	}
 	for _, engine := range engines {
@@ -60,7 +64,7 @@ type replica struct {
 func newReplica(t *testing.T, db *gorm.DB, calls *atomic.Int32, body func(w http.ResponseWriter, seq int32)) replica {
 	t.Helper()
 	interceptor := security.NewIdempotencyInterceptorWithStore(
-		security.NewDBIdempotencyStore(db, idempotencyTTL), idempotencyTTL)
+		security.NewDBIdempotencyStore(testutils.StormConn(db), idempotencyTTL), idempotencyTTL)
 
 	return replica{handler: interceptor.Wrap(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		body(w, calls.Add(1))

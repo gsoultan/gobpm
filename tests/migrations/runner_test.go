@@ -29,7 +29,11 @@ func forEachDialect(t *testing.T, body func(t *testing.T, db *gorm.DB)) {
 		name string
 		open func(*testing.T) *gorm.DB
 	}{
-		{"sqlite", func(t *testing.T) *gorm.DB { return testutils.SetupTestDB(t) }},
+		// One engine. This ran each case against SQLite and then PostgreSQL,
+		// back when both were supported — and the SQLite pass was the only one
+		// that ever ran, because the PostgreSQL DSN was set nowhere. Both
+		// helpers open the same engine now, so running twice would assert the
+		// same thing twice under two names.
 		{"postgres", func(t *testing.T) *gorm.DB { return testutils.SetupPostgresDB(t, testMaxConns) }},
 	}
 

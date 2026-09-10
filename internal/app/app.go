@@ -802,7 +802,10 @@ func BuildAPIHandler(
 	sse *impl.SSEObserver,
 	validator *auth.TokenValidator,
 	readiness map[string]health.Checker,
-	db *gorm.DB,
+	// conn is what idempotency records are kept in, so every replica gives the
+	// same answer to "has this already been done?". Nil falls back to the
+	// in-process store, which is correct for one replica and nothing else.
+	conn *stormdb.Conn,
 ) (http.Handler, *metrics.Collector) {
 	httpHandler := https.NewHTTPHandler(svc, endpts, sse)
 
@@ -835,7 +838,7 @@ func BuildAPIHandler(
 						// a second execution of the write. Before setup has run
 						// there is no database yet, and the factory falls back
 						// to the in-process store for that window.
-						f.NewIdempotencyOver(db, defaultHTTPIdempotencyTTL).Wrap(httpHandler),
+						f.NewIdempotencyOver(conn, defaultHTTPIdempotencyTTL).Wrap(httpHandler),
 					),
 				),
 			),
@@ -872,7 +875,7 @@ func BuildAPIHandler(
 
 func (a *App) runServers(ctx context.Context) error {
 	endpts := endpoints.MakeEndpoints(a.svc)
-	httpHandler, metricsCollector := BuildAPIHandler(a.svc, endpts, a.sse, a.validator, a.readinessCheckers(), a.db)
+	httpHandler, metricsCollector := BuildAPIHandler(a.svc, endpts, a.sse, a.validator, a.readinessCheckers(), a.storm)
 
 	grpcServer := grpcs.NewGRPCServer(endpts)
 
