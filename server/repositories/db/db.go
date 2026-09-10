@@ -220,17 +220,53 @@ func (c *Conn) Transact(ctx context.Context, fn func(context.Context) error) (er
 // succeed or roll back with everything around it. It is wrong for work the
 // caller intends to retry: on PostgreSQL a failed statement poisons its
 // transaction, so the retry runs inside a connection that refuses everything
-// until rollback and the loop returns the same error until it gives up.
+// with "current transaction is aborted" until rollback, and the loop returns
+// the same error until it gives up.
 //
-// Outside a transaction this is exactly Transact. Inside one it runs fn as it
-// is: pgx exposes savepoints through the transaction object, which the
-// storm-facing executor does not carry, so the caller keeps the enclosing
-// transaction rather than a nested one. The version allocator — the only caller
-// that retries — opens its own Attempt at the top, so in practice it gets the
-// savepoint behaviour from the outer branch.
-func (c *Conn) Attempt(ctx context.Context, fn func(context.Context) error) error {
-	if _, inTx := txFrom(ctx); inTx {
+// Inside a transaction this takes a SAVEPOINT, so a failed attempt rolls back
+// to just before itself and leaves the enclosing transaction usable. That is
+// what makes the version allocator work: losing the race for a version number
+// has to be recoverable, because losing it is the normal case under
+// concurrency.
+//
+// Outside a transaction it is exactly Transact.
+func (c *Conn) Attempt(ctx context.Context, fn func(context.Context) error) (err error) {
+	executor, inTx := txFrom(ctx)
+	if !inTx {
+		return c.Transact(ctx, fn)
+	}
+	tx, ok := executor.(pgxdrv.Tx)
+	if !ok {
+		// Not a pgx transaction, so there is no savepoint to take. Running fn
+		// directly is what Transact would do; the caller loses the ability to
+		// retry, which is better than opening a second connection alongside the
+		// transaction it is supposed to be inside.
 		return fn(ctx)
 	}
-	return c.Transact(ctx, fn)
+
+	saved, err := tx.T.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("could not take a savepoint: %w", err)
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if rollbackErr := saved.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+				log.Warn().Err(rollbackErr).Msg("Could not release a savepoint while panicking")
+			}
+			panic(recovered)
+		}
+		if err != nil {
+			if rollbackErr := saved.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+				err = errors.Join(err, rollbackErr)
+			}
+		}
+	}()
+
+	if err = fn(withTx(ctx, pgxdrv.Tx{T: saved})); err != nil {
+		return err
+	}
+	if err = saved.Commit(ctx); err != nil {
+		return fmt.Errorf("could not release a savepoint: %w", err)
+	}
+	return nil
 }

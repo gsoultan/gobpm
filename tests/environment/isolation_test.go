@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gsoultan/metis/server/domains/entities"
 	"github.com/gsoultan/metis/server/repositories"
+	"github.com/gsoultan/metis/server/repositories/db"
 	"github.com/gsoultan/metis/server/repositories/gorms"
 	"github.com/gsoultan/metis/server/repositories/models"
 	"github.com/gsoultan/metis/tests/testutils"
@@ -24,11 +25,14 @@ import (
 // by the listener rather than read from the request is the security property,
 // and a test that set the context itself would prove nothing about that.
 func TestARequestOnAnEnvironmentPortReadsThatEnvironmentsDatabase(t *testing.T) {
-	mainDB := testutils.SetupTestDB(t)
+	mainDB, mainConn := testutils.SetupTestStore(t)
 	stagingDB := testutils.SetupTestDB(t)
 	t.Cleanup(gorms.ResetEnvironmentDBs)
 
 	environmentID := uuid.New()
+	if pool := testutils.StormConn(stagingDB); pool != nil {
+		mainConn.RegisterEnvironment(environmentID, pool.Main())
+	}
 	if previous := gorms.RegisterEnvironmentDB(environmentID, stagingDB); previous != nil {
 		t.Fatalf("the registry already held a connection for %s", environmentID)
 	}
@@ -77,14 +81,17 @@ func TestARequestOnAnEnvironmentPortReadsThatEnvironmentsDatabase(t *testing.T) 
 // authenticated against them would be refused with a valid token, because the
 // account is real and the database being asked is the wrong one.
 func TestIdentityStillResolvesAgainstTheMainDatabase(t *testing.T) {
-	mainDB := testutils.SetupTestDB(t)
+	mainDB, mainConn := testutils.SetupTestStore(t)
 	stagingDB := testutils.SetupTestDB(t)
 	t.Cleanup(gorms.ResetEnvironmentDBs)
 
 	environmentID := uuid.New()
 	gorms.RegisterEnvironmentDB(environmentID, stagingDB)
+	if pool := testutils.StormConn(stagingDB); pool != nil {
+		mainConn.RegisterEnvironment(environmentID, pool.Main())
+	}
 
-	repo := repositories.NewRepository(mainDB, testutils.StormConn(mainDB))
+	repo := repositories.NewRepository(mainDB, mainConn)
 	account := models.UserModel{
 		Base:     models.Base{ID: models.FromUUID(uuid.New())},
 		Username: "ada",
@@ -141,7 +148,7 @@ func TestAnEnvironmentWithNoConnectionIsRefusedNotServedFromMain(t *testing.T) {
 func requestScoped(environmentID uuid.UUID, body func(*http.Request)) http.Handler {
 	inner := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { body(r) })
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		inner.ServeHTTP(w, r.WithContext(entities.WithEnvironment(r.Context(), environmentID)))
+		inner.ServeHTTP(w, r.WithContext(db.Bind(r.Context(), environmentID)))
 	})
 }
 

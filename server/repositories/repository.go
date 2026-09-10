@@ -60,7 +60,7 @@ func NewRepository(db *gorm.DB, conn *stormdb.Conn) Repository {
 		connector:             pg.NewConnectorRepository(conn),
 		connectorInstance:     pg.NewConnectorInstanceRepository(conn),
 		decision:              pg.NewDecisionRepository(conn),
-		definition:            gorms.NewDefinitionRepository(db),
+		definition:            pg.NewDefinitionRepository(conn),
 		environment:           pg.NewEnvironmentRepository(conn),
 		deployment:            pg.NewDeploymentRepository(conn),
 		externalTask:          pg.NewExternalTaskRepository(conn),

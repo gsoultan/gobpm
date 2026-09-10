@@ -10,6 +10,7 @@ import (
 	"github.com/gsoultan/metis/server/repositories"
 	"github.com/gsoultan/metis/server/repositories/models"
 	"github.com/gsoultan/metis/tests/testutils"
+	"github.com/gsoultan/storm/runtime"
 	"gorm.io/gorm"
 )
 
@@ -42,8 +43,13 @@ func TestAttemptLeavesAnEnclosingTransactionUsable(t *testing.T) {
 		if clash == nil {
 			return errors.New("a duplicate version was accepted inside the transaction")
 		}
-		if !errors.Is(clash, gorm.ErrDuplicatedKey) {
-			return errors.New("the duplicate did not surface as gorm.ErrDuplicatedKey: " + clash.Error())
+		// Either layer's way of saying the number is taken: GORM translates the
+		// constraint into ErrDuplicatedKey, storm classifies it as
+		// ErrUniqueViolation. Definitions moved to storm; the property under
+		// test is that the clash is recognisable and recoverable, not which
+		// package named it.
+		if !errors.Is(clash, gorm.ErrDuplicatedKey) && !errors.Is(clash, runtime.ErrUniqueViolation) {
+			return errors.New("the duplicate did not surface as a unique violation: " + clash.Error())
 		}
 
 		// The retry the allocator would make. Without the savepoint this is

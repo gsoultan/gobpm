@@ -16,7 +16,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/gsoultan/metis/internal/pkg/apierr"
 	"github.com/gsoultan/metis/server/domains/entities"
-	"github.com/gsoultan/metis/server/repositories/gorms"
 	"github.com/gsoultan/metis/server/repositories/models"
 	"github.com/gsoultan/metis/server/repositories/pg"
 	"github.com/gsoultan/metis/tests/testutils"
@@ -345,7 +344,7 @@ func TestTenantIsolation_GetByIDDeniesOtherTenants(t *testing.T) {
 				return err
 			}},
 			{"process definition", func() error {
-				_, err := gorms.NewDefinitionRepository(db).Get(ctx, f.definitionB)
+				_, err := pg.NewDefinitionRepository(testutils.StormConn(db)).Get(ctx, f.definitionB)
 				return err
 			}},
 			{"decision", func() error {
@@ -376,7 +375,7 @@ func TestTenantIsolation_KeyLookupsStayInTenant(t *testing.T) {
 		t.Run("definition by key resolves to own project", func(t *testing.T) {
 			// B's row has the higher version, so an unscoped "latest wins"
 			// lookup returns B.
-			got, err := gorms.NewDefinitionRepository(db).GetByKey(ctx, sharedDefinitionKey)
+			got, err := pg.NewDefinitionRepository(testutils.StormConn(db)).GetByKey(ctx, sharedDefinitionKey)
 			if err != nil {
 				t.Fatalf("get: %v", err)
 			}
@@ -386,7 +385,7 @@ func TestTenantIsolation_KeyLookupsStayInTenant(t *testing.T) {
 		})
 
 		t.Run("definition by key and version denies another tenant's version", func(t *testing.T) {
-			_, err := gorms.NewDefinitionRepository(db).GetByKeyAndVersion(ctx, sharedDefinitionKey, 2)
+			_, err := pg.NewDefinitionRepository(testutils.StormConn(db)).GetByKeyAndVersion(ctx, sharedDefinitionKey, 2)
 			if !isNotFound(err) {
 				t.Fatalf("got %v, want a not-found", err)
 			}
@@ -436,7 +435,7 @@ func TestTenantIsolation_WritesDenyOtherTenants(t *testing.T) {
 			},
 			{
 				name:  "delete another tenant's definition",
-				write: func() error { return gorms.NewDefinitionRepository(db).Delete(ctx, f.definitionB) },
+				write: func() error { return pg.NewDefinitionRepository(testutils.StormConn(db)).Delete(ctx, f.definitionB) },
 				unchanged: func() bool {
 					return rowExists(t, db, &models.ProcessDefinitionModel{}, "process_definitions", f.definitionB)
 				},
@@ -754,7 +753,7 @@ func TestTenantIsolation_CreateDeniesForeignProject(t *testing.T) {
 			create func() error
 		}{
 			{"definition", func() error {
-				return gorms.NewDefinitionRepository(db).Create(ctx,
+				return pg.NewDefinitionRepository(testutils.StormConn(db)).Create(ctx,
 					models.ProcessDefinitionModel{Base: newID(), ProjectID: foreign, Key: "planted"})
 			}},
 			{"decision", func() error {
