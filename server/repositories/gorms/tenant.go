@@ -70,26 +70,6 @@ func tenantScopeDB(ctx context.Context, db *gorm.DB, table string) *gorm.DB {
 	return db.Joins(joinClause, tc.TenantID)
 }
 
-// tenantScopeDBOptionalProject is tenantScopeDB for tables whose project_id is
-// nullable. Rows that carry a project are scoped to the caller's organization;
-// rows that carry none are left visible, because they are reachable only
-// through a column that already names their owner (a notification's user_id).
-//
-// An inner join would have deleted those rows from every result set instead.
-func tenantScopeDBOptionalProject(ctx context.Context, db *gorm.DB, table string) *gorm.DB {
-	tc, ok := entities.TenantContextFrom(ctx)
-	if !ok || tc.TenantID == "" {
-		if unscopedAccessAllowed(ctx) {
-			return db
-		}
-		return denyAll(db)
-	}
-
-	joinClause := strings.ReplaceAll(QueryTenantScopeViaProjectOptional, "{table}", table)
-	condition := strings.ReplaceAll(QueryTenantScopeOptionalCondition, "{table}", table)
-	return db.Joins(joinClause).Where(condition, tc.TenantID)
-}
-
 // tenantScopeCondition is tenantScopeDB expressed as a WHERE predicate instead
 // of a JOIN, for locking reads and for statements where join syntax is not
 // portable. It scopes the same rows; it just does not widen the statement's
@@ -178,21 +158,6 @@ func requireProjectInTenant(ctx context.Context, db *gorm.DB, projectID uuid.UUI
 	return nil
 }
 
-// tenantScopeConditionOptionalProject is tenantScopeCondition for tables whose
-// project_id is nullable.
-func tenantScopeConditionOptionalProject(ctx context.Context, db *gorm.DB, table string) *gorm.DB {
-	tc, ok := entities.TenantContextFrom(ctx)
-	if !ok || tc.TenantID == "" {
-		if unscopedAccessAllowed(ctx) {
-			return db
-		}
-		return denyAll(db)
-	}
-
-	condition := strings.ReplaceAll(QueryTenantScopeViaProjectSubqueryOptional, "{table}", table)
-	return db.Where(condition, tc.TenantID)
-}
-
 // requireVisibleToTenant returns ErrRecordNotFound unless the row is inside the
 // caller's tenant scope, and nil when there is no tenant to scope by — engine
 // and background work is unguarded here for the same reason the read scope lets
@@ -213,12 +178,6 @@ func tenantScopeConditionOptionalProject(ctx context.Context, db *gorm.DB, table
 // its transaction.
 func requireVisibleToTenant(ctx context.Context, db *gorm.DB, table string, model any, id uuid.UUID) error {
 	return requireVisible(ctx, tenantScopeCondition, db, table, model, id)
-}
-
-// requireVisibleToTenantOptionalProject is requireVisibleToTenant for tables
-// whose project_id is nullable.
-func requireVisibleToTenantOptionalProject(ctx context.Context, db *gorm.DB, table string, model any, id uuid.UUID) error {
-	return requireVisible(ctx, tenantScopeConditionOptionalProject, db, table, model, id)
 }
 
 func requireVisible(

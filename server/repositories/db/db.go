@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gsoultan/storm/runtime"
@@ -47,7 +48,29 @@ type Conn struct {
 // The pool comes from storm's constructor rather than pgxpool directly, because
 // that is what installs the fast parameter encoders the generated code assumes.
 func Open(ctx context.Context, dsn string) (*Conn, error) {
-	pool, err := pgxdrv.NewPool(ctx, dsn)
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("could not read the connection string: %w", err)
+	}
+
+	// A pooled connection whose TCP has died looks alive until something is
+	// sent on it, so the first request after a network blip fails on a
+	// connection that was already gone. database/sql hid this by retrying once
+	// on driver.ErrBadConn; pgx has no equivalent, and adding one here would
+	// mean retrying statements that may already have run.
+	//
+	// So the pool checks instead. Idle connections are reaped and every one is
+	// health-checked, which turns "the first caller after an outage gets an
+	// error" into "the pool noticed before anybody asked".
+	config.HealthCheckPeriod = 5 * time.Second
+	config.MaxConnIdleTime = 30 * time.Second
+	// Bounded lifetime as well, because a connection can also be quietly broken
+	// by something between here and the server that keeps the socket open — a
+	// load balancer, a firewall idle timeout — which no health check on this end
+	// will notice until it is used.
+	config.MaxConnLifetime = 30 * time.Minute
+
+	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("could not open the main database: %w", err)
 	}

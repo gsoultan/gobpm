@@ -332,10 +332,16 @@ func TestEngineSurvivesADatabaseOutage(t *testing.T) {
 
 	// The pool has to notice its dead connections and redial; give it a bounded
 	// window rather than asserting on the first attempt.
+	// Both pools. The engine reads through two connection layers while the
+	// storm port is under way, and they hold separate connections — so a probe
+	// that only touched one would report a recovered engine while the other was
+	// still handing out a socket that died during the outage.
 	var recovered bool
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, err := engine.GetInstance(ctx, instanceID); err == nil {
+		_, gormErr := engine.GetInstance(ctx, instanceID)
+		_, stormErr := repo.Subscription().ListByInstance(ctx, instanceID)
+		if gormErr == nil && stormErr == nil {
 			recovered = true
 			break
 		}

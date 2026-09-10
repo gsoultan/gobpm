@@ -236,7 +236,7 @@ func TestTenantIsolation_ListsExcludeOtherTenants(t *testing.T) {
 			{
 				name: "signal correlation cannot cross tenants",
 				read: func() ([]uuid.UUID, error) {
-					rows, err := gorms.NewSubscriptionRepository(db).FindSignals(ctx, f.projectB, sharedSignal)
+					rows, err := pg.NewSubscriptionRepository(testutils.StormConn(db)).FindSignals(ctx, f.projectB, sharedSignal)
 					return idsOf(rows, func(m models.Subscription) uuid.UUID { return uuid.UUID(m.ID) }), err
 				},
 				want: nil,
@@ -244,7 +244,7 @@ func TestTenantIsolation_ListsExcludeOtherTenants(t *testing.T) {
 			{
 				name: "subscriptions of another tenant's instance",
 				read: func() ([]uuid.UUID, error) {
-					rows, err := gorms.NewSubscriptionRepository(db).ListByInstance(ctx, f.instanceB)
+					rows, err := pg.NewSubscriptionRepository(testutils.StormConn(db)).ListByInstance(ctx, f.instanceB)
 					return idsOf(rows, func(m models.Subscription) uuid.UUID { return uuid.UUID(m.ID) }), err
 				},
 				want: nil,
@@ -279,7 +279,7 @@ func TestTenantIsolation_ListsExcludeOtherTenants(t *testing.T) {
 			{
 				name: "notifications keep system messages and drop the other tenant's",
 				read: func() ([]uuid.UUID, error) {
-					rows, err := gorms.NewNotificationRepository(db).ListByUser(ctx, sharedUserID)
+					rows, err := pg.NewNotificationRepository(testutils.StormConn(db)).ListByUser(ctx, sharedUserID)
 					return idsOf(rows, func(m models.NotificationModel) uuid.UUID { return uuid.UUID(m.ID) }), err
 				},
 				want: []uuid.UUID{f.notificationA, f.systemNotification},
@@ -476,14 +476,14 @@ func TestTenantIsolation_WritesDenyOtherTenants(t *testing.T) {
 			},
 			{
 				name:  "delete another tenant's notification",
-				write: func() error { return gorms.NewNotificationRepository(db).Delete(ctx, f.notifB) },
+				write: func() error { return pg.NewNotificationRepository(testutils.StormConn(db)).Delete(ctx, f.notifB) },
 				unchanged: func() bool {
 					return rowExists(t, db, &models.NotificationModel{}, "notifications", f.notifB)
 				},
 			},
 			{
 				name:  "mark another tenant's notification read",
-				write: func() error { return gorms.NewNotificationRepository(db).MarkAsRead(ctx, f.notifB) },
+				write: func() error { return pg.NewNotificationRepository(testutils.StormConn(db)).MarkAsRead(ctx, f.notifB) },
 				unchanged: func() bool {
 					var m models.NotificationModel
 					if err := db.First(&m, "id = ?", models.FromUUID(f.notifB)).Error; err != nil {
@@ -494,7 +494,7 @@ func TestTenantIsolation_WritesDenyOtherTenants(t *testing.T) {
 			},
 			{
 				name:  "delete another tenant's subscription",
-				write: func() error { return gorms.NewSubscriptionRepository(db).Delete(ctx, f.subB) },
+				write: func() error { return pg.NewSubscriptionRepository(testutils.StormConn(db)).Delete(ctx, f.subB) },
 				unchanged: func() bool {
 					return rowExists(t, db, &models.Subscription{}, "event_subscriptions", f.subB)
 				},
@@ -502,7 +502,7 @@ func TestTenantIsolation_WritesDenyOtherTenants(t *testing.T) {
 			{
 				name: "redirect another tenant's correlation key",
 				write: func() error {
-					return gorms.NewSubscriptionRepository(db).UpdateCorrelationKey(ctx, f.subB, "hijacked")
+					return pg.NewSubscriptionRepository(testutils.StormConn(db)).UpdateCorrelationKey(ctx, f.subB, "hijacked")
 				},
 				unchanged: func() bool {
 					var m models.Subscription
@@ -610,19 +610,19 @@ func TestTenantIsolation_OwnWritesStillSucceed(t *testing.T) {
 			write func() error
 		}{
 			{"mark own notification read", func() error {
-				return gorms.NewNotificationRepository(db).MarkAsRead(ctx, f.notificationA)
+				return pg.NewNotificationRepository(testutils.StormConn(db)).MarkAsRead(ctx, f.notificationA)
 			}},
 			{"mark a system notification read", func() error {
-				return gorms.NewNotificationRepository(db).MarkAsRead(ctx, f.systemNotification)
+				return pg.NewNotificationRepository(testutils.StormConn(db)).MarkAsRead(ctx, f.systemNotification)
 			}},
 			{"mark whole inbox read", func() error {
-				return gorms.NewNotificationRepository(db).MarkAllAsRead(ctx, sharedUserID)
+				return pg.NewNotificationRepository(testutils.StormConn(db)).MarkAllAsRead(ctx, sharedUserID)
 			}},
 			{"own task status", func() error {
 				return gorms.NewTaskRepository(db).UpdateStatus(ctx, f.taskA, models.TaskClaimed)
 			}},
 			{"own correlation key", func() error {
-				return gorms.NewSubscriptionRepository(db).UpdateCorrelationKey(ctx, f.subscriptionA, "resolved")
+				return pg.NewSubscriptionRepository(testutils.StormConn(db)).UpdateCorrelationKey(ctx, f.subscriptionA, "resolved")
 			}},
 			{"own connector instance", func() error {
 				// Load before saving, the way the service layer does. A model
@@ -865,7 +865,7 @@ func TestTenantIsolation_OwnRowsStillReadable(t *testing.T) {
 		})
 
 		t.Run("own signals", func(t *testing.T) {
-			rows, err := gorms.NewSubscriptionRepository(db).FindSignals(ctx, f.projectA, sharedSignal)
+			rows, err := pg.NewSubscriptionRepository(testutils.StormConn(db)).FindSignals(ctx, f.projectA, sharedSignal)
 			if err != nil {
 				t.Fatalf("find: %v", err)
 			}
@@ -890,7 +890,7 @@ func TestTenantIsolation_NoTenantContextReadsEverything(t *testing.T) {
 		assertSameIDs(t, idsOf(forms, func(m models.FormModel) uuid.UUID { return uuid.UUID(m.ID) }),
 			[]uuid.UUID{f.formA, f.formB})
 
-		notifications, err := gorms.NewNotificationRepository(db).ListByUser(ctx, sharedUserID)
+		notifications, err := pg.NewNotificationRepository(testutils.StormConn(db)).ListByUser(ctx, sharedUserID)
 		if err != nil {
 			t.Fatalf("list notifications: %v", err)
 		}
