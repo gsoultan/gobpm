@@ -3,12 +3,14 @@ package models
 // Connector is the GORM model for Connector templates.
 type Connector struct {
 	Base
-	Key         string              `gorm:"size:255;uniqueIndex" json:"key"`
-	Name        string              `json:"name"`
-	Description string              `json:"description,omitzero"`
-	Icon        string              `json:"icon,omitzero"`
-	Type        string              `json:"type"`
-	Schema      []ConnectorProperty `gorm:"type:text;serializer:json" json:"schema,omitzero"`
+	Key         string `gorm:"size:255;uniqueIndex" json:"key"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitzero"`
+	Icon        string `json:"icon,omitzero"`
+	Type        string `json:"type"`
+	// column:properties — see FormModel.Schema for why the column and the Go
+	// field disagree here.
+	Schema []ConnectorProperty `gorm:"column:properties;type:text;serializer:json" json:"schema,omitzero"`
 }
 
 // ConnectorProperty defines the schema for a connector's configuration in the database.

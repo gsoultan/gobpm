@@ -37,16 +37,20 @@ const (
 	testMaxConns = 2
 )
 
-// forEachDialect runs body against every SQL engine the product supports.
-// PostgreSQL and MySQL skip themselves unless their DSN is configured.
+// forEachDialect runs body against the engine the product supports.
+// The name is kept because every caller says it and there is nothing clearer
+// to call "run this against a database".
 func forEachDialect(t *testing.T, body func(t *testing.T, db *gorm.DB)) {
 	t.Helper()
 
+	// One engine. This ran each case against SQLite and then PostgreSQL, back
+	// when both were supported and the SQLite pass was the only one that ever
+	// ran — the PostgreSQL DSN was set nowhere. Both helpers now open the same
+	// engine, so running twice would assert the same thing twice.
 	engines := []struct {
 		name string
 		open func(*testing.T) *gorm.DB
 	}{
-		{"sqlite", func(t *testing.T) *gorm.DB { return testutils.SetupTestDB(t) }},
 		{"postgres", func(t *testing.T) *gorm.DB { return testutils.SetupPostgresDB(t, testMaxConns) }},
 	}
 
@@ -208,7 +212,7 @@ func TestTenantIsolation_ListsExcludeOtherTenants(t *testing.T) {
 			{
 				name: "forms across all projects",
 				read: func() ([]uuid.UUID, error) {
-					rows, err := gorms.NewFormRepository(db).ListByProject(ctx, uuid.Nil)
+					rows, err := pg.NewFormRepository(testutils.StormConn(db)).ListByProject(ctx, uuid.Nil)
 					return idsOf(rows, func(m models.FormModel) uuid.UUID { return uuid.UUID(m.ID) }), err
 				},
 				want: []uuid.UUID{f.formA},
@@ -306,9 +310,9 @@ func TestTenantIsolation_GetByIDDeniesOtherTenants(t *testing.T) {
 			name string
 			read func() error
 		}{
-			{"form", func() error { _, err := gorms.NewFormRepository(db).Get(ctx, f.formB); return err }},
+			{"form", func() error { _, err := pg.NewFormRepository(testutils.StormConn(db)).Get(ctx, f.formB); return err }},
 			{"form by key", func() error {
-				_, err := gorms.NewFormRepository(db).GetByKey(ctx, f.projectB, sharedFormKey)
+				_, err := pg.NewFormRepository(testutils.StormConn(db)).GetByKey(ctx, f.projectB, sharedFormKey)
 				return err
 			}},
 			{"deployment", func() error { _, err := gorms.NewDeploymentRepository(db).Get(ctx, f.deploymentB); return err }},
@@ -341,8 +345,8 @@ func TestTenantIsolation_GetByIDDeniesOtherTenants(t *testing.T) {
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
 				err := tc.read()
-				if !errors.Is(err, gorm.ErrRecordNotFound) {
-					t.Fatalf("reading another tenant's row: got err %v, want %v", err, gorm.ErrRecordNotFound)
+				if !isNotFound(err) {
+					t.Fatalf("reading another tenant's row: got err %v, want a not-found", err)
 				}
 			})
 		}
@@ -371,8 +375,8 @@ func TestTenantIsolation_KeyLookupsStayInTenant(t *testing.T) {
 
 		t.Run("definition by key and version denies another tenant's version", func(t *testing.T) {
 			_, err := gorms.NewDefinitionRepository(db).GetByKeyAndVersion(ctx, sharedDefinitionKey, 2)
-			if !errors.Is(err, gorm.ErrRecordNotFound) {
-				t.Fatalf("got %v, want %v", err, gorm.ErrRecordNotFound)
+			if !isNotFound(err) {
+				t.Fatalf("got %v, want a not-found", err)
 			}
 		})
 
@@ -388,8 +392,8 @@ func TestTenantIsolation_KeyLookupsStayInTenant(t *testing.T) {
 
 		t.Run("decision by key and version denies another tenant's version", func(t *testing.T) {
 			_, err := gorms.NewDecisionRepository(db).GetByKeyAndVersion(ctx, sharedDecisionKey, 2)
-			if !errors.Is(err, gorm.ErrRecordNotFound) {
-				t.Fatalf("got %v, want %v", err, gorm.ErrRecordNotFound)
+			if !isNotFound(err) {
+				t.Fatalf("got %v, want a not-found", err)
 			}
 		})
 	})
@@ -413,7 +417,7 @@ func TestTenantIsolation_WritesDenyOtherTenants(t *testing.T) {
 		}{
 			{
 				name:  "delete another tenant's form",
-				write: func() error { return gorms.NewFormRepository(db).Delete(ctx, f.formB) },
+				write: func() error { return pg.NewFormRepository(testutils.StormConn(db)).Delete(ctx, f.formB) },
 				unchanged: func() bool {
 					return rowExists(t, db, &models.FormModel{}, "forms", f.formB)
 				},
@@ -583,8 +587,8 @@ func TestTenantIsolation_WritesDenyOtherTenants(t *testing.T) {
 
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
-				if err := tc.write(); !errors.Is(err, gorm.ErrRecordNotFound) {
-					t.Errorf("write: got err %v, want %v", err, gorm.ErrRecordNotFound)
+				if err := tc.write(); !isNotFound(err) {
+					t.Errorf("write: got err %v, want a not-found", err)
 				}
 				if !tc.unchanged() {
 					t.Fatal("the write was refused but the row changed anyway")
@@ -633,7 +637,7 @@ func TestTenantIsolation_OwnWritesStillSucceed(t *testing.T) {
 				return repo.Update(ctx, m)
 			}},
 			{"own form deleted", func() error {
-				return gorms.NewFormRepository(db).Delete(ctx, f.formA)
+				return pg.NewFormRepository(testutils.StormConn(db)).Delete(ctx, f.formA)
 			}},
 		}
 
@@ -744,7 +748,7 @@ func TestTenantIsolation_CreateDeniesForeignProject(t *testing.T) {
 					models.DecisionDefinitionModel{Base: newID(), ProjectID: foreign, Key: "planted"})
 			}},
 			{"form", func() error {
-				return gorms.NewFormRepository(db).Create(ctx,
+				return pg.NewFormRepository(testutils.StormConn(db)).Create(ctx,
 					models.FormModel{Base: newID(), ProjectID: foreign, Key: "planted"})
 			}},
 			{"deployment", func() error {
@@ -769,8 +773,8 @@ func TestTenantIsolation_CreateDeniesForeignProject(t *testing.T) {
 
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
-				if err := tc.create(); !errors.Is(err, gorm.ErrRecordNotFound) {
-					t.Fatalf("creating into another tenant's project: got %v, want %v", err, gorm.ErrRecordNotFound)
+				if err := tc.create(); !isNotFound(err) {
+					t.Fatalf("creating into another tenant's project: got %v, want a not-found", err)
 				}
 			})
 		}
@@ -785,7 +789,7 @@ func TestTenantIsolation_CreateIntoOwnProjectSucceeds(t *testing.T) {
 		ctx := f.ctxAsA(t)
 
 		own := models.FromUUID(f.projectA)
-		if err := gorms.NewFormRepository(db).Create(ctx, models.FormModel{
+		if err := pg.NewFormRepository(testutils.StormConn(db)).Create(ctx, models.FormModel{
 			Base: models.Base{ID: models.FromUUID(uuid.New())}, ProjectID: own, Key: "mine",
 		}); err != nil {
 			t.Errorf("create into own project: %v", err)
@@ -821,9 +825,9 @@ func TestTenantIsolation_OwnRowsStillReadable(t *testing.T) {
 			name string
 			read func() error
 		}{
-			{"form", func() error { _, err := gorms.NewFormRepository(db).Get(ctx, f.formA); return err }},
+			{"form", func() error { _, err := pg.NewFormRepository(testutils.StormConn(db)).Get(ctx, f.formA); return err }},
 			{"form by key", func() error {
-				_, err := gorms.NewFormRepository(db).GetByKey(ctx, f.projectA, sharedFormKey)
+				_, err := pg.NewFormRepository(testutils.StormConn(db)).GetByKey(ctx, f.projectA, sharedFormKey)
 				return err
 			}},
 			{"deployment", func() error { _, err := gorms.NewDeploymentRepository(db).Get(ctx, f.deploymentA); return err }},
@@ -879,7 +883,7 @@ func TestTenantIsolation_NoTenantContextReadsEverything(t *testing.T) {
 		f := seedTenantFixture(t, db)
 		ctx := t.Context()
 
-		forms, err := gorms.NewFormRepository(db).ListByProject(ctx, uuid.Nil)
+		forms, err := pg.NewFormRepository(testutils.StormConn(db)).ListByProject(ctx, uuid.Nil)
 		if err != nil {
 			t.Fatalf("list forms: %v", err)
 		}
@@ -922,4 +926,15 @@ func assertSameIDs(t *testing.T, got, want []uuid.UUID) {
 			t.Fatalf("missing %v in %v", id, got)
 		}
 	}
+}
+
+// isNotFound accepts either sentinel a repository may answer a denial with.
+//
+// The GORM repositories return gorm.ErrRecordNotFound; the storm ones return
+// apierr.ErrNotFound, which is what every repository will return once the port
+// finishes — a persistence contract that leaks its ORM's sentinel is one of the
+// things the port removes. Accepting both is temporary and deliberate: the
+// property under test is that the row is denied, not which package named it.
+func isNotFound(err error) bool {
+	return errors.Is(err, gorm.ErrRecordNotFound) || errors.Is(err, apierr.ErrNotFound)
 }

@@ -115,7 +115,7 @@ func (r *externalTaskRepository) FetchAndLock(ctx context.Context, topic string,
 func (r *externalTaskRepository) ListByProcessInstance(ctx context.Context, instanceID uuid.UUID) ([]*models.ExternalTaskModel, error) {
 	var modelsList []*models.ExternalTaskModel
 	db := tenantScopeDB(ctx, GetTx(ctx, r.db), tableExternalTasks)
-	if err := db.Where("external_tasks.process_instance_id = ?", instanceID).Find(&modelsList).Error; err != nil {
+	if err := db.Where("external_tasks.instance_id = ?", instanceID).Find(&modelsList).Error; err != nil {
 		return nil, err
 	}
 	return modelsList, nil

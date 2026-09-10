@@ -1,7 +1,6 @@
 package tenant
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -9,6 +8,8 @@ import (
 	"github.com/gsoultan/metis/server/domains/entities"
 	"github.com/gsoultan/metis/server/repositories/gorms"
 	"github.com/gsoultan/metis/server/repositories/models"
+	"github.com/gsoultan/metis/server/repositories/pg"
+	"github.com/gsoultan/metis/tests/testutils"
 	"gorm.io/gorm"
 )
 
@@ -28,7 +29,7 @@ func TestStrictScope_DeniesAContextWithNoIdentity(t *testing.T) {
 		ctx := t.Context()
 
 		t.Run("lists return nothing", func(t *testing.T) {
-			rows, err := gorms.NewFormRepository(db).ListByProject(ctx, uuid.Nil)
+			rows, err := pg.NewFormRepository(testutils.StormConn(db)).ListByProject(ctx, uuid.Nil)
 			if err != nil {
 				t.Fatalf("list: %v", err)
 			}
@@ -36,14 +37,14 @@ func TestStrictScope_DeniesAContextWithNoIdentity(t *testing.T) {
 		})
 
 		t.Run("get by id is not found", func(t *testing.T) {
-			if _, err := gorms.NewFormRepository(db).Get(ctx, f.formA); !errors.Is(err, gorm.ErrRecordNotFound) {
-				t.Fatalf("got %v, want %v", err, gorm.ErrRecordNotFound)
+			if _, err := pg.NewFormRepository(testutils.StormConn(db)).Get(ctx, f.formA); !isNotFound(err) {
+				t.Fatalf("got %v, want a not-found", err)
 			}
 		})
 
 		t.Run("writes are refused", func(t *testing.T) {
-			if err := gorms.NewFormRepository(db).Delete(ctx, f.formA); !errors.Is(err, gorm.ErrRecordNotFound) {
-				t.Errorf("delete: got %v, want %v", err, gorm.ErrRecordNotFound)
+			if err := pg.NewFormRepository(testutils.StormConn(db)).Delete(ctx, f.formA); !isNotFound(err) {
+				t.Errorf("delete: got %v, want a not-found", err)
 			}
 			if !rowExists(t, db, &models.FormModel{}, "forms", f.formA) {
 				t.Fatal("the delete was refused but the row is gone")
@@ -51,11 +52,11 @@ func TestStrictScope_DeniesAContextWithNoIdentity(t *testing.T) {
 		})
 
 		t.Run("creates are refused", func(t *testing.T) {
-			err := gorms.NewFormRepository(db).Create(ctx, models.FormModel{
+			err := pg.NewFormRepository(testutils.StormConn(db)).Create(ctx, models.FormModel{
 				Base: models.Base{ID: models.FromUUID(uuid.New())}, ProjectID: models.FromUUID(f.projectA), Key: "x",
 			})
-			if !errors.Is(err, gorm.ErrRecordNotFound) {
-				t.Errorf("create: got %v, want %v", err, gorm.ErrRecordNotFound)
+			if !isNotFound(err) {
+				t.Errorf("create: got %v, want a not-found", err)
 			}
 		})
 	})
@@ -75,7 +76,7 @@ func TestStrictScope_SystemWorkStillSeesEverything(t *testing.T) {
 		f := seedTenantFixture(t, db)
 		ctx := entities.WithSystemContext(t.Context())
 
-		forms, err := gorms.NewFormRepository(db).ListByProject(ctx, uuid.Nil)
+		forms, err := pg.NewFormRepository(testutils.StormConn(db)).ListByProject(ctx, uuid.Nil)
 		if err != nil {
 			t.Fatalf("list as system: %v", err)
 		}
@@ -106,17 +107,17 @@ func TestStrictScope_TenantScopingIsUnchanged(t *testing.T) {
 		f := seedTenantFixture(t, db)
 		ctx := f.ctxAsA(t)
 
-		forms, err := gorms.NewFormRepository(db).ListByProject(ctx, uuid.Nil)
+		forms, err := pg.NewFormRepository(testutils.StormConn(db)).ListByProject(ctx, uuid.Nil)
 		if err != nil {
 			t.Fatalf("list: %v", err)
 		}
 		assertSameIDs(t, idsOf(forms, func(m models.FormModel) uuid.UUID { return uuid.UUID(m.ID) }),
 			[]uuid.UUID{f.formA})
 
-		if _, err := gorms.NewFormRepository(db).Get(ctx, f.formB); !errors.Is(err, gorm.ErrRecordNotFound) {
-			t.Errorf("cross-tenant get: got %v, want %v", err, gorm.ErrRecordNotFound)
+		if _, err := pg.NewFormRepository(testutils.StormConn(db)).Get(ctx, f.formB); !isNotFound(err) {
+			t.Errorf("cross-tenant get: got %v, want a not-found", err)
 		}
-		if _, err := gorms.NewFormRepository(db).Get(ctx, f.formA); err != nil {
+		if _, err := pg.NewFormRepository(testutils.StormConn(db)).Get(ctx, f.formA); err != nil {
 			t.Errorf("own get: %v", err)
 		}
 	})

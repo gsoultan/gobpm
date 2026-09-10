@@ -440,6 +440,43 @@ func Schema(models []any) []Migration {
 				return nil
 			},
 		},
+		{
+			Version: 18,
+			Name:    "one name per column",
+			// Four columns whose Go field and database column disagreed, found
+			// by diffing the GORM schema against the storm model rather than by
+			// a query failing. Nothing broke while only GORM read them; the
+			// moment a ported repository named the column the model describes,
+			// it was a SQL error on every read of that table.
+			//
+			// RENAME is metadata-only in PostgreSQL — no table rewrite, no long
+			// lock — which is why this is a rename rather than an add-and-copy.
+			Run: func(_ context.Context, db *gorm.DB) error {
+				renames := []struct{ table, from, to string }{
+					{"forms", "schema", "fields"},
+					{"connectors", "schema", "properties"},
+					{"external_tasks", "process_instance_id", "instance_id"},
+					{"external_tasks", "process_definition_id", "definition_id"},
+				}
+				for _, rename := range renames {
+					model, err := modelForTable(db, models, rename.table)
+					if err != nil {
+						return err
+					}
+					// Guarded both ways: skip when the old column is gone, and
+					// skip when the new one is already there, so a fresh
+					// installation whose AutoMigrate created the new name does
+					// not fail on a rename with nothing to rename.
+					if !db.Migrator().HasColumn(model, rename.from) || db.Migrator().HasColumn(model, rename.to) {
+						continue
+					}
+					if err := db.Migrator().RenameColumn(model, rename.from, rename.to); err != nil {
+						return fmt.Errorf("rename %s.%s to %s: %w", rename.table, rename.from, rename.to, err)
+					}
+				}
+				return nil
+			},
+		},
 	}
 }
 

@@ -184,3 +184,37 @@ func (r *conn) requireInstanceInTenant(ctx context.Context, instanceID uuid.UUID
 	}
 	return nil
 }
+
+// scopedProjects narrows a requested project to what the caller may see.
+//
+// visible is false when the caller may see nothing, which a list answers with
+// no rows and a read answers with not-found. When it is true, projects is the
+// filter to apply — and nil there means "do not filter at all", which only
+// system work gets and only when it named no project.
+//
+// The two are separate returns because a single nil slice meant both "nothing
+// is visible" and "everything is", and those are opposite answers.
+func (r *conn) scopedProjects(ctx context.Context, requested uuid.UUID) (projects []uuid.UUID, visible bool, err error) {
+	scope, err := r.scopeOf(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	if scope.unrestricted() {
+		if requested != uuid.Nil {
+			return []uuid.UUID{requested}, true, nil
+		}
+		return nil, true, nil
+	}
+	if len(scope.projects) == 0 {
+		return nil, false, nil
+	}
+	if requested == uuid.Nil {
+		return scope.projects, true, nil
+	}
+	for _, id := range scope.projects {
+		if id == requested {
+			return []uuid.UUID{requested}, true, nil
+		}
+	}
+	return nil, false, nil
+}
