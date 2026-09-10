@@ -82,7 +82,7 @@ func (r *conn) scopeOf(ctx context.Context) (tenantScope, error) {
 // indistinguishable from the feature being broken. The read is one indexed
 // lookup returning a handful of ids.
 func (r *conn) projectsOf(ctx context.Context, organization uuid.UUID) ([]uuid.UUID, error) {
-	ex, err := r.conn.Executor(ctx)
+	ex, err := r.conn.MainExecutor(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -166,6 +166,9 @@ func (r *conn) requireInstanceInTenant(ctx context.Context, instanceID uuid.UUID
 		return fmt.Errorf("%w: no such process instance", apierr.ErrNotFound)
 	}
 
+	// The environment's database, not main: an instance belongs to the runtime
+	// it is running in. Only the identity and registry tables are
+	// installation-wide.
 	ex, err := r.conn.Executor(ctx)
 	if err != nil {
 		return err

@@ -4,6 +4,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gsoultan/storm/runtime"
@@ -96,3 +97,6 @@ func scanInt(values [][]byte, into *int64) error {
 	}
 	return nil
 }
+
+// nowUTC is the moment a write happens, in the one zone the database stores.
+func nowUTC() time.Time { return time.Now().UTC() }

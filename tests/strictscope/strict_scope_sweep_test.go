@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/gsoultan/metis/server/repositories/gorms"
+	"github.com/gsoultan/metis/internal/pkg/tenantscope"
 )
 
 // The strict scope's failure mode is an empty result, not an error. A read path
@@ -29,7 +29,7 @@ func TestStrictScope_EveryScopedReadStillReturnsItsTenantsData(t *testing.T) {
 	seeded := h.seedOneOfEverything(token, projectID)
 
 	underStrictScope(t)
-	gorms.ResetDeniedSites()
+	tenantscope.ResetDeniedSites()
 
 	for _, read := range seeded.reads() {
 		t.Run(read.name, func(t *testing.T) {
@@ -65,7 +65,7 @@ func TestStrictScope_NoReadPathLosesItsIdentity(t *testing.T) {
 	seeded := h.seedOneOfEverything(token, projectID)
 
 	underStrictScope(t)
-	gorms.ResetDeniedSites()
+	tenantscope.ResetDeniedSites()
 
 	paths := []string{
 		"/api/v1/organizations",
@@ -120,7 +120,7 @@ func TestStrictScope_BackgroundWorkersKeepTheirSystemIdentity(t *testing.T) {
 	token := h.login("watcher", "correct-horse-battery")
 
 	underStrictScope(t)
-	gorms.ResetDeniedSites()
+	tenantscope.ResetDeniedSites()
 
 	h.svc.StartWorkers(t.Context())
 
@@ -165,7 +165,7 @@ func (h *harness) waitForTaskOrDenial(t *testing.T, token, name string) {
 		case <-done:
 			return
 		case <-ticker.C:
-			if len(gorms.DeniedSites()) > 0 {
+			if len(tenantscope.DeniedSites()) > 0 {
 				// The wait goroutine is left to finish against the test
 				// context; assertNothingWasDenied is what reports, and it
 				// prints the paths rather than the symptom.
@@ -183,7 +183,7 @@ func (h *harness) waitForTaskOrDenial(t *testing.T, token, name string) {
 // puzzle.
 func assertNothingWasDenied(t *testing.T) {
 	t.Helper()
-	denied := gorms.DeniedSites()
+	denied := tenantscope.DeniedSites()
 	if len(denied) == 0 {
 		return
 	}

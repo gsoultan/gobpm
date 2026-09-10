@@ -2,6 +2,7 @@ package gorms
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/gsoultan/metis/internal/pkg/config"
 	"github.com/gsoultan/metis/internal/pkg/dbpool"
@@ -59,4 +60,49 @@ func Ping(db *gorm.DB) error {
 		return fmt.Errorf("the database did not answer: %w", err)
 	}
 	return nil
+}
+
+// Config is the GORM configuration every connection to this schema must use.
+//
+// It exists so there is one answer rather than one per gorm.Open call site.
+// Test harnesses must use it too: a setting the tests do not share is a setting
+// the tests do not check.
+func Config() *gorm.Config {
+	return &gorm.Config{
+		// TranslateError turns each driver's own way of saying "that row already
+		// exists" into gorm.ErrDuplicatedKey. Without it, recognising a unique
+		// constraint means matching error text per dialect — four spellings to
+		// keep in step, and the wrong one is discovered in production. The
+		// definition version allocator depends on it.
+		TranslateError: true,
+	}
+}
+
+var (
+	dbOverrideMu sync.RWMutex
+	dbOverride   *gorm.DB
+)
+
+// SetDBOverride replaces the connection the migration runner uses.
+//
+// The setup wizard writes to a database nobody was connected to when the
+// process started, then hot-swaps it in rather than asking for a restart.
+//
+// This is all that is left of a mechanism the repositories used to depend on.
+// They are on storm now and resolve their own connection, so the override no
+// longer decides where a query goes — only where the schema is migrated.
+func SetDBOverride(db *gorm.DB) {
+	dbOverrideMu.Lock()
+	defer dbOverrideMu.Unlock()
+	dbOverride = db
+}
+
+// ResolveDB returns the override if one has been installed.
+func ResolveDB(db *gorm.DB) *gorm.DB {
+	dbOverrideMu.RLock()
+	defer dbOverrideMu.RUnlock()
+	if dbOverride != nil {
+		return dbOverride
+	}
+	return db
 }

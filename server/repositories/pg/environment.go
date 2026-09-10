@@ -22,7 +22,7 @@ func NewEnvironmentRepository(c *db.Conn) contracts.EnvironmentRepository {
 }
 
 func (r *environmentRepository) Get(ctx context.Context, id uuid.UUID) (models.EnvironmentModel, error) {
-	ex, err := r.conn.conn.Executor(ctx)
+	ex, err := r.conn.conn.MainExecutor(ctx)
 	if err != nil {
 		return models.EnvironmentModel{}, err
 	}
@@ -44,7 +44,7 @@ func (r *environmentRepository) ListByProject(ctx context.Context, projectID uui
 	if err != nil || !visible {
 		return nil, err
 	}
-	ex, err := r.conn.conn.Executor(ctx)
+	ex, err := r.conn.conn.MainExecutor(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +66,7 @@ func (r *environmentRepository) ListByProject(ctx context.Context, projectID uui
 // serve only whichever organization happened to be on the context, which at
 // boot is none.
 func (r *environmentRepository) ListAll(ctx context.Context) ([]models.EnvironmentModel, error) {
-	ex, err := r.conn.conn.Executor(ctx)
+	ex, err := r.conn.conn.MainExecutor(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +82,7 @@ func (r *environmentRepository) Create(ctx context.Context, e models.Environment
 	if err := r.requireProjectInTenant(ctx, projectID); err != nil {
 		return err
 	}
-	ex, err := r.conn.conn.Executor(ctx)
+	ex, err := r.conn.conn.MainExecutor(ctx)
 	if err != nil {
 		return err
 	}
@@ -114,7 +114,7 @@ func (r *environmentRepository) Update(ctx context.Context, e models.Environment
 	if _, err := r.Get(ctx, id); err != nil {
 		return err
 	}
-	ex, err := r.conn.conn.Executor(ctx)
+	ex, err := r.conn.conn.MainExecutor(ctx)
 	if err != nil {
 		return err
 	}
@@ -153,7 +153,7 @@ func (r *environmentRepository) Delete(ctx context.Context, id uuid.UUID) error 
 	if _, err := r.Get(ctx, id); err != nil {
 		return err
 	}
-	ex, err := r.conn.conn.Executor(ctx)
+	ex, err := r.conn.conn.MainExecutor(ctx)
 	if err != nil {
 		return err
 	}
@@ -172,7 +172,7 @@ func (r *environmentRepository) Delete(ctx context.Context, id uuid.UUID) error 
 // whoever owns them, and a check that only saw the caller's own would refuse to
 // notice the collision until the next restart failed to bind.
 func (r *environmentRepository) PortTaken(ctx context.Context, port int, excluding uuid.UUID) (bool, error) {
-	ex, err := r.conn.conn.Executor(ctx)
+	ex, err := r.conn.conn.MainExecutor(ctx)
 	if err != nil {
 		return false, err
 	}

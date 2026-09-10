@@ -29,7 +29,7 @@ func (r *projectRepository) Get(ctx context.Context, id uuid.UUID) (models.Proje
 	if err := r.requireProjectInTenant(ctx, id); err != nil {
 		return models.ProjectModel{}, err
 	}
-	ex, err := r.conn.conn.Executor(ctx)
+	ex, err := r.conn.conn.MainExecutor(ctx)
 	if err != nil {
 		return models.ProjectModel{}, err
 	}
@@ -48,7 +48,7 @@ func (r *projectRepository) List(ctx context.Context) ([]models.ProjectModel, er
 	if err != nil {
 		return nil, err
 	}
-	ex, err := r.conn.conn.Executor(ctx)
+	ex, err := r.conn.conn.MainExecutor(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +94,7 @@ func (r *projectRepository) ListByOrganization(ctx context.Context, organization
 		return r.List(ctx)
 	}
 
-	ex, err := r.conn.conn.Executor(ctx)
+	ex, err := r.conn.conn.MainExecutor(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +119,7 @@ func (r *projectRepository) Create(ctx context.Context, p models.ProjectModel) e
 	if err := r.requireOwnOrganization(ctx, organizationID); err != nil {
 		return err
 	}
-	ex, err := r.conn.conn.Executor(ctx)
+	ex, err := r.conn.conn.MainExecutor(ctx)
 	if err != nil {
 		return err
 	}
@@ -144,7 +144,7 @@ func (r *projectRepository) Update(ctx context.Context, p models.ProjectModel) e
 	if err := r.requireProjectInTenant(ctx, id); err != nil {
 		return err
 	}
-	ex, err := r.conn.conn.Executor(ctx)
+	ex, err := r.conn.conn.MainExecutor(ctx)
 	if err != nil {
 		return err
 	}
@@ -170,7 +170,7 @@ func (r *projectRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	if err := r.requireProjectInTenant(ctx, id); err != nil {
 		return err
 	}
-	ex, err := r.conn.conn.Executor(ctx)
+	ex, err := r.conn.conn.MainExecutor(ctx)
 	if err != nil {
 		return err
 	}

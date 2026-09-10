@@ -3,7 +3,6 @@ package repositories
 import (
 	"github.com/gsoultan/metis/server/repositories/contracts"
 	stormdb "github.com/gsoultan/metis/server/repositories/db"
-	"github.com/gsoultan/metis/server/repositories/gorms"
 	"github.com/gsoultan/metis/server/repositories/pg"
 	"gorm.io/gorm"
 )
@@ -75,12 +74,12 @@ func NewRepository(db *gorm.DB, conn *stormdb.Conn) Repository {
 		project:               pg.NewProjectRepository(conn),
 		subscription:          pg.NewSubscriptionRepository(conn),
 		task:                  pg.NewTaskRepository(conn),
-		user:                  gorms.NewUserRepository(db),
-		group:                 gorms.NewGroupRepository(db),
+		user:                  pg.NewUserRepository(conn),
+		group:                 pg.NewGroupRepository(conn),
 		notification:          pg.NewNotificationRepository(conn),
 		compensatableActivity: pg.NewCompensatableActivityRepository(conn),
 		variableSnapshot:      pg.NewVariableSnapshotRepository(conn),
-		uow:                   newSpanningUnitOfWork(gorms.NewUnitOfWork(db), conn),
+		uow:                   newUnitOfWork(conn),
 	}
 }
 

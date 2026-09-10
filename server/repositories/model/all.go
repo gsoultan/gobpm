@@ -11,6 +11,11 @@ func All() []any {
 		// Identity and configuration. These belong to the main database: who
 		// may sign in, what they own, and where each runtime lives.
 		&Organization{},
+		&User{},
+		&UserOrganization{},
+		&UserProject{},
+		&Group{},
+		&Membership{},
 		&Project{},
 		&Environment{},
 

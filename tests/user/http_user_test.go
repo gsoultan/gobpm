@@ -300,6 +300,11 @@ func TestConnectRPCListGroups(t *testing.T) {
 		t.Fatalf("failed to create org: %v", err)
 	}
 
+	// Seeded inside the tenant it belongs to, the way a request creates it.
+	// Without a tenant on the context the strict scope refuses, and the fixture
+	// would fail before the HTTP chain it is testing had run.
+	ctx = entities.WithTenantContext(ctx, entities.TenantContext{TenantID: org.ID.String()})
+
 	err = svc.CreateGroup(ctx, entities.Group{
 		Organization: &entities.Organization{ID: org.ID},
 		Name:         "Engineering",
@@ -370,6 +375,11 @@ func TestHTTPUpdateGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to login: %v", err)
 	}
+
+	// Seeded inside the tenant it belongs to, the way a request creates it.
+	// Without a tenant on the context the strict scope refuses, and the fixture
+	// would fail before the HTTP chain it is testing had run.
+	ctx = entities.WithTenantContext(ctx, entities.TenantContext{TenantID: org.ID.String()})
 
 	err = svc.CreateGroup(ctx, entities.Group{
 		Organization: &entities.Organization{ID: org.ID},

@@ -5,8 +5,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gsoultan/metis/server/domains/entities"
-	"github.com/gsoultan/metis/server/repositories/gorms"
 	"github.com/gsoultan/metis/server/repositories/models"
+	"github.com/gsoultan/metis/server/repositories/pg"
 	"github.com/gsoultan/metis/tests/testutils"
 	"gorm.io/gorm"
 )
@@ -36,7 +36,7 @@ func seedDirectoryFixture(t *testing.T, db *gorm.DB) directoryFixture {
 	// returns the wrong one cannot be explained away as a filter mismatch.
 	names := []string{"alice", "bob"}
 
-	repo := gorms.NewUserRepository(db)
+	repo := pg.NewUserRepository(testutils.StormConn(db))
 	for i, org := range orgs {
 		if err := db.Create(&models.OrganizationModel{
 			Base: models.Base{ID: models.FromUUID(org)}, Name: "org " + names[i],
@@ -73,7 +73,7 @@ func TestTenantIsolation_DirectoryListsAreScoped(t *testing.T) {
 	ctx := entities.WithTenantContext(t.Context(), entities.TenantContext{TenantID: f.orgA.String()})
 
 	t.Run("groups, no organization named", func(t *testing.T) {
-		got, err := gorms.NewGroupRepository(db).List(ctx, uuid.Nil)
+		got, err := pg.NewGroupRepository(testutils.StormConn(db)).List(ctx, uuid.Nil)
 		if err != nil {
 			t.Fatalf("list groups: %v", err)
 		}
@@ -82,7 +82,7 @@ func TestTenantIsolation_DirectoryListsAreScoped(t *testing.T) {
 	})
 
 	t.Run("users, no organization named", func(t *testing.T) {
-		got, err := gorms.NewUserRepository(db).ListByOrganization(ctx, uuid.Nil)
+		got, err := pg.NewUserRepository(testutils.StormConn(db)).ListByOrganization(ctx, uuid.Nil)
 		if err != nil {
 			t.Fatalf("list users: %v", err)
 		}
@@ -93,7 +93,7 @@ func TestTenantIsolation_DirectoryListsAreScoped(t *testing.T) {
 	// Naming the caller's own organization still works: the scope is added to
 	// the filter, not swapped for it.
 	t.Run("users, own organization named", func(t *testing.T) {
-		got, err := gorms.NewUserRepository(db).ListByOrganization(ctx, f.orgA)
+		got, err := pg.NewUserRepository(testutils.StormConn(db)).ListByOrganization(ctx, f.orgA)
 		if err != nil {
 			t.Fatalf("list users in own organization: %v", err)
 		}
@@ -103,7 +103,7 @@ func TestTenantIsolation_DirectoryListsAreScoped(t *testing.T) {
 
 	// Naming somebody else's organization returns nothing rather than theirs.
 	t.Run("users, foreign organization named", func(t *testing.T) {
-		got, err := gorms.NewUserRepository(db).ListByOrganization(ctx, f.orgB)
+		got, err := pg.NewUserRepository(testutils.StormConn(db)).ListByOrganization(ctx, f.orgB)
 		if err != nil {
 			t.Fatalf("list users in a foreign organization: %v", err)
 		}
@@ -113,7 +113,7 @@ func TestTenantIsolation_DirectoryListsAreScoped(t *testing.T) {
 	})
 
 	t.Run("groups, foreign organization named", func(t *testing.T) {
-		got, err := gorms.NewGroupRepository(db).List(ctx, f.orgB)
+		got, err := pg.NewGroupRepository(testutils.StormConn(db)).List(ctx, f.orgB)
 		if err != nil {
 			t.Fatalf("list groups in a foreign organization: %v", err)
 		}

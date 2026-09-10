@@ -128,6 +128,28 @@ func (c *Conn) Executor(ctx context.Context) (runtime.Executor, error) {
 	return pgxdrv.Pool{P: pool}, nil
 }
 
+// MainExecutor resolves an executor onto the main database, whatever port the
+// request arrived on.
+//
+// Accounts, groups, organizations, projects and the environment registry are
+// installation-wide facts. An environment holds a runtime — deployed models,
+// instances, tasks — and its schema has the identity tables too, empty, because
+// one migration list is easier to keep honest than two.
+//
+// Without this, every request on an environment's port would authenticate
+// against that environment's empty users table and be refused: the token is
+// valid, the account exists, and the database being asked is the wrong one.
+//
+// An ambient transaction wins only when it is a transaction on the main
+// database. Work bound to an environment runs its unit of work on that
+// environment's connection, and joining it would ask the empty copy.
+func (c *Conn) MainExecutor(ctx context.Context) (runtime.Executor, error) {
+	if _, bound := EnvironmentFrom(ctx); !bound {
+		return c.Executor(ctx)
+	}
+	return pgxdrv.Pool{P: c.main}, nil
+}
+
 // Outside resolves an executor that deliberately ignores an enclosing
 // transaction.
 //
@@ -262,7 +284,8 @@ func (c *Conn) Attempt(ctx context.Context, fn func(context.Context) error) (err
 		}
 	}()
 
-	if err = fn(withTx(ctx, pgxdrv.Tx{T: saved})); err != nil {
+	err = fn(withTx(ctx, pgxdrv.Tx{T: saved}))
+	if err != nil {
 		return err
 	}
 	if err = saved.Commit(ctx); err != nil {

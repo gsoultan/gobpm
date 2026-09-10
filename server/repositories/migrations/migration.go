@@ -477,6 +477,40 @@ func Schema(models []any) []Migration {
 				return nil
 			},
 		},
+		{
+			Version: 19,
+			Name:    "the join tables name their columns",
+			// GORM derived a many-to-many join table's columns from the Go type
+			// names, so an account's organizations were joined on
+			// user_model_id and organization_model_id — names that say nothing
+			// and match no other foreign key in the database.
+			//
+			// RENAME is metadata-only in PostgreSQL. Guarded both ways so a
+			// fresh installation, whose AutoMigrate already created the right
+			// names, does not fail on a rename with nothing to rename.
+			Run: func(_ context.Context, db *gorm.DB) error {
+				renames := []struct{ table, from, to string }{
+					{"user_organizations", "user_model_id", "user_id"},
+					{"user_organizations", "organization_model_id", "organization_id"},
+					{"user_projects", "user_model_id", "user_id"},
+					{"user_projects", "project_model_id", "project_id"},
+				}
+				for _, rename := range renames {
+					if !db.Migrator().HasTable(rename.table) {
+						continue
+					}
+					if !db.Migrator().HasColumn(rename.table, rename.from) ||
+						db.Migrator().HasColumn(rename.table, rename.to) {
+						continue
+					}
+					if err := db.Exec(fmt.Sprintf("ALTER TABLE %q RENAME COLUMN %q TO %q",
+						rename.table, rename.from, rename.to)).Error; err != nil {
+						return fmt.Errorf("rename %s.%s to %s: %w", rename.table, rename.from, rename.to, err)
+					}
+				}
+				return nil
+			},
+		},
 	}
 }
 

@@ -26,7 +26,7 @@ func (r *organizationRepository) Get(ctx context.Context, id uuid.UUID) (models.
 	if err := r.requireOwnOrganization(ctx, id); err != nil {
 		return models.OrganizationModel{}, err
 	}
-	ex, err := r.conn.conn.Executor(ctx)
+	ex, err := r.conn.conn.MainExecutor(ctx)
 	if err != nil {
 		return models.OrganizationModel{}, err
 	}
@@ -51,7 +51,7 @@ func (r *organizationRepository) List(ctx context.Context) ([]models.Organizatio
 	if err != nil {
 		return nil, err
 	}
-	ex, err := r.conn.conn.Executor(ctx)
+	ex, err := r.conn.conn.MainExecutor(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +80,7 @@ func (r *organizationRepository) List(ctx context.Context) ([]models.Organizatio
 // there is nothing to check it against. The setup wizard and the admin-gated
 // endpoint are what decide who may do it.
 func (r *organizationRepository) Create(ctx context.Context, o models.OrganizationModel) error {
-	ex, err := r.conn.conn.Executor(ctx)
+	ex, err := r.conn.conn.MainExecutor(ctx)
 	if err != nil {
 		return err
 	}
@@ -104,7 +104,7 @@ func (r *organizationRepository) Update(ctx context.Context, o models.Organizati
 	if err := r.requireOwnOrganization(ctx, id); err != nil {
 		return err
 	}
-	ex, err := r.conn.conn.Executor(ctx)
+	ex, err := r.conn.conn.MainExecutor(ctx)
 	if err != nil {
 		return err
 	}
@@ -131,7 +131,7 @@ func (r *organizationRepository) Delete(ctx context.Context, id uuid.UUID) error
 	if err := r.requireOwnOrganization(ctx, id); err != nil {
 		return err
 	}
-	ex, err := r.conn.conn.Executor(ctx)
+	ex, err := r.conn.conn.MainExecutor(ctx)
 	if err != nil {
 		return err
 	}

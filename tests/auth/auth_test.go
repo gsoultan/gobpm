@@ -9,6 +9,7 @@ import (
 	"github.com/gsoultan/metis/server/domains/entities"
 	"github.com/gsoultan/metis/server/domains/services/impl"
 	"github.com/gsoultan/metis/server/repositories"
+	"github.com/gsoultan/metis/server/repositories/models"
 	"github.com/gsoultan/metis/tests/testutils"
 	"github.com/stretchr/testify/assert"
 )
@@ -23,7 +24,11 @@ func TestUserAuthentication(t *testing.T) {
 	userSvc := impl.NewUserService(repo, jwtSecret)
 
 	ctx := t.Context()
-	orgID := uuid.Must(uuid.NewV7())
+	// A real organization, not an invented id. user_organizations references
+	// organizations, so a membership pointing at one that does not exist is
+	// refused by the database — which is right, and which the previous schema
+	// let through.
+	orgID := seedOrganization(t, repo)
 
 	// 3. Register a user
 	user := entities.User{
@@ -71,7 +76,15 @@ func TestGroupManagement(t *testing.T) {
 	groupSvc := impl.NewGroupService(repo)
 
 	ctx := t.Context()
-	orgID := uuid.Must(uuid.NewV7())
+	// A real organization, not an invented id. user_organizations references
+	// organizations, so a membership pointing at one that does not exist is
+	// refused by the database — which is right, and which the previous schema
+	// let through.
+	orgID := seedOrganization(t, repo)
+	// Inside the tenant, the way a request creates a group. The strict scope
+	// refuses a bare context, and the fixture would fail before the behaviour
+	// under test had run.
+	ctx = entities.WithTenantContext(ctx, entities.TenantContext{TenantID: orgID.String()})
 
 	// 3. Create a group
 	group := entities.Group{
@@ -127,4 +140,16 @@ func TestGroupManagement(t *testing.T) {
 // what the auth interceptor injects on a real request.
 func asTenant(ctx context.Context, organizationID uuid.UUID) context.Context {
 	return entities.WithTenantContext(ctx, entities.TenantContext{TenantID: organizationID.String()})
+}
+
+// seedOrganization creates a tenant for an account to belong to.
+func seedOrganization(t *testing.T, repo repositories.Repository) uuid.UUID {
+	t.Helper()
+	id := uuid.Must(uuid.NewV7())
+	if err := repo.Organization().Create(entities.WithSystemContext(t.Context()), models.OrganizationModel{
+		Base: models.Base{ID: models.FromUUID(id)}, Name: "Auth Org " + id.String()[:8],
+	}); err != nil {
+		t.Fatalf("seed the organization: %v", err)
+	}
+	return id
 }
