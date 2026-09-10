@@ -1,5 +1,23 @@
 # Upgrading
 
+## Rehearse it first
+
+`scripts/upgrade-rehearsal.sh <backup-directory>` restores a backup into a
+scratch database, boots this build against it, and checks the things a green
+readiness probe does not: that no process instance was lost, that the columns
+this release renames carried their data across, and that every account still
+belongs to an organization.
+
+It is read-only with respect to production — everything happens in a scratch
+database, which is dropped afterwards unless you pass `--keep`.
+
+Run it. The migrations that rename columns are only reachable *from* the old
+schema, so a fresh install skips them entirely: they were written, reviewed, and
+until this was added, never executed against a table that had the old names.
+The first version of one of them silently left every form without its
+definition. `tests/upgrade` is the automated version of the same rehearsal and
+runs in CI; this is the one that uses your data.
+
 ## Moving to PostgreSQL
 
 Metis runs on PostgreSQL and nothing else. SQLite, MySQL and SQL Server were

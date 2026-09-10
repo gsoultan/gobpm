@@ -449,8 +449,19 @@ func Schema(models []any) []Migration {
 			// moment a ported repository named the column the model describes,
 			// it was a SQL error on every read of that table.
 			//
-			// RENAME is metadata-only in PostgreSQL — no table rewrite, no long
-			// lock — which is why this is a rename rather than an add-and-copy.
+			// Not a plain rename, and the reason is the migration that runs
+			// first. The baseline is AutoMigrate over the *current* models, so
+			// by the time this executes on an existing installation the new
+			// column already exists — added, empty, beside the old one holding
+			// the data. A rename guarded on "skip if the new column is there"
+			// therefore skipped on every real upgrade and left every form
+			// without its definition, every connector without its properties
+			// and every external task without its references. Silently: the
+			// migration reported success.
+			//
+			// So all three states are handled. Only the old column is a rename,
+			// which is metadata-only in PostgreSQL. Both is a copy and a drop.
+			// Only the new is a fresh install with nothing to do.
 			Run: func(_ context.Context, db *gorm.DB) error {
 				renames := []struct{ table, from, to string }{
 					{"forms", "schema", "fields"},
@@ -459,19 +470,8 @@ func Schema(models []any) []Migration {
 					{"external_tasks", "process_definition_id", "definition_id"},
 				}
 				for _, rename := range renames {
-					model, err := modelForTable(db, models, rename.table)
-					if err != nil {
+					if err := moveColumn(db, models, rename.table, rename.from, rename.to); err != nil {
 						return err
-					}
-					// Guarded both ways: skip when the old column is gone, and
-					// skip when the new one is already there, so a fresh
-					// installation whose AutoMigrate created the new name does
-					// not fail on a rename with nothing to rename.
-					if !db.Migrator().HasColumn(model, rename.from) || db.Migrator().HasColumn(model, rename.to) {
-						continue
-					}
-					if err := db.Migrator().RenameColumn(model, rename.from, rename.to); err != nil {
-						return fmt.Errorf("rename %s.%s to %s: %w", rename.table, rename.from, rename.to, err)
 					}
 				}
 				return nil
@@ -496,22 +496,59 @@ func Schema(models []any) []Migration {
 					{"user_projects", "project_model_id", "project_id"},
 				}
 				for _, rename := range renames {
-					if !db.Migrator().HasTable(rename.table) {
-						continue
-					}
-					if !db.Migrator().HasColumn(rename.table, rename.from) ||
-						db.Migrator().HasColumn(rename.table, rename.to) {
-						continue
-					}
-					if err := db.Exec(fmt.Sprintf("ALTER TABLE %q RENAME COLUMN %q TO %q",
-						rename.table, rename.from, rename.to)).Error; err != nil {
-						return fmt.Errorf("rename %s.%s to %s: %w", rename.table, rename.from, rename.to, err)
+					if err := moveColumn(db, models, rename.table, rename.from, rename.to); err != nil {
+						return err
 					}
 				}
 				return nil
 			},
 		},
 	}
+}
+
+// moveColumn gets a column's data under its new name, whatever state the table
+// is in.
+//
+// Three states, because the baseline migration is AutoMigrate over the current
+// models and therefore adds the new column before any rename can run:
+//
+//   - only the old column: RENAME, which is metadata-only in PostgreSQL — no
+//     table rewrite and no long lock.
+//   - both: the new one is empty and the old one holds the data, so copy across
+//     and drop the old. This is the state every existing installation is in,
+//     and the state a rename-only migration silently skipped.
+//   - only the new column: a fresh install, nothing to do.
+//
+// The copy fills only rows whose new value is still null, so running twice
+// cannot overwrite anything written between the two runs.
+func moveColumn(db *gorm.DB, models []any, table, from, to string) error {
+	if !db.Migrator().HasTable(table) {
+		return nil
+	}
+	hasOld, hasNew := db.Migrator().HasColumn(table, from), db.Migrator().HasColumn(table, to)
+	switch {
+	case !hasOld:
+		return nil
+	case !hasNew:
+		if err := db.Exec(fmt.Sprintf("ALTER TABLE %q RENAME COLUMN %q TO %q", table, from, to)).Error; err != nil {
+			return fmt.Errorf("rename %s.%s to %s: %w", table, from, to, err)
+		}
+		return nil
+	}
+
+	if err := db.Exec(fmt.Sprintf(
+		"UPDATE %q SET %q = %q WHERE %q IS NULL AND %q IS NOT NULL",
+		table, to, from, to, from)).Error; err != nil {
+		return fmt.Errorf("copy %s.%s into %s: %w", table, from, to, err)
+	}
+	// Dropped rather than left behind: two columns holding one fact is how the
+	// next reader picks the wrong one, and the old name is what the drift check
+	// would go on reporting for ever.
+	if err := db.Exec(fmt.Sprintf("ALTER TABLE %q DROP COLUMN %q", table, from)).Error; err != nil {
+		return fmt.Errorf("drop %s.%s: %w", table, from, err)
+	}
+	_ = models
+	return nil
 }
 
 // versionedDefinitionTables are the tables whose (project_id, key, version) must
