@@ -74,7 +74,7 @@ func NewRepository(db *gorm.DB, conn *stormdb.Conn) Repository {
 		connectorManifest:     pg.NewConnectorManifestRepository(conn),
 		project:               pg.NewProjectRepository(conn),
 		subscription:          pg.NewSubscriptionRepository(conn),
-		task:                  gorms.NewTaskRepository(db),
+		task:                  pg.NewTaskRepository(conn),
 		user:                  gorms.NewUserRepository(db),
 		group:                 gorms.NewGroupRepository(db),
 		notification:          pg.NewNotificationRepository(conn),

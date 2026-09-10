@@ -335,7 +335,7 @@ func TestTenantIsolation_GetByIDDeniesOtherTenants(t *testing.T) {
 				_, err := pg.NewConnectorInstanceRepository(testutils.StormConn(db)).GetByProjectAndConnector(ctx, f.projectB, f.connectorID)
 				return err
 			}},
-			{"task", func() error { _, err := gorms.NewTaskRepository(db).Get(ctx, f.taskB); return err }},
+			{"task", func() error { _, err := pg.NewTaskRepository(testutils.StormConn(db)).Get(ctx, f.taskB); return err }},
 			{"process instance", func() error {
 				_, err := pg.NewProcessRepository(testutils.StormConn(db)).Get(ctx, f.instanceB)
 				return err
@@ -553,7 +553,7 @@ func TestTenantIsolation_WritesDenyOtherTenants(t *testing.T) {
 			{
 				name: "move another tenant's task status",
 				write: func() error {
-					return gorms.NewTaskRepository(db).UpdateStatus(ctx, f.taskB, models.TaskCompleted)
+					return pg.NewTaskRepository(testutils.StormConn(db)).UpdateStatus(ctx, f.taskB, models.TaskCompleted)
 				},
 				unchanged: func() bool {
 					var m models.TaskModel
@@ -566,7 +566,7 @@ func TestTenantIsolation_WritesDenyOtherTenants(t *testing.T) {
 			{
 				name: "rewrite another tenant's task",
 				write: func() error {
-					return gorms.NewTaskRepository(db).Update(ctx, models.TaskModel{
+					return pg.NewTaskRepository(testutils.StormConn(db)).Update(ctx, models.TaskModel{
 						Base:      models.Base{ID: models.FromUUID(f.taskB)},
 						ProjectID: models.FromUUID(f.projectA),
 						Name:      "stolen",
@@ -633,7 +633,7 @@ func TestTenantIsolation_OwnWritesStillSucceed(t *testing.T) {
 				return pg.NewNotificationRepository(testutils.StormConn(db)).MarkAllAsRead(ctx, sharedUserID)
 			}},
 			{"own task status", func() error {
-				return gorms.NewTaskRepository(db).UpdateStatus(ctx, f.taskA, models.TaskClaimed)
+				return pg.NewTaskRepository(testutils.StormConn(db)).UpdateStatus(ctx, f.taskA, models.TaskClaimed)
 			}},
 			{"own correlation key", func() error {
 				return pg.NewSubscriptionRepository(testutils.StormConn(db)).UpdateCorrelationKey(ctx, f.subscriptionA, "resolved")
@@ -770,7 +770,7 @@ func TestTenantIsolation_CreateDeniesForeignProject(t *testing.T) {
 					models.DeploymentModel{Base: newID(), ProjectID: foreign, Name: "planted"})
 			}},
 			{"task", func() error {
-				return gorms.NewTaskRepository(db).Create(ctx,
+				return pg.NewTaskRepository(testutils.StormConn(db)).Create(ctx,
 					models.TaskModel{Base: newID(), ProjectID: foreign, Name: "planted"})
 			}},
 			{"process instance", func() error {
@@ -808,7 +808,7 @@ func TestTenantIsolation_CreateIntoOwnProjectSucceeds(t *testing.T) {
 		}); err != nil {
 			t.Errorf("create into own project: %v", err)
 		}
-		if err := gorms.NewTaskRepository(db).Create(ctx, models.TaskModel{
+		if err := pg.NewTaskRepository(testutils.StormConn(db)).Create(ctx, models.TaskModel{
 			Base: models.Base{ID: models.FromUUID(uuid.New())}, ProjectID: own, Name: "mine",
 		}); err != nil {
 			t.Errorf("create task into own project: %v", err)

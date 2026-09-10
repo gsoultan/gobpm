@@ -1,5 +1,12 @@
 package gorms
 
+import (
+	"fmt"
+
+	"github.com/gsoultan/metis/server/repositories/contracts"
+	"gorm.io/gorm"
+)
+
 // ByKey builds a condition on the `key` column.
 //
 // It has to be a map rather than a raw "key = ?" string: `key` is a reserved
@@ -130,4 +137,20 @@ func QueryHighestVersion(table string) string {
 // Every read that can run under a tenant scope must qualify its columns.
 func QualifiedByID(table string) string {
 	return table + ".id = ?"
+}
+func countAndPage[T any](base *gorm.DB, p contracts.Pagination, order string) (contracts.Page[T], error) {
+	var total int64
+	if err := base.Session(&gorm.Session{}).Count(&total).Error; err != nil {
+		return contracts.Page[T]{}, fmt.Errorf("count: %w", err)
+	}
+
+	var rows []T
+	q := base.Session(&gorm.Session{})
+	if order != "" {
+		q = q.Order(order)
+	}
+	if err := p.Apply(q).Find(&rows).Error; err != nil {
+		return contracts.Page[T]{}, fmt.Errorf("page: %w", err)
+	}
+	return contracts.NewPage(rows, total, p), nil
 }

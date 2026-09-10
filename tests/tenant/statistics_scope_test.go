@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/gsoultan/metis/server/repositories/gorms"
 	"github.com/gsoultan/metis/server/repositories/models"
 	"github.com/gsoultan/metis/server/repositories/pg"
 	"github.com/gsoultan/metis/tests/testutils"
@@ -36,7 +35,7 @@ func TestTenantIsolation_StatisticsCountersAreScoped(t *testing.T) {
 	})
 
 	t.Run("tasks", func(t *testing.T) {
-		count, err := gorms.NewTaskRepository(db).CountByStatus(ctx, uuid.Nil, "")
+		count, err := pg.NewTaskRepository(testutils.StormConn(db)).CountByStatus(ctx, uuid.Nil, "")
 		if err != nil {
 			t.Fatalf("count tasks: %v", err)
 		}

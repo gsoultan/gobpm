@@ -152,7 +152,13 @@ func (r *processRepository) CountByStatus(ctx context.Context, projectID uuid.UU
 	if err != nil {
 		return 0, err
 	}
-	q := processinstance.New().Where(processinstance.Status.Eq(string(status)))
+	// An empty status means "any", which is how the dashboard asks for a
+	// total. Comparing against the empty string would match nothing and
+	// report zero, which reads as a working counter with no work in it.
+	q := processinstance.New()
+	if status != "" {
+		q = q.Where(processinstance.Status.Eq(string(status)))
+	}
 	if scoped != nil {
 		q = q.Where(processinstance.ProjectID.In(uuidsToRaw(scoped)...))
 	}
