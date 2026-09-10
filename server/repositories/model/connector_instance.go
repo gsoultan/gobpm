@@ -19,11 +19,13 @@ type ConnectorInstance struct {
 
 	Name string
 
-	// Config is jsonb holding whatever this connector needs to authenticate.
+	// Config holds whatever this connector needs to authenticate.
 	// Encrypted by the repository before it is written: it was once stored as
 	// plain JSON, which put every third-party credential in the installation
 	// into any database backup.
-	Config storm.JSON
+	// A string, not storm.JSON: this holds ciphertext. See Environment.Connection
+	// for why the distinction is load-bearing rather than cosmetic.
+	Config string
 
 	DeletedAt *time.Time
 }

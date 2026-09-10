@@ -1,7 +1,9 @@
 package pg
 
 import (
+	"database/sql/driver"
 	"encoding/json"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/gsoultan/storm/runtime"
@@ -47,4 +49,23 @@ func uuidsToRaw(ids []uuid.UUID) [][16]byte {
 		out[i] = id
 	}
 	return out
+}
+
+// stringOfValue reads what a driver.Valuer produced.
+//
+// EncryptedMap.Value returns the ciphertext as a driver.Value, which is a
+// string — the encryption lives in the model type rather than in the ORM, so a
+// repository that has moved to storm still writes exactly what the GORM one
+// wrote, and a row written by either is readable by both.
+func stringOfValue(value driver.Value) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case []byte:
+		return string(v)
+	case nil:
+		return ""
+	default:
+		return fmt.Sprint(v)
+	}
 }

@@ -271,7 +271,7 @@ func TestTenantIsolation_ListsExcludeOtherTenants(t *testing.T) {
 			{
 				name: "connector instances of another tenant's project",
 				read: func() ([]uuid.UUID, error) {
-					rows, err := gorms.NewConnectorInstanceRepository(db).ListByProject(ctx, f.projectB)
+					rows, err := pg.NewConnectorInstanceRepository(testutils.StormConn(db)).ListByProject(ctx, f.projectB)
 					return idsOf(rows, func(m models.ConnectorInstance) uuid.UUID { return uuid.UUID(m.ID) }), err
 				},
 				want: nil,
@@ -322,11 +322,11 @@ func TestTenantIsolation_GetByIDDeniesOtherTenants(t *testing.T) {
 			}},
 			{"external task", func() error { _, err := gorms.NewExternalTaskRepository(db).Get(ctx, f.extB); return err }},
 			{"connector instance", func() error {
-				_, err := gorms.NewConnectorInstanceRepository(db).Get(ctx, f.connInstB)
+				_, err := pg.NewConnectorInstanceRepository(testutils.StormConn(db)).Get(ctx, f.connInstB)
 				return err
 			}},
 			{"connector instance by project and connector", func() error {
-				_, err := gorms.NewConnectorInstanceRepository(db).GetByProjectAndConnector(ctx, f.projectB, f.connectorID)
+				_, err := pg.NewConnectorInstanceRepository(testutils.StormConn(db)).GetByProjectAndConnector(ctx, f.projectB, f.connectorID)
 				return err
 			}},
 			{"task", func() error { _, err := gorms.NewTaskRepository(db).Get(ctx, f.taskB); return err }},
@@ -451,8 +451,10 @@ func TestTenantIsolation_WritesDenyOtherTenants(t *testing.T) {
 				},
 			},
 			{
-				name:  "delete another tenant's connector instance",
-				write: func() error { return gorms.NewConnectorInstanceRepository(db).Delete(ctx, f.connInstB) },
+				name: "delete another tenant's connector instance",
+				write: func() error {
+					return pg.NewConnectorInstanceRepository(testutils.StormConn(db)).Delete(ctx, f.connInstB)
+				},
 				unchanged: func() bool {
 					return rowExists(t, db, &models.ConnectorInstance{}, "connector_instances", f.connInstB)
 				},
@@ -460,7 +462,7 @@ func TestTenantIsolation_WritesDenyOtherTenants(t *testing.T) {
 			{
 				name: "repoint another tenant's connector instance",
 				write: func() error {
-					return gorms.NewConnectorInstanceRepository(db).Update(ctx, models.ConnectorInstance{
+					return pg.NewConnectorInstanceRepository(testutils.StormConn(db)).Update(ctx, models.ConnectorInstance{
 						Base:      models.Base{ID: models.FromUUID(f.connInstB)},
 						ProjectID: models.FromUUID(f.projectA),
 						Name:      "stolen",
@@ -628,7 +630,7 @@ func TestTenantIsolation_OwnWritesStillSucceed(t *testing.T) {
 				// Load before saving, the way the service layer does. A model
 				// built from scratch has a zero CreatedAt, which MySQL rejects
 				// in strict mode — that is a Save footgun, not a scope failure.
-				repo := gorms.NewConnectorInstanceRepository(db)
+				repo := pg.NewConnectorInstanceRepository(testutils.StormConn(db))
 				m, err := repo.Get(ctx, f.connectorInstA)
 				if err != nil {
 					return err
@@ -765,7 +767,7 @@ func TestTenantIsolation_CreateDeniesForeignProject(t *testing.T) {
 				return err
 			}},
 			{"connector instance", func() error {
-				_, err := gorms.NewConnectorInstanceRepository(db).Create(ctx,
+				_, err := pg.NewConnectorInstanceRepository(testutils.StormConn(db)).Create(ctx,
 					models.ConnectorInstance{Base: newID(), ProjectID: foreign, Name: "planted"})
 				return err
 			}},
@@ -840,11 +842,11 @@ func TestTenantIsolation_OwnRowsStillReadable(t *testing.T) {
 				return err
 			}},
 			{"connector instance", func() error {
-				_, err := gorms.NewConnectorInstanceRepository(db).Get(ctx, f.connectorInstA)
+				_, err := pg.NewConnectorInstanceRepository(testutils.StormConn(db)).Get(ctx, f.connectorInstA)
 				return err
 			}},
 			{"connector instance by project and connector", func() error {
-				_, err := gorms.NewConnectorInstanceRepository(db).GetByProjectAndConnector(ctx, f.projectA, f.connectorID)
+				_, err := pg.NewConnectorInstanceRepository(testutils.StormConn(db)).GetByProjectAndConnector(ctx, f.projectA, f.connectorID)
 				return err
 			}},
 		}

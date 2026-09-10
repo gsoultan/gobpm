@@ -26,7 +26,7 @@ type Row struct {
 	ProjectID   [16]byte
 	ConnectorID [16]byte
 	Name        string
-	Config      runtime.JSON
+	Config      string
 	DeletedAt   runtime.Null[time.Time]
 }
 
@@ -75,11 +75,10 @@ type Query struct {
 	nt   uint8
 	top  uint8 // top-level conjuncts, ANDed at compile time
 
-	strs             [6]string
-	raws             [4][16]byte
-	tims             [4]time.Time
-	jsns             [2]runtime.JSON
-	ns, nr, ntm, njs uint8
+	strs        [6]string
+	raws        [4][16]byte
+	tims        [4]time.Time
+	ns, nr, ntm uint8
 
 	anyRaw   [3][][16]byte
 	anyStr   [3][]string
@@ -219,6 +218,13 @@ func (q *Query) cursor(col uint32, r Row) {
 			return
 		}
 		q.strs[q.ns] = r.Name
+		q.ns++
+	case 6:
+		if int(q.ns) >= len(q.strs) {
+			q.over = true
+			return
+		}
+		q.strs[q.ns] = r.Config
 		q.ns++
 	case 7:
 		if int(q.ntm) >= len(q.tims) {
@@ -377,7 +383,6 @@ type Pred struct {
 	str    string
 	raw    [16]byte
 	tim    time.Time
-	jsn    runtime.JSON
 	anyRaw [][16]byte
 	anyStr []string
 }
@@ -391,7 +396,7 @@ var (
 	ProjectID   = UUIDCol{3}
 	ConnectorID = UUIDCol{4}
 	Name        = TextCol{5}
-	Config      = JSONCol{6}
+	Config      = TextCol{6}
 	DeletedAt   = NullTimeCol{7}
 )
 
@@ -461,25 +466,6 @@ func (h TextCol) In(v ...string) Pred { return Pred{col: h.c, op: opIn, anyStr: 
 // comparison NULL for every row and the result empty —
 // PostgreSQL's rule for NOT IN, not storm's.
 func (h TextCol) NotIn(v ...string) Pred { return Pred{col: h.c, op: opNotIn, anyStr: v} }
-
-// JSONCol addresses a jsonb column.
-type JSONCol struct{ c uint8 }
-
-func (h JSONCol) Asc() Sort  { return Sort(runtime.MakeOrder(runtime.Asc, uint32(h.c))) }
-func (h JSONCol) Desc() Sort { return Sort(runtime.MakeOrder(runtime.Desc, uint32(h.c))) }
-func (h JSONCol) AscNullsFirst() Sort {
-	return Sort(runtime.MakeOrder(runtime.AscNullsFirst, uint32(h.c)))
-}
-func (h JSONCol) DescNullsLast() Sort {
-	return Sort(runtime.MakeOrder(runtime.DescNullsLast, uint32(h.c)))
-}
-
-func (h JSONCol) Contains(v runtime.JSON) Pred { return Pred{col: h.c, op: opJSONContains, jsn: v} }
-func (h JSONCol) ContainedBy(v runtime.JSON) Pred {
-	return Pred{col: h.c, op: opJSONContainedBy, jsn: v}
-}
-func (h JSONCol) HasAnyKey(v ...string) Pred  { return Pred{col: h.c, op: opHasAnyKey, anyStr: v} }
-func (h JSONCol) HasAllKeys(v ...string) Pred { return Pred{col: h.c, op: opHasAllKeys, anyStr: v} }
 
 // NullTimeCol addresses a timestamptz column.
 type NullTimeCol struct{ c uint8 }
@@ -726,12 +712,12 @@ func (q *Query) leaf(p Pred) {
 		q.strs[q.ns] = p.str
 		q.ns++
 	case 6:
-		if int(q.njs) >= 2 {
+		if int(q.ns) >= 6 {
 			q.over = true
 			return
 		}
-		q.jsns[q.njs] = p.jsn
-		q.njs++
+		q.strs[q.ns] = p.str
+		q.ns++
 	case 7:
 		if int(q.ntm) >= 4 {
 			q.over = true
@@ -744,52 +730,58 @@ func (q *Query) leaf(p Pred) {
 }
 
 // Chained predicate sugar. Identical to Where(Col.Op(v)).
-func (q Query) IDEq(v [16]byte) Query                  { return q.Where(ID.Eq(v)) }
-func (q Query) IDNotEq(v [16]byte) Query               { return q.Where(ID.NotEq(v)) }
-func (q Query) IDIn(v ...[16]byte) Query               { return q.Where(ID.In(v...)) }
-func (q Query) IDNotIn(v ...[16]byte) Query            { return q.Where(ID.NotIn(v...)) }
-func (q Query) CreatedAtEq(v time.Time) Query          { return q.Where(CreatedAt.Eq(v)) }
-func (q Query) CreatedAtNotEq(v time.Time) Query       { return q.Where(CreatedAt.NotEq(v)) }
-func (q Query) CreatedAtGt(v time.Time) Query          { return q.Where(CreatedAt.Gt(v)) }
-func (q Query) CreatedAtGte(v time.Time) Query         { return q.Where(CreatedAt.Gte(v)) }
-func (q Query) CreatedAtLt(v time.Time) Query          { return q.Where(CreatedAt.Lt(v)) }
-func (q Query) CreatedAtLte(v time.Time) Query         { return q.Where(CreatedAt.Lte(v)) }
-func (q Query) UpdatedAtEq(v time.Time) Query          { return q.Where(UpdatedAt.Eq(v)) }
-func (q Query) UpdatedAtNotEq(v time.Time) Query       { return q.Where(UpdatedAt.NotEq(v)) }
-func (q Query) UpdatedAtGt(v time.Time) Query          { return q.Where(UpdatedAt.Gt(v)) }
-func (q Query) UpdatedAtGte(v time.Time) Query         { return q.Where(UpdatedAt.Gte(v)) }
-func (q Query) UpdatedAtLt(v time.Time) Query          { return q.Where(UpdatedAt.Lt(v)) }
-func (q Query) UpdatedAtLte(v time.Time) Query         { return q.Where(UpdatedAt.Lte(v)) }
-func (q Query) ProjectIDEq(v [16]byte) Query           { return q.Where(ProjectID.Eq(v)) }
-func (q Query) ProjectIDNotEq(v [16]byte) Query        { return q.Where(ProjectID.NotEq(v)) }
-func (q Query) ProjectIDIn(v ...[16]byte) Query        { return q.Where(ProjectID.In(v...)) }
-func (q Query) ProjectIDNotIn(v ...[16]byte) Query     { return q.Where(ProjectID.NotIn(v...)) }
-func (q Query) ConnectorIDEq(v [16]byte) Query         { return q.Where(ConnectorID.Eq(v)) }
-func (q Query) ConnectorIDNotEq(v [16]byte) Query      { return q.Where(ConnectorID.NotEq(v)) }
-func (q Query) ConnectorIDIn(v ...[16]byte) Query      { return q.Where(ConnectorID.In(v...)) }
-func (q Query) ConnectorIDNotIn(v ...[16]byte) Query   { return q.Where(ConnectorID.NotIn(v...)) }
-func (q Query) NameEq(v string) Query                  { return q.Where(Name.Eq(v)) }
-func (q Query) NameNotEq(v string) Query               { return q.Where(Name.NotEq(v)) }
-func (q Query) NameGt(v string) Query                  { return q.Where(Name.Gt(v)) }
-func (q Query) NameGte(v string) Query                 { return q.Where(Name.Gte(v)) }
-func (q Query) NameLt(v string) Query                  { return q.Where(Name.Lt(v)) }
-func (q Query) NameLte(v string) Query                 { return q.Where(Name.Lte(v)) }
-func (q Query) NameLike(v string) Query                { return q.Where(Name.Like(v)) }
-func (q Query) NameILike(v string) Query               { return q.Where(Name.ILike(v)) }
-func (q Query) NameIn(v ...string) Query               { return q.Where(Name.In(v...)) }
-func (q Query) NameNotIn(v ...string) Query            { return q.Where(Name.NotIn(v...)) }
-func (q Query) ConfigContains(v runtime.JSON) Query    { return q.Where(Config.Contains(v)) }
-func (q Query) ConfigContainedBy(v runtime.JSON) Query { return q.Where(Config.ContainedBy(v)) }
-func (q Query) ConfigHasAnyKey(v ...string) Query      { return q.Where(Config.HasAnyKey(v...)) }
-func (q Query) ConfigHasAllKeys(v ...string) Query     { return q.Where(Config.HasAllKeys(v...)) }
-func (q Query) DeletedAtEq(v time.Time) Query          { return q.Where(DeletedAt.Eq(v)) }
-func (q Query) DeletedAtNotEq(v time.Time) Query       { return q.Where(DeletedAt.NotEq(v)) }
-func (q Query) DeletedAtGt(v time.Time) Query          { return q.Where(DeletedAt.Gt(v)) }
-func (q Query) DeletedAtGte(v time.Time) Query         { return q.Where(DeletedAt.Gte(v)) }
-func (q Query) DeletedAtLt(v time.Time) Query          { return q.Where(DeletedAt.Lt(v)) }
-func (q Query) DeletedAtLte(v time.Time) Query         { return q.Where(DeletedAt.Lte(v)) }
-func (q Query) DeletedAtIsNull() Query                 { return q.Where(DeletedAt.IsNull()) }
-func (q Query) DeletedAtIsNotNull() Query              { return q.Where(DeletedAt.IsNotNull()) }
+func (q Query) IDEq(v [16]byte) Query                { return q.Where(ID.Eq(v)) }
+func (q Query) IDNotEq(v [16]byte) Query             { return q.Where(ID.NotEq(v)) }
+func (q Query) IDIn(v ...[16]byte) Query             { return q.Where(ID.In(v...)) }
+func (q Query) IDNotIn(v ...[16]byte) Query          { return q.Where(ID.NotIn(v...)) }
+func (q Query) CreatedAtEq(v time.Time) Query        { return q.Where(CreatedAt.Eq(v)) }
+func (q Query) CreatedAtNotEq(v time.Time) Query     { return q.Where(CreatedAt.NotEq(v)) }
+func (q Query) CreatedAtGt(v time.Time) Query        { return q.Where(CreatedAt.Gt(v)) }
+func (q Query) CreatedAtGte(v time.Time) Query       { return q.Where(CreatedAt.Gte(v)) }
+func (q Query) CreatedAtLt(v time.Time) Query        { return q.Where(CreatedAt.Lt(v)) }
+func (q Query) CreatedAtLte(v time.Time) Query       { return q.Where(CreatedAt.Lte(v)) }
+func (q Query) UpdatedAtEq(v time.Time) Query        { return q.Where(UpdatedAt.Eq(v)) }
+func (q Query) UpdatedAtNotEq(v time.Time) Query     { return q.Where(UpdatedAt.NotEq(v)) }
+func (q Query) UpdatedAtGt(v time.Time) Query        { return q.Where(UpdatedAt.Gt(v)) }
+func (q Query) UpdatedAtGte(v time.Time) Query       { return q.Where(UpdatedAt.Gte(v)) }
+func (q Query) UpdatedAtLt(v time.Time) Query        { return q.Where(UpdatedAt.Lt(v)) }
+func (q Query) UpdatedAtLte(v time.Time) Query       { return q.Where(UpdatedAt.Lte(v)) }
+func (q Query) ProjectIDEq(v [16]byte) Query         { return q.Where(ProjectID.Eq(v)) }
+func (q Query) ProjectIDNotEq(v [16]byte) Query      { return q.Where(ProjectID.NotEq(v)) }
+func (q Query) ProjectIDIn(v ...[16]byte) Query      { return q.Where(ProjectID.In(v...)) }
+func (q Query) ProjectIDNotIn(v ...[16]byte) Query   { return q.Where(ProjectID.NotIn(v...)) }
+func (q Query) ConnectorIDEq(v [16]byte) Query       { return q.Where(ConnectorID.Eq(v)) }
+func (q Query) ConnectorIDNotEq(v [16]byte) Query    { return q.Where(ConnectorID.NotEq(v)) }
+func (q Query) ConnectorIDIn(v ...[16]byte) Query    { return q.Where(ConnectorID.In(v...)) }
+func (q Query) ConnectorIDNotIn(v ...[16]byte) Query { return q.Where(ConnectorID.NotIn(v...)) }
+func (q Query) NameEq(v string) Query                { return q.Where(Name.Eq(v)) }
+func (q Query) NameNotEq(v string) Query             { return q.Where(Name.NotEq(v)) }
+func (q Query) NameGt(v string) Query                { return q.Where(Name.Gt(v)) }
+func (q Query) NameGte(v string) Query               { return q.Where(Name.Gte(v)) }
+func (q Query) NameLt(v string) Query                { return q.Where(Name.Lt(v)) }
+func (q Query) NameLte(v string) Query               { return q.Where(Name.Lte(v)) }
+func (q Query) NameLike(v string) Query              { return q.Where(Name.Like(v)) }
+func (q Query) NameILike(v string) Query             { return q.Where(Name.ILike(v)) }
+func (q Query) NameIn(v ...string) Query             { return q.Where(Name.In(v...)) }
+func (q Query) NameNotIn(v ...string) Query          { return q.Where(Name.NotIn(v...)) }
+func (q Query) ConfigEq(v string) Query              { return q.Where(Config.Eq(v)) }
+func (q Query) ConfigNotEq(v string) Query           { return q.Where(Config.NotEq(v)) }
+func (q Query) ConfigGt(v string) Query              { return q.Where(Config.Gt(v)) }
+func (q Query) ConfigGte(v string) Query             { return q.Where(Config.Gte(v)) }
+func (q Query) ConfigLt(v string) Query              { return q.Where(Config.Lt(v)) }
+func (q Query) ConfigLte(v string) Query             { return q.Where(Config.Lte(v)) }
+func (q Query) ConfigLike(v string) Query            { return q.Where(Config.Like(v)) }
+func (q Query) ConfigILike(v string) Query           { return q.Where(Config.ILike(v)) }
+func (q Query) ConfigIn(v ...string) Query           { return q.Where(Config.In(v...)) }
+func (q Query) ConfigNotIn(v ...string) Query        { return q.Where(Config.NotIn(v...)) }
+func (q Query) DeletedAtEq(v time.Time) Query        { return q.Where(DeletedAt.Eq(v)) }
+func (q Query) DeletedAtNotEq(v time.Time) Query     { return q.Where(DeletedAt.NotEq(v)) }
+func (q Query) DeletedAtGt(v time.Time) Query        { return q.Where(DeletedAt.Gt(v)) }
+func (q Query) DeletedAtGte(v time.Time) Query       { return q.Where(DeletedAt.Gte(v)) }
+func (q Query) DeletedAtLt(v time.Time) Query        { return q.Where(DeletedAt.Lt(v)) }
+func (q Query) DeletedAtLte(v time.Time) Query       { return q.Where(DeletedAt.Lte(v)) }
+func (q Query) DeletedAtIsNull() Query               { return q.Where(DeletedAt.IsNull()) }
+func (q Query) DeletedAtIsNotNull() Query            { return q.Where(DeletedAt.IsNotNull()) }
 
 // softDeleteWhere keeps marked rows out of every read in this package.
 // The splice ANDs it AHEAD of the caller's predicates, so a call site
@@ -1103,6 +1095,21 @@ var fragTable = [8][27]runtime.Frag{
 	},
 	{ // config
 		{}, // opNone
+		{A: "\"config\" = $", B: ""},
+		{A: "\"config\" <> $", B: ""},
+		{A: "\"config\" > $", B: ""},
+		{A: "\"config\" >= $", B: ""},
+		{A: "\"config\" < $", B: ""},
+		{A: "\"config\" <= $", B: ""},
+		{A: "\"config\" LIKE $", B: ""},
+		{A: "\"config\" ILIKE $", B: ""},
+		{},
+		{},
+		{},
+		{},
+		{},
+		{A: "\"config\" = ANY($", B: ")"},
+		{A: "\"config\" <> ALL($", B: ")"},
 		{},
 		{},
 		{},
@@ -1110,21 +1117,6 @@ var fragTable = [8][27]runtime.Frag{
 		{},
 		{},
 		{},
-		{},
-		{},
-		{},
-		{},
-		{},
-		{},
-		{},
-		{},
-		{},
-		{},
-		{},
-		{A: "\"config\" @> $", B: ""},
-		{A: "\"config\" <@ $", B: ""},
-		{A: "\"config\" ?| $", B: ""},
-		{A: "\"config\" ?& $", B: ""},
 		{},
 		{},
 		{},
@@ -1320,7 +1312,7 @@ func scan(rv [][]byte, r *Row, sl *runtime.Slab) error {
 	copy(r.ProjectID[:], rv[3])
 	copy(r.ConnectorID[:], rv[4])
 	r.Name = sl.Str(rv[5])
-	r.Config = runtime.JSON(runtime.JSONB(rv[6], sl))
+	r.Config = sl.Str(rv[6])
 	r.DeletedAt = runtime.Nullable(rv[7], runtime.Timestamptz)
 	return nil
 }
@@ -1330,7 +1322,6 @@ type binder struct {
 	strs   [6]string
 	raws   [4][16]byte
 	tims   [4]time.Time
-	jsns   [2]runtime.JSON
 	anyRaw [3][][16]byte
 	anyStr [3][]string
 	limit  int64
@@ -1371,7 +1362,7 @@ func putBinder(b *binder) {
 // Count and Exists stop here: their statements carry no LIMIT or OFFSET.
 func (q Query) bindPreds(b *binder) []any {
 	v := b.vals[:0]
-	var ns, nr, ntm, njs, nar, nas uint8
+	var ns, nr, ntm, nar, nas uint8
 	for i := uint8(0); i < q.nt; i++ {
 		t := q.toks[i]
 		// KLeaf binds a predicate's value; KCol binds a keyset cursor's.
@@ -1436,9 +1427,9 @@ func (q Query) bindPreds(b *binder) []any {
 			v = append(v, &b.strs[ns])
 			ns++
 		case 6:
-			b.jsns[njs] = q.jsns[njs]
-			v = append(v, &b.jsns[njs])
-			njs++
+			b.strs[ns] = q.strs[ns]
+			v = append(v, &b.strs[ns])
+			ns++
 		case 7:
 			b.tims[ntm] = q.tims[ntm]
 			v = append(v, &b.tims[ntm])
@@ -1700,7 +1691,7 @@ func (m *Mut) SetName(v string) {
 	m.dirty |= dName
 }
 
-func (m *Mut) SetConfig(v runtime.JSON) {
+func (m *Mut) SetConfig(v string) {
 	m.row.Config = v
 	m.dirty |= dConfig
 }
@@ -1772,7 +1763,7 @@ func (n *Ins) SetName(v string) {
 	n.set |= iName
 }
 
-func (n *Ins) SetConfig(v runtime.JSON) {
+func (n *Ins) SetConfig(v string) {
 	n.row.Config = v
 	n.set |= iConfig
 }

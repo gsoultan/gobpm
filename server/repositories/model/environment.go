@@ -26,10 +26,15 @@ type Environment struct {
 	Port int
 	// Driver is the database engine backing this runtime.
 	Driver string
-	// Connection holds host, port, username, password, db_name, ssl_enabled as
+	// Connection holds host, port, username, password, db_name and ssl_enabled as
 	// jsonb. Encrypted by the repository before it is written: a database
 	// password is every credential in that runtime at once.
-	Connection storm.JSON
+	// A string, not storm.JSON, and that is the whole point: what is stored is
+	// ciphertext. A database password is worth more than any one connector's
+	// token — it is every credential in that runtime at once — so the column
+	// holds an encrypted blob, and declaring it jsonb would both fail to parse
+	// and, on the day the column types are reconciled, destroy it.
+	Connection string
 	Enabled    bool
 
 	DeletedAt *time.Time

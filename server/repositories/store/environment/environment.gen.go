@@ -27,7 +27,7 @@ type Row struct {
 	Name       string
 	Port       int64
 	Driver     string
-	Connection runtime.JSON
+	Connection string
 	Enabled    bool
 	DeletedAt  runtime.Null[time.Time]
 }
@@ -77,13 +77,12 @@ type Query struct {
 	nt   uint8
 	top  uint8 // top-level conjuncts, ANDed at compile time
 
-	strs                      [6]string
-	nums                      [6]int64
-	raws                      [4][16]byte
-	tims                      [4]time.Time
-	bools                     [4]bool
-	jsns                      [2]runtime.JSON
-	ns, nn, nr, ntm, nbo, njs uint8
+	strs                 [6]string
+	nums                 [6]int64
+	raws                 [4][16]byte
+	tims                 [4]time.Time
+	bools                [4]bool
+	ns, nn, nr, ntm, nbo uint8
 
 	anyRaw          [3][][16]byte
 	anyStr          [3][]string
@@ -231,6 +230,13 @@ func (q *Query) cursor(col uint32, r Row) {
 			return
 		}
 		q.strs[q.ns] = r.Driver
+		q.ns++
+	case 7:
+		if int(q.ns) >= len(q.strs) {
+			q.over = true
+			return
+		}
+		q.strs[q.ns] = r.Connection
 		q.ns++
 	case 8:
 		if int(q.nbo) >= len(q.bools) {
@@ -398,7 +404,6 @@ type Pred struct {
 	raw    [16]byte
 	tim    time.Time
 	bol    bool
-	jsn    runtime.JSON
 	anyRaw [][16]byte
 	anyStr []string
 	anyI64 []int64
@@ -422,7 +427,7 @@ var (
 	Name       = TextCol{4}
 	Port       = Int64Col{5}
 	Driver     = TextCol{6}
-	Connection = JSONCol{7}
+	Connection = TextCol{7}
 	Enabled    = BoolCol{8}
 	DeletedAt  = NullTimeCol{9}
 )
@@ -518,25 +523,6 @@ func (h Int64Col) In(v ...int64) Pred { return Pred{col: h.c, op: opIn, anyI64: 
 // comparison NULL for every row and the result empty —
 // PostgreSQL's rule for NOT IN, not storm's.
 func (h Int64Col) NotIn(v ...int64) Pred { return Pred{col: h.c, op: opNotIn, anyI64: v} }
-
-// JSONCol addresses a jsonb column.
-type JSONCol struct{ c uint8 }
-
-func (h JSONCol) Asc() Sort  { return Sort(runtime.MakeOrder(runtime.Asc, uint32(h.c))) }
-func (h JSONCol) Desc() Sort { return Sort(runtime.MakeOrder(runtime.Desc, uint32(h.c))) }
-func (h JSONCol) AscNullsFirst() Sort {
-	return Sort(runtime.MakeOrder(runtime.AscNullsFirst, uint32(h.c)))
-}
-func (h JSONCol) DescNullsLast() Sort {
-	return Sort(runtime.MakeOrder(runtime.DescNullsLast, uint32(h.c)))
-}
-
-func (h JSONCol) Contains(v runtime.JSON) Pred { return Pred{col: h.c, op: opJSONContains, jsn: v} }
-func (h JSONCol) ContainedBy(v runtime.JSON) Pred {
-	return Pred{col: h.c, op: opJSONContainedBy, jsn: v}
-}
-func (h JSONCol) HasAnyKey(v ...string) Pred  { return Pred{col: h.c, op: opHasAnyKey, anyStr: v} }
-func (h JSONCol) HasAllKeys(v ...string) Pred { return Pred{col: h.c, op: opHasAllKeys, anyStr: v} }
 
 // BoolCol addresses a bool column.
 type BoolCol struct{ c uint8 }
@@ -812,12 +798,12 @@ func (q *Query) leaf(p Pred) {
 		q.strs[q.ns] = p.str
 		q.ns++
 	case 7:
-		if int(q.njs) >= 2 {
+		if int(q.ns) >= 6 {
 			q.over = true
 			return
 		}
-		q.jsns[q.njs] = p.jsn
-		q.njs++
+		q.strs[q.ns] = p.str
+		q.ns++
 	case 8:
 		if int(q.nbo) >= 4 {
 			q.over = true
@@ -837,68 +823,74 @@ func (q *Query) leaf(p Pred) {
 }
 
 // Chained predicate sugar. Identical to Where(Col.Op(v)).
-func (q Query) IDEq(v [16]byte) Query                      { return q.Where(ID.Eq(v)) }
-func (q Query) IDNotEq(v [16]byte) Query                   { return q.Where(ID.NotEq(v)) }
-func (q Query) IDIn(v ...[16]byte) Query                   { return q.Where(ID.In(v...)) }
-func (q Query) IDNotIn(v ...[16]byte) Query                { return q.Where(ID.NotIn(v...)) }
-func (q Query) CreatedAtEq(v time.Time) Query              { return q.Where(CreatedAt.Eq(v)) }
-func (q Query) CreatedAtNotEq(v time.Time) Query           { return q.Where(CreatedAt.NotEq(v)) }
-func (q Query) CreatedAtGt(v time.Time) Query              { return q.Where(CreatedAt.Gt(v)) }
-func (q Query) CreatedAtGte(v time.Time) Query             { return q.Where(CreatedAt.Gte(v)) }
-func (q Query) CreatedAtLt(v time.Time) Query              { return q.Where(CreatedAt.Lt(v)) }
-func (q Query) CreatedAtLte(v time.Time) Query             { return q.Where(CreatedAt.Lte(v)) }
-func (q Query) UpdatedAtEq(v time.Time) Query              { return q.Where(UpdatedAt.Eq(v)) }
-func (q Query) UpdatedAtNotEq(v time.Time) Query           { return q.Where(UpdatedAt.NotEq(v)) }
-func (q Query) UpdatedAtGt(v time.Time) Query              { return q.Where(UpdatedAt.Gt(v)) }
-func (q Query) UpdatedAtGte(v time.Time) Query             { return q.Where(UpdatedAt.Gte(v)) }
-func (q Query) UpdatedAtLt(v time.Time) Query              { return q.Where(UpdatedAt.Lt(v)) }
-func (q Query) UpdatedAtLte(v time.Time) Query             { return q.Where(UpdatedAt.Lte(v)) }
-func (q Query) ProjectIDEq(v [16]byte) Query               { return q.Where(ProjectID.Eq(v)) }
-func (q Query) ProjectIDNotEq(v [16]byte) Query            { return q.Where(ProjectID.NotEq(v)) }
-func (q Query) ProjectIDIn(v ...[16]byte) Query            { return q.Where(ProjectID.In(v...)) }
-func (q Query) ProjectIDNotIn(v ...[16]byte) Query         { return q.Where(ProjectID.NotIn(v...)) }
-func (q Query) NameEq(v string) Query                      { return q.Where(Name.Eq(v)) }
-func (q Query) NameNotEq(v string) Query                   { return q.Where(Name.NotEq(v)) }
-func (q Query) NameGt(v string) Query                      { return q.Where(Name.Gt(v)) }
-func (q Query) NameGte(v string) Query                     { return q.Where(Name.Gte(v)) }
-func (q Query) NameLt(v string) Query                      { return q.Where(Name.Lt(v)) }
-func (q Query) NameLte(v string) Query                     { return q.Where(Name.Lte(v)) }
-func (q Query) NameLike(v string) Query                    { return q.Where(Name.Like(v)) }
-func (q Query) NameILike(v string) Query                   { return q.Where(Name.ILike(v)) }
-func (q Query) NameIn(v ...string) Query                   { return q.Where(Name.In(v...)) }
-func (q Query) NameNotIn(v ...string) Query                { return q.Where(Name.NotIn(v...)) }
-func (q Query) PortEq(v int64) Query                       { return q.Where(Port.Eq(v)) }
-func (q Query) PortNotEq(v int64) Query                    { return q.Where(Port.NotEq(v)) }
-func (q Query) PortGt(v int64) Query                       { return q.Where(Port.Gt(v)) }
-func (q Query) PortGte(v int64) Query                      { return q.Where(Port.Gte(v)) }
-func (q Query) PortLt(v int64) Query                       { return q.Where(Port.Lt(v)) }
-func (q Query) PortLte(v int64) Query                      { return q.Where(Port.Lte(v)) }
-func (q Query) PortIn(v ...int64) Query                    { return q.Where(Port.In(v...)) }
-func (q Query) PortNotIn(v ...int64) Query                 { return q.Where(Port.NotIn(v...)) }
-func (q Query) DriverEq(v string) Query                    { return q.Where(Driver.Eq(v)) }
-func (q Query) DriverNotEq(v string) Query                 { return q.Where(Driver.NotEq(v)) }
-func (q Query) DriverGt(v string) Query                    { return q.Where(Driver.Gt(v)) }
-func (q Query) DriverGte(v string) Query                   { return q.Where(Driver.Gte(v)) }
-func (q Query) DriverLt(v string) Query                    { return q.Where(Driver.Lt(v)) }
-func (q Query) DriverLte(v string) Query                   { return q.Where(Driver.Lte(v)) }
-func (q Query) DriverLike(v string) Query                  { return q.Where(Driver.Like(v)) }
-func (q Query) DriverILike(v string) Query                 { return q.Where(Driver.ILike(v)) }
-func (q Query) DriverIn(v ...string) Query                 { return q.Where(Driver.In(v...)) }
-func (q Query) DriverNotIn(v ...string) Query              { return q.Where(Driver.NotIn(v...)) }
-func (q Query) ConnectionContains(v runtime.JSON) Query    { return q.Where(Connection.Contains(v)) }
-func (q Query) ConnectionContainedBy(v runtime.JSON) Query { return q.Where(Connection.ContainedBy(v)) }
-func (q Query) ConnectionHasAnyKey(v ...string) Query      { return q.Where(Connection.HasAnyKey(v...)) }
-func (q Query) ConnectionHasAllKeys(v ...string) Query     { return q.Where(Connection.HasAllKeys(v...)) }
-func (q Query) EnabledEq(v bool) Query                     { return q.Where(Enabled.Eq(v)) }
-func (q Query) EnabledNotEq(v bool) Query                  { return q.Where(Enabled.NotEq(v)) }
-func (q Query) DeletedAtEq(v time.Time) Query              { return q.Where(DeletedAt.Eq(v)) }
-func (q Query) DeletedAtNotEq(v time.Time) Query           { return q.Where(DeletedAt.NotEq(v)) }
-func (q Query) DeletedAtGt(v time.Time) Query              { return q.Where(DeletedAt.Gt(v)) }
-func (q Query) DeletedAtGte(v time.Time) Query             { return q.Where(DeletedAt.Gte(v)) }
-func (q Query) DeletedAtLt(v time.Time) Query              { return q.Where(DeletedAt.Lt(v)) }
-func (q Query) DeletedAtLte(v time.Time) Query             { return q.Where(DeletedAt.Lte(v)) }
-func (q Query) DeletedAtIsNull() Query                     { return q.Where(DeletedAt.IsNull()) }
-func (q Query) DeletedAtIsNotNull() Query                  { return q.Where(DeletedAt.IsNotNull()) }
+func (q Query) IDEq(v [16]byte) Query              { return q.Where(ID.Eq(v)) }
+func (q Query) IDNotEq(v [16]byte) Query           { return q.Where(ID.NotEq(v)) }
+func (q Query) IDIn(v ...[16]byte) Query           { return q.Where(ID.In(v...)) }
+func (q Query) IDNotIn(v ...[16]byte) Query        { return q.Where(ID.NotIn(v...)) }
+func (q Query) CreatedAtEq(v time.Time) Query      { return q.Where(CreatedAt.Eq(v)) }
+func (q Query) CreatedAtNotEq(v time.Time) Query   { return q.Where(CreatedAt.NotEq(v)) }
+func (q Query) CreatedAtGt(v time.Time) Query      { return q.Where(CreatedAt.Gt(v)) }
+func (q Query) CreatedAtGte(v time.Time) Query     { return q.Where(CreatedAt.Gte(v)) }
+func (q Query) CreatedAtLt(v time.Time) Query      { return q.Where(CreatedAt.Lt(v)) }
+func (q Query) CreatedAtLte(v time.Time) Query     { return q.Where(CreatedAt.Lte(v)) }
+func (q Query) UpdatedAtEq(v time.Time) Query      { return q.Where(UpdatedAt.Eq(v)) }
+func (q Query) UpdatedAtNotEq(v time.Time) Query   { return q.Where(UpdatedAt.NotEq(v)) }
+func (q Query) UpdatedAtGt(v time.Time) Query      { return q.Where(UpdatedAt.Gt(v)) }
+func (q Query) UpdatedAtGte(v time.Time) Query     { return q.Where(UpdatedAt.Gte(v)) }
+func (q Query) UpdatedAtLt(v time.Time) Query      { return q.Where(UpdatedAt.Lt(v)) }
+func (q Query) UpdatedAtLte(v time.Time) Query     { return q.Where(UpdatedAt.Lte(v)) }
+func (q Query) ProjectIDEq(v [16]byte) Query       { return q.Where(ProjectID.Eq(v)) }
+func (q Query) ProjectIDNotEq(v [16]byte) Query    { return q.Where(ProjectID.NotEq(v)) }
+func (q Query) ProjectIDIn(v ...[16]byte) Query    { return q.Where(ProjectID.In(v...)) }
+func (q Query) ProjectIDNotIn(v ...[16]byte) Query { return q.Where(ProjectID.NotIn(v...)) }
+func (q Query) NameEq(v string) Query              { return q.Where(Name.Eq(v)) }
+func (q Query) NameNotEq(v string) Query           { return q.Where(Name.NotEq(v)) }
+func (q Query) NameGt(v string) Query              { return q.Where(Name.Gt(v)) }
+func (q Query) NameGte(v string) Query             { return q.Where(Name.Gte(v)) }
+func (q Query) NameLt(v string) Query              { return q.Where(Name.Lt(v)) }
+func (q Query) NameLte(v string) Query             { return q.Where(Name.Lte(v)) }
+func (q Query) NameLike(v string) Query            { return q.Where(Name.Like(v)) }
+func (q Query) NameILike(v string) Query           { return q.Where(Name.ILike(v)) }
+func (q Query) NameIn(v ...string) Query           { return q.Where(Name.In(v...)) }
+func (q Query) NameNotIn(v ...string) Query        { return q.Where(Name.NotIn(v...)) }
+func (q Query) PortEq(v int64) Query               { return q.Where(Port.Eq(v)) }
+func (q Query) PortNotEq(v int64) Query            { return q.Where(Port.NotEq(v)) }
+func (q Query) PortGt(v int64) Query               { return q.Where(Port.Gt(v)) }
+func (q Query) PortGte(v int64) Query              { return q.Where(Port.Gte(v)) }
+func (q Query) PortLt(v int64) Query               { return q.Where(Port.Lt(v)) }
+func (q Query) PortLte(v int64) Query              { return q.Where(Port.Lte(v)) }
+func (q Query) PortIn(v ...int64) Query            { return q.Where(Port.In(v...)) }
+func (q Query) PortNotIn(v ...int64) Query         { return q.Where(Port.NotIn(v...)) }
+func (q Query) DriverEq(v string) Query            { return q.Where(Driver.Eq(v)) }
+func (q Query) DriverNotEq(v string) Query         { return q.Where(Driver.NotEq(v)) }
+func (q Query) DriverGt(v string) Query            { return q.Where(Driver.Gt(v)) }
+func (q Query) DriverGte(v string) Query           { return q.Where(Driver.Gte(v)) }
+func (q Query) DriverLt(v string) Query            { return q.Where(Driver.Lt(v)) }
+func (q Query) DriverLte(v string) Query           { return q.Where(Driver.Lte(v)) }
+func (q Query) DriverLike(v string) Query          { return q.Where(Driver.Like(v)) }
+func (q Query) DriverILike(v string) Query         { return q.Where(Driver.ILike(v)) }
+func (q Query) DriverIn(v ...string) Query         { return q.Where(Driver.In(v...)) }
+func (q Query) DriverNotIn(v ...string) Query      { return q.Where(Driver.NotIn(v...)) }
+func (q Query) ConnectionEq(v string) Query        { return q.Where(Connection.Eq(v)) }
+func (q Query) ConnectionNotEq(v string) Query     { return q.Where(Connection.NotEq(v)) }
+func (q Query) ConnectionGt(v string) Query        { return q.Where(Connection.Gt(v)) }
+func (q Query) ConnectionGte(v string) Query       { return q.Where(Connection.Gte(v)) }
+func (q Query) ConnectionLt(v string) Query        { return q.Where(Connection.Lt(v)) }
+func (q Query) ConnectionLte(v string) Query       { return q.Where(Connection.Lte(v)) }
+func (q Query) ConnectionLike(v string) Query      { return q.Where(Connection.Like(v)) }
+func (q Query) ConnectionILike(v string) Query     { return q.Where(Connection.ILike(v)) }
+func (q Query) ConnectionIn(v ...string) Query     { return q.Where(Connection.In(v...)) }
+func (q Query) ConnectionNotIn(v ...string) Query  { return q.Where(Connection.NotIn(v...)) }
+func (q Query) EnabledEq(v bool) Query             { return q.Where(Enabled.Eq(v)) }
+func (q Query) EnabledNotEq(v bool) Query          { return q.Where(Enabled.NotEq(v)) }
+func (q Query) DeletedAtEq(v time.Time) Query      { return q.Where(DeletedAt.Eq(v)) }
+func (q Query) DeletedAtNotEq(v time.Time) Query   { return q.Where(DeletedAt.NotEq(v)) }
+func (q Query) DeletedAtGt(v time.Time) Query      { return q.Where(DeletedAt.Gt(v)) }
+func (q Query) DeletedAtGte(v time.Time) Query     { return q.Where(DeletedAt.Gte(v)) }
+func (q Query) DeletedAtLt(v time.Time) Query      { return q.Where(DeletedAt.Lt(v)) }
+func (q Query) DeletedAtLte(v time.Time) Query     { return q.Where(DeletedAt.Lte(v)) }
+func (q Query) DeletedAtIsNull() Query             { return q.Where(DeletedAt.IsNull()) }
+func (q Query) DeletedAtIsNotNull() Query          { return q.Where(DeletedAt.IsNotNull()) }
 
 // softDeleteWhere keeps marked rows out of every read in this package.
 // The splice ANDs it AHEAD of the caller's predicates, so a call site
@@ -1255,6 +1247,21 @@ var fragTable = [10][27]runtime.Frag{
 	},
 	{ // connection
 		{}, // opNone
+		{A: "\"connection\" = $", B: ""},
+		{A: "\"connection\" <> $", B: ""},
+		{A: "\"connection\" > $", B: ""},
+		{A: "\"connection\" >= $", B: ""},
+		{A: "\"connection\" < $", B: ""},
+		{A: "\"connection\" <= $", B: ""},
+		{A: "\"connection\" LIKE $", B: ""},
+		{A: "\"connection\" ILIKE $", B: ""},
+		{},
+		{},
+		{},
+		{},
+		{},
+		{A: "\"connection\" = ANY($", B: ")"},
+		{A: "\"connection\" <> ALL($", B: ")"},
 		{},
 		{},
 		{},
@@ -1262,21 +1269,6 @@ var fragTable = [10][27]runtime.Frag{
 		{},
 		{},
 		{},
-		{},
-		{},
-		{},
-		{},
-		{},
-		{},
-		{},
-		{},
-		{},
-		{},
-		{},
-		{A: "\"connection\" @> $", B: ""},
-		{A: "\"connection\" <@ $", B: ""},
-		{A: "\"connection\" ?| $", B: ""},
-		{A: "\"connection\" ?& $", B: ""},
 		{},
 		{},
 		{},
@@ -1502,7 +1494,7 @@ func scan(rv [][]byte, r *Row, sl *runtime.Slab) error {
 	r.Name = sl.Str(rv[4])
 	r.Port = runtime.Int8(rv[5])
 	r.Driver = sl.Str(rv[6])
-	r.Connection = runtime.JSON(runtime.JSONB(rv[7], sl))
+	r.Connection = sl.Str(rv[7])
 	r.Enabled = runtime.Bool(rv[8])
 	r.DeletedAt = runtime.Nullable(rv[9], runtime.Timestamptz)
 	return nil
@@ -1515,7 +1507,6 @@ type binder struct {
 	raws   [4][16]byte
 	tims   [4]time.Time
 	bools  [4]bool
-	jsns   [2]runtime.JSON
 	anyRaw [3][][16]byte
 	anyStr [3][]string
 	anyI64 [3][]int64
@@ -1560,7 +1551,7 @@ func putBinder(b *binder) {
 // Count and Exists stop here: their statements carry no LIMIT or OFFSET.
 func (q Query) bindPreds(b *binder) []any {
 	v := b.vals[:0]
-	var ns, nn, nr, ntm, nbo, njs, nar, nas, nai64 uint8
+	var ns, nn, nr, ntm, nbo, nar, nas, nai64 uint8
 	for i := uint8(0); i < q.nt; i++ {
 		t := q.toks[i]
 		// KLeaf binds a predicate's value; KCol binds a keyset cursor's.
@@ -1633,9 +1624,9 @@ func (q Query) bindPreds(b *binder) []any {
 			v = append(v, &b.strs[ns])
 			ns++
 		case 7:
-			b.jsns[njs] = q.jsns[njs]
-			v = append(v, &b.jsns[njs])
-			njs++
+			b.strs[ns] = q.strs[ns]
+			v = append(v, &b.strs[ns])
+			ns++
 		case 8:
 			b.bools[nbo] = q.bools[nbo]
 			v = append(v, &b.bools[nbo])
@@ -1914,7 +1905,7 @@ func (m *Mut) SetDriver(v string) {
 	m.dirty |= dDriver
 }
 
-func (m *Mut) SetConnection(v runtime.JSON) {
+func (m *Mut) SetConnection(v string) {
 	m.row.Connection = v
 	m.dirty |= dConnection
 }
@@ -1996,7 +1987,7 @@ func (n *Ins) SetDriver(v string) {
 	n.set |= iDriver
 }
 
-func (n *Ins) SetConnection(v runtime.JSON) {
+func (n *Ins) SetConnection(v string) {
 	n.row.Connection = v
 	n.set |= iConnection
 }
