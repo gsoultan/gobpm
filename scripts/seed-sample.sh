@@ -71,7 +71,10 @@ TOKEN=""
 
 wait_for_server() {
   local waited=0
-  until curl -sS -m 2 -o /dev/null "http://localhost:${API_PORT}/health" 2>/dev/null; do
+  # /readyz, not /health. The embedded UI is a catch-all, so an unknown path
+# answers 200 with the index page — a wait on one of those succeeds the moment
+# the listener binds, before the database is reachable.
+until curl -sS -m 2 -o /dev/null "http://localhost:${API_PORT}/readyz" 2>/dev/null; do
     (( waited += 1 ))
     if (( waited > 60 )); then
       die "the server on :${API_PORT} did not answer within 60s"
@@ -107,10 +110,16 @@ print(json.dumps({
     "admin_full_name": "Development Admin", "admin_public_name": "Admin",
     "admin_email": "admin@example.invalid",
     "organization_name": "Example Co", "project_name": "Sample Project",
-    "database_driver": "postgres", "db_host": "${DB_HOST:-127.0.0.1}", "db_port": ${DB_PORT:-5432},
-    "db_username": "${DB_USER:-metis}", "db_password": "${DB_PASSWORD:-metis}", "db_name": "${DB_NAME:-metis}",
+    # Passed as arguments rather than interpolated: the script body is inside
+    # single quotes, so a ${...} written here reaches python as literal text and
+    # fails to parse. It did.
+    "database_driver": "postgres",
+    "db_host": sys.argv[5], "db_port": int(sys.argv[6]),
+    "db_username": sys.argv[7], "db_password": sys.argv[8], "db_name": sys.argv[9],
     "encryption_key": sys.argv[3], "jwt_secret": sys.argv[4],
-}))' "$ADMIN_USER" "$ADMIN_PASS" "$key" "$secret")"
+}))' "$ADMIN_USER" "$ADMIN_PASS" "$key" "$secret" \
+       "${DB_HOST:-127.0.0.1}" "${DB_PORT:-5473}" \
+       "${DB_USER:-metis}" "${DB_PASSWORD:-metis}" "${DB_NAME:-metis_dev}")"
 
   local err
   err="$(api POST /setup "$payload" | json "d.get('error')")"

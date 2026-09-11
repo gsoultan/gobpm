@@ -17,6 +17,13 @@
 # The UI runs on :5273 and proxies /api to the backend on :8273, so
 # development is same-origin — the app talks to the server exactly as it does
 # in production, and no CORS is involved.
+#
+# Metis runs on PostgreSQL and nothing else, so this needs one. If DATABASE_URL
+# is set it is used as-is; otherwise the script looks for PostgreSQL on
+# localhost:5432 and, failing that, starts a container called metis-dev-pg with
+# whatever runtime is installed. Nothing is installed on your machine and the
+# container is left running between sessions — stopping it is `<runtime> stop
+# metis-dev-pg`.
 
 set -Eeuo pipefail
 
@@ -39,7 +46,23 @@ readonly API_PORT="${API_PORT:-8273}"
 STARTED_PORTS=()
 readonly GRPC_PORT="${GRPC_PORT:-8274}"
 readonly ENV_FILE="$ROOT/.env.development"
-readonly DB_FILE="$ROOT/metis.db"
+
+# The development database. Deliberately its own name, user and password rather
+# than `postgres`/`postgres`: a script that reaches for the superuser account on
+# a developer's machine is a script that can drop the wrong thing, and --reset
+# drops a database by name.
+readonly DB_NAME="${DB_NAME:-metis_dev}"
+readonly DB_USER="${DB_USER:-metis}"
+readonly DB_PASSWORD="${DB_PASSWORD:-metis}"
+readonly DB_HOST="${DB_HOST:-127.0.0.1}"
+# Not 5432, for the same reason the UI is not on 5173: a developer machine that
+# has done any PostgreSQL work already has something on 5432, and binding a
+# container there either fails or — worse — succeeds while the native server
+# keeps answering, so the script connects to a database it did not create and
+# reports an authentication failure it cannot explain.
+readonly DB_PORT="${DB_PORT:-5473}"
+readonly DB_CONTAINER="${DB_CONTAINER:-metis-dev-pg}"
+readonly DB_IMAGE="${DB_IMAGE:-postgres:17-alpine}"
 
 # --- output ----------------------------------------------------------------
 
@@ -104,6 +127,165 @@ check_ports() {
   die "stop the process using it, or set API_PORT, GRPC_PORT or UI_PORT to something free"
 }
 
+# --- database --------------------------------------------------------------
+
+# container_runtime names whatever can start PostgreSQL, or nothing.
+#
+# Ordered by how likely it is to already be running: docker on most machines,
+# then podman, then Apple's container. All three take -d, --name and -p, which
+# is all this needs.
+container_runtime() {
+  local runtime
+  for runtime in docker podman container; do
+    if command -v "$runtime" >/dev/null 2>&1; then
+      printf '%s' "$runtime"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# postgres_answers reports whether *our* database server is up.
+#
+# Asks the server rather than the database: the server can be up with no
+# metis_dev in it, which is the ordinary state before the first run and is
+# something this script fixes rather than an error.
+#
+# Without a local psql this cannot ask, so it answers no and the container path
+# takes over — which is right, because that path can ask from inside.
+postgres_answers() {
+  command -v psql >/dev/null 2>&1 || return 1
+  PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" \
+    -d postgres -tAc 'SELECT 1' >/dev/null 2>&1
+}
+
+# occupied_by_someone_else reports a server on our port that will not let us in.
+#
+# The difference matters. Nothing listening means start one; something
+# listening that refuses our credentials means a different project got there
+# first, and starting a container on that port would either fail or bind
+# alongside it and be shadowed — which presents as an authentication error
+# against a database this script never created.
+occupied_by_someone_else() {
+  port_in_use "$DB_PORT" && ! postgres_answers
+}
+
+# run_psql executes SQL against the maintenance database.
+#
+# Through the host's psql when there is one, otherwise inside the container this
+# script started. Requiring a local PostgreSQL client to use a containerised
+# server would be asking for half an installation.
+run_psql() {
+  if command -v psql >/dev/null 2>&1; then
+    PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d postgres -qtAc "$1"
+    return
+  fi
+  local runtime
+  runtime="$(container_runtime)" || die "no psql and no container runtime: install one, or set DATABASE_URL to a database you already have"
+  "$runtime" exec -i "$DB_CONTAINER" psql -U "$DB_USER" -d postgres -qtAc "$1"
+}
+
+# start_postgres brings up a development database and waits for it.
+start_postgres() {
+  local runtime
+  if occupied_by_someone_else; then
+    die "something is already listening on ${DB_HOST}:${DB_PORT} and it is not this project's database
+       ($(port_holder "$DB_PORT")).
+       Pick another port:
+         DB_PORT=5474 ./scripts/dev.sh
+       or point this at the database that is there:
+         DATABASE_URL=postgres://user:pass@${DB_HOST}:${DB_PORT}/db?sslmode=disable ./scripts/dev.sh"
+  fi
+  if ! runtime="$(container_runtime)"; then
+    die "PostgreSQL is not reachable at ${DB_HOST}:${DB_PORT} and no container runtime is installed.
+       Start one yourself and re-run:
+         createdb ${DB_NAME}
+       or point this at a database you already have:
+         DATABASE_URL=postgres://user:pass@host:5432/db?sslmode=disable ./scripts/dev.sh"
+  fi
+
+  # Already there but stopped — the usual case on the second day.
+  if "$runtime" start "$DB_CONTAINER" >/dev/null 2>&1; then
+    info "Started the existing ${DB_CONTAINER} container"
+  else
+    info "Starting PostgreSQL in ${DB_CONTAINER} (${DB_IMAGE}) via ${runtime}"
+    "$runtime" run -d --name "$DB_CONTAINER" \
+      -e POSTGRES_USER="$DB_USER" \
+      -e POSTGRES_PASSWORD="$DB_PASSWORD" \
+      -e POSTGRES_DB="$DB_NAME" \
+      -p "${DB_PORT}:5432" \
+      "$DB_IMAGE" >/dev/null \
+      || die "could not start ${DB_CONTAINER} — start PostgreSQL yourself, or set DATABASE_URL"
+  fi
+
+  # Waited on from inside the container as well as from outside: a machine with
+  # no psql cannot ask from here, and "never answered" would be the script
+  # reporting its own missing client as the database being down.
+  local waited=0 runtime_ready=""
+  until postgres_answers || [[ -n "$runtime_ready" ]]; do
+    if "$runtime" exec -i "$DB_CONTAINER" pg_isready -U "$DB_USER" >/dev/null 2>&1; then
+      runtime_ready=1
+      break
+    fi
+    (( waited++ ))
+    if (( waited > 60 )); then
+      die "${DB_CONTAINER} started but never answered on ${DB_HOST}:${DB_PORT}
+       its log: ${runtime} logs ${DB_CONTAINER}"
+    fi
+    sleep 1
+  done
+  ok "PostgreSQL is up on ${DB_HOST}:${DB_PORT}"
+}
+
+# ensure_database guarantees there is a database to point the server at.
+#
+# A caller-supplied DATABASE_URL is taken at its word and nothing is started:
+# somebody who named their own database does not want a container appearing
+# beside it.
+ensure_database() {
+  if [[ -n "${DATABASE_URL:-}" ]]; then
+    ok "using DATABASE_URL from the environment"
+    return
+  fi
+
+  postgres_answers || start_postgres
+
+  if [[ "$(run_psql "SELECT 1 FROM pg_database WHERE datname = '${DB_NAME}'")" != "1" ]]; then
+    info "Creating the ${DB_NAME} database"
+    run_psql "CREATE DATABASE ${DB_NAME}" >/dev/null
+  fi
+
+  export DATABASE_URL="postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}?sslmode=disable"
+  ok "database ${DB_NAME} on ${DB_HOST}:${DB_PORT}"
+}
+
+# reset_database drops the development database and starts again.
+#
+# The database rather than a file: there is no file any more. config.yaml goes
+# with it, because it pins the database and the keys chosen at first-time setup
+# and would otherwise send the server at the one just dropped.
+reset_database() {
+  postgres_answers || start_postgres
+  info "Dropping and recreating ${DB_NAME}"
+  # Nothing else should be attached, but a server left over from a previous run
+  # holds a connection and DROP DATABASE refuses while one is open.
+  run_psql "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${DB_NAME}' AND pid <> pg_backend_pid()" >/dev/null 2>&1 || true
+  run_psql "DROP DATABASE IF EXISTS ${DB_NAME}" >/dev/null
+  run_psql "CREATE DATABASE ${DB_NAME}" >/dev/null
+  rm -f "$ROOT/config.yaml"
+  ok "reset — the setup wizard will run again"
+}
+
+# export_db_settings tells the setup wizard the same thing the server was told.
+#
+# scripts/seed-sample.sh posts these to /setup, which writes config.yaml. Two
+# answers to "which database" is how the wizard configures one and the server
+# runs against another.
+export_db_settings() {
+  export DB_HOST DB_PORT DB_NAME
+  export DB_USER DB_PASSWORD
+}
+
 # --- secrets ---------------------------------------------------------------
 
 random_secret() {
@@ -137,8 +319,10 @@ JWT_SECRET=$(random_secret)
 # service task pointed at a mock API on localhost.
 METIS_HTTP_ALLOW_PRIVATE_NETWORKS=true
 
-# Metis runs on PostgreSQL. Point DATABASE_URL at an empty database.
-# DATABASE_URL=postgres://metis:metis@localhost:5432/metis?sslmode=disable
+# Metis runs on PostgreSQL. Left unset on purpose: scripts/dev.sh finds or
+# starts a local database and exports this itself. Set it to point at one you
+# already have, and nothing will be started for you.
+# DATABASE_URL=postgres://metis:metis@localhost:5432/metis_dev?sslmode=disable
 
 # Uncomment to keep the pre-existing gateway fallback while migrating
 # definitions that relied on it.
@@ -307,15 +491,18 @@ main() {
     all)     check_ports "$API_PORT" "$GRPC_PORT" "$UI_PORT" ;;
   esac
 
-  if (( reset )); then
-    if [[ -f "$DB_FILE" ]]; then
-      info "Removing $DB_FILE"
-      rm -f "$DB_FILE"
+  # The UI target proxies to a backend it does not start, so it needs no
+  # database — and starting one for it would be a container appearing because
+  # somebody asked for a front end.
+  if [[ "$target" != "ui" ]]; then
+    if (( reset )); then
+      reset_database
     fi
-    # config.yaml pins the database and secrets chosen during first-time
-    # setup; leaving it behind would send the server at the deleted database.
-    rm -f "$ROOT/config.yaml"
-    ok "reset — the setup wizard will run again"
+    # After the reset, so a --reset run points at the database it just recreated.
+    ensure_database
+    export_db_settings
+  elif (( reset )); then
+    warn "--reset does nothing for the UI alone"
   fi
 
   trap shutdown INT TERM HUP EXIT

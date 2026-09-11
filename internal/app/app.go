@@ -265,14 +265,28 @@ func (a *App) Run() error {
 		return err
 	}
 
-	// 2. Initialize DB with GORM
+	// 2. Open the database with GORM, which owns the schema.
 	if err := a.setupDatabase(); err != nil {
 		return err
 	}
 
-	// 2a. Connect the ported repositories to the same database, before the
-	//     domain is wired: the facade needs to know whether there is one.
+	// 2a. Open the storm connection *before* the migrations run.
+	//
+	//     Two of the migrations are backfills that read and write application
+	//     data, and every repository is on storm — so a migration list built
+	//     before this point hands them a nil connection and the first backfill
+	//     panics on a fresh install. It is only the connection here; the schema
+	//     work it used to do with it now happens after the migrations, because
+	//     it reconciles columns those migrations create.
 	if err := a.openStorm(ctx); err != nil {
+		return err
+	}
+
+	// 2b. Bring the schema up to date, then reconcile what storm writes against.
+	if err := a.migrate(); err != nil {
+		return err
+	}
+	if err := a.ensureStormSchema(ctx); err != nil {
 		return err
 	}
 
@@ -500,8 +514,10 @@ func (a *App) setupDatabase() error {
 	}
 	dbpool.Apply(db)
 	a.db = db
-
-	return a.migrate()
+	// Migrating is a separate step now: the backfills among the migrations read
+	// and write through repositories, which need the storm connection that is
+	// opened between this and a.migrate().
+	return nil
 }
 
 func (a *App) migrate() error {

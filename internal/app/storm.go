@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/gsoultan/metis/internal/pkg/config"
 	"github.com/gsoultan/metis/internal/pkg/envvar"
@@ -46,16 +47,16 @@ func (a *App) openStorm(ctx context.Context) error {
 		return fmt.Errorf("could not open the storm connection: %w", err)
 	}
 	a.storm = conn
-
-	if err := a.ensureStormSchema(ctx); err != nil {
-		return err
-	}
-	log.Info().Msg("Storm repositories ready")
+	log.Info().Msg("Storm connection open")
 	return nil
 }
 
 // ensureStormSchema creates the tables only storm knows about, and seeds the
 // platform roles.
+//
+// Runs after the GORM migrations, not with the connection that reaches them: it
+// reconciles column defaults on tables those migrations create, and creating
+// them first would be reconciling a schema that is one version behind.
 //
 // Both are idempotent and both run at every boot, for the same reason: an
 // installation upgraded into these features has neither, and an upgrade that
@@ -98,9 +99,29 @@ func (a *App) ensureStormSchema(ctx context.Context) error {
 	if err != nil {
 		log.Warn().Err(err).Msg("Could not compare the storm tables against the model. Any drift will go unreported.")
 	}
-	for _, statement := range drift {
-		log.Warn().Str("statement", statement).
-			Msg("A storm table does not match the model. It is left as it is; reconcile it with a migration.")
+	// Reported as one line plus the statements that would break a query, not
+	// one warning per difference.
+	//
+	// GORM's AutoMigrate and the storm model disagree about roughly sixty
+	// columns on a fresh installation — text where the model says varchar,
+	// nullable where it says NOT NULL, its own index names. None of it breaks a
+	// read or a write, and sixty warnings at every boot is how somebody learns
+	// to scroll past the one that would.
+	if len(drift) > 0 {
+		var breaking []string
+		for _, statement := range drift {
+			if strings.Contains(statement, "ADD COLUMN") || strings.Contains(statement, "DROP COLUMN") {
+				breaking = append(breaking, statement)
+			}
+			log.Debug().Str("statement", statement).Msg("Schema drift")
+		}
+		if len(breaking) > 0 {
+			log.Warn().Strs("statements", breaking).Int("total", len(drift)).
+				Msg("A storm table is missing a column the model names. Queries against it will fail; reconcile it with a migration.")
+		} else {
+			log.Info().Int("differences", len(drift)).
+				Msg("The schema differs from the model in ways that do not affect a query (types, nullability, index names). Run with debug logging to list them.")
+		}
 	}
 
 	accounts := pg.NewPlatformUserRepository(a.storm)

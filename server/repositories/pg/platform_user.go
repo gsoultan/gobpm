@@ -276,7 +276,11 @@ func (r *platformUserRepository) EnsureBuiltInRoles(ctx context.Context) error {
 		ins.SetName(role.Name)
 		ins.SetDescription(role.Description)
 		ins.SetBuiltIn(true)
-		ins.SetPermissions(nil)
+		// An empty array, not nil. The column is NOT NULL and a nil
+		// runtime.JSON is SQL NULL, so seeding the built-in roles failed at
+		// boot with a constraint violation — on a fresh installation, before
+		// anybody could sign in to read it.
+		ins.SetPermissions(runtime.JSON("[]"))
 		// Restore rather than DO NOTHING. The name is unique across the deleted
 		// rows, so a built-in role that somehow got marked would keep taking its
 		// name and DO NOTHING would leave it marked — an installation whose
