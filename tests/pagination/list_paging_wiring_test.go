@@ -73,6 +73,31 @@ func TestListInstancesWithoutPagingAsksForNone(t *testing.T) {
 	}
 }
 
+// A user's inbox is the listing most likely to outgrow one page, and its
+// decoder had the same omission the instance listing did.
+func TestListTasksByAssigneeReadsPagingFromTheQuery(t *testing.T) {
+	var got taskendpoint.ListTasksByAssigneeRequest
+	mux := http.NewServeMux()
+	taskhttp.RegisterHandlers(mux, taskendpoint.Endpoints{
+		ListTasksByAssignee: func(_ context.Context, request any) (any, error) {
+			if req, ok := request.(taskendpoint.ListTasksByAssigneeRequest); ok {
+				got = req
+			}
+			return taskendpoint.ListTasksResponse{}, nil
+		},
+	}, nil)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/assignee/alice?page=2&page_size=20", nil)
+	mux.ServeHTTP(httptest.NewRecorder(), request)
+
+	if got.Assignee != "alice" {
+		t.Errorf("assignee = %q", got.Assignee)
+	}
+	if got.Page != 2 || got.PageSize != 20 {
+		t.Errorf("page/page_size = %d/%d, want 2/20 — the query is not reaching the endpoint", got.Page, got.PageSize)
+	}
+}
+
 // The task listing gained an instance filter; the decoder has to carry it, or
 // the endpoint's new branch is unreachable over HTTP.
 func TestListTasksReadsInstanceIDFromTheQuery(t *testing.T) {

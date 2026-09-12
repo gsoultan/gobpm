@@ -218,6 +218,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 
 ### Fixed
 
+- **A user's inbox ignored the paging it was asked for.**
+  `GET /api/v1/tasks/assignee/{assignee}` declared `page` and `page_size` and
+  the endpoint handed them to `ListTasksByAssigneePaged`, but the decoder read
+  only the path — so the listing most likely to outgrow one page answered its
+  first and nothing could ask for the second. The same omission as the instance
+  listing below, in the place it costs most.
+
 - **The instance listing ignored the paging it was asked for.**
   `GET /api/v1/instances` declared `page` and `page_size`, and the query behind
   it ordered and windowed correctly — but the HTTP decoder read only

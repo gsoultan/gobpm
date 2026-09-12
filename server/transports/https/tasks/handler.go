@@ -91,8 +91,16 @@ func decodeGetTaskRequest(_ context.Context, r *http.Request) (any, error) {
 }
 
 func decodeListTasksByAssigneeRequest(_ context.Context, r *http.Request) (any, error) {
-	assignee := r.PathValue("assignee")
-	return task.ListTasksByAssigneeRequest{Assignee: assignee}, nil
+	// Same omission the instance listing had: the request declares Page and
+	// PageSize and the endpoint hands them to ListTasksByAssigneePaged, but
+	// nothing lifted them off the query string — so a user's inbox answered its
+	// first page and nothing could ask for the second.
+	page, pageSize := common.PageParams(r)
+	return task.ListTasksByAssigneeRequest{
+		Assignee: r.PathValue("assignee"),
+		Page:     page,
+		PageSize: pageSize,
+	}, nil
 }
 
 func decodeListTasksByCandidatesRequest(_ context.Context, r *http.Request) (any, error) {
