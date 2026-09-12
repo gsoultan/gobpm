@@ -72,6 +72,22 @@ type GetAuditLogsResponse struct {
 
 func (r GetAuditLogsResponse) Failed() error { return r.Err }
 
+type ExportOCELRequest struct {
+	ProjectID string `json:"project_id"`
+	// IncludeVariables is an explicit opt-in, and its absence must mean off.
+	// The audit trail's data is the instance's process variables, so a default
+	// of "include" would make this endpoint a way to take every business fact
+	// in a project out in one request.
+	IncludeVariables bool `json:"include_variables"`
+}
+
+type ExportOCELResponse struct {
+	Log entities.OCELLog `json:"log,omitzero"`
+	Err error            `json:"err,omitzero"`
+}
+
+func (r ExportOCELResponse) Failed() error { return r.Err }
+
 type GetInstanceRequest struct {
 	ID string `json:"id"`
 }

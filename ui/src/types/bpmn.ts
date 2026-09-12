@@ -161,6 +161,14 @@ export interface BPMNEdgeData {
   /** Condition expression displayed on the edge (used by gateways). */
   condition?: string;
   documentation?: string;
+  /**
+   * The route this edge was drawn along in the file it was imported from.
+   *
+   * React Flow routes its own edges, so this is never read while designing —
+   * it is carried so that saving an imported diagram does not straighten out
+   * every bend its author put in.
+   */
+  waypoints?: Array<{ x: number; y: number }>;
   [key: string]: unknown;
 }
 

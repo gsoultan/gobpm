@@ -5,9 +5,11 @@ Metis BPM (formerly GoBPM) is a professional, production-ready BPMN orchestrator
 ## 🚀 Key Features
 
 - **BPMN 2.0 Engine**: Supports essential BPMN elements including:
-  - **Tasks**: User Tasks, Service Tasks (HTTP/Connectors), Script Tasks (JavaScript), and Call Activities (sub-processes).
-  - **Gateways**: Exclusive and Parallel Gateways.
-  - **Events**: Start, End, and Intermediate Timer/Message Catch Events.
+  - **Tasks**: User Tasks, Service Tasks (HTTP/Connectors), Script Tasks (JavaScript), Business Rule Tasks (DMN), Manual Tasks, and Call Activities.
+  - **Gateways**: Exclusive, Parallel, Inclusive and Event-Based Gateways.
+  - **Events**: Start, End and Terminate; Timer, Message, Signal and **Conditional** catch events; Escalation and Compensation throws; boundary events, interrupting or not.
+  - **Sub-processes**: ordinary, event-triggered, and **ad-hoc** — a group of steps a person runs in whatever order the work needs, until a completion condition says it is finished.
+- **BPMN XML interop**: import and export round-trip the **diagram**, not just the model — shape bounds, expanded sub-processes and connector routing — so a file from Camunda Modeler or bpmn.io keeps the layout its author drew, and a file exported from here opens in them. Execution-affecting attributes travel too: a gateway's default flow, a call activity's `calledElement`, multi-instance loop characteristics, and external-task topics written in the Camunda namespace.
 - **RabbitMQ Integration**: Production-ready messaging capabilities:
   - **Outbound Connectors**: Publish messages to RabbitMQ exchanges directly from Service Tasks.
   - **Inbound Message Correlation**: Automatically correlate RabbitMQ messages to BPMN Message Events.
@@ -25,6 +27,7 @@ Metis BPM (formerly GoBPM) is a professional, production-ready BPMN orchestrator
   - Legacy `js:` gateway conditions are **refused by default** — the JavaScript runtime cannot be memory-bounded. Installations still migrating can set `METIS_FEATURE_JAVASCRIPT_CONDITIONS=true`; `GET /api/v1/definitions/javascript-conditions` lists every stored condition that still needs rewriting.
 - **Scripting Engine**: Integrated **Goja** (JavaScript engine) for **Script Tasks** — complex data transformations within workflows, under a wall-clock budget and interrupt.
 - **Task Inbox**: A dedicated view for users to manage, claim, and complete their assigned tasks.
+- **Process mining**: a project's audit trail exports as an **OCEL 2.0** object-centric event log (`GET /api/v1/projects/{id}/ocel`), readable by ProM, pm4py and the commercial mining tools. Process variables are excluded unless explicitly asked for — a control-flow model does not need them.
 - **Enterprise Persistence**:
   - **Audit Logging**: Comprehensive, persistent audit trail for every state change and node transition.
   - **Security**: **AES-256-GCM encryption** for process and task variables at rest. Requires `ENCRYPTION_KEY`; the server refuses to start without it once configured.

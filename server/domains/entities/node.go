@@ -26,17 +26,29 @@ type Node struct {
 	CompletionCondition string   `json:"completion_condition,omitzero"`
 	// ErrorCode is the BPMN errorCode on an error boundary event used to match CatchableError.
 	// An empty ErrorCode catches all errors; a non-empty value catches only matching codes.
-	ErrorCode         string          `json:"error_code,omitzero"`
-	IsAdHoc           bool            `json:"is_ad_hoc,omitzero"`
-	IsEventSubProcess bool            `json:"is_event_sub_process,omitzero"`
-	Incoming          []string        `json:"incoming,omitzero"`
-	Outgoing          []string        `json:"outgoing,omitzero"`
-	X                 int             `json:"x,omitzero"`
-	Y                 int             `json:"y,omitzero"`
-	Condition         string          `json:"condition,omitzero"`
-	Properties        map[string]any  `json:"properties,omitzero"`
-	Nodes             []*Node         `json:"nodes,omitzero"`
-	Flows             []*SequenceFlow `json:"flows,omitzero"`
+	ErrorCode         string   `json:"error_code,omitzero"`
+	IsAdHoc           bool     `json:"is_ad_hoc,omitzero"`
+	IsEventSubProcess bool     `json:"is_event_sub_process,omitzero"`
+	Incoming          []string `json:"incoming,omitzero"`
+	Outgoing          []string `json:"outgoing,omitzero"`
+	X                 int      `json:"x,omitzero"`
+	Y                 int      `json:"y,omitzero"`
+	// Width and Height come from a BPMN file's diagram interchange section and
+	// are written back out on export. The designer does not set them — its nodes
+	// are sized by CSS — so a definition authored here exports with the BPMN
+	// default for its type. Carrying them means a diagram imported from another
+	// tool keeps the shape its author gave it instead of being re-sized on the
+	// way back out.
+	Width  int `json:"width,omitzero"`
+	Height int `json:"height,omitzero"`
+	// IsExpanded marks a sub-process drawn with its children visible. Without it
+	// an expanded sub-process re-opens collapsed elsewhere and its children,
+	// which are shapes in the same plane, render on top of it.
+	IsExpanded bool            `json:"is_expanded,omitzero"`
+	Condition  string          `json:"condition,omitzero"`
+	Properties map[string]any  `json:"properties,omitzero"`
+	Nodes      []*Node         `json:"nodes,omitzero"`
+	Flows      []*SequenceFlow `json:"flows,omitzero"`
 }
 
 func (n *Node) GetStringProperty(key string) string {

@@ -10,7 +10,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file entities/flow.proto.
  */
 export const file_entities_flow: GenFile = /*@__PURE__*/
-  fileDesc("ChNlbnRpdGllcy9mbG93LnByb3RvEgdwcm9jZXNzImQKBEZsb3cSCgoCaWQYASABKAkSEgoKc291cmNlX3JlZhgCIAEoCRISCgp0YXJnZXRfcmVmGAMgASgJEhEKCWNvbmRpdGlvbhgEIAEoCRIVCg1kb2N1bWVudGF0aW9uGAUgASgJQosBCgtjb20ucHJvY2Vzc0IJRmxvd1Byb3RvUAFaNWdpdGh1Yi5jb20vZ3NvdWx0YW4vbWV0aXMvYXBpL3Byb3RvL2VudGl0aWVzO2VudGl0aWVzogIDUFhYqgIHUHJvY2Vzc8oCB1Byb2Nlc3PiAhNQcm9jZXNzXEdQQk1ldGFkYXRh6gIHUHJvY2Vzc2IGcHJvdG8z");
+  fileDesc("ChNlbnRpdGllcy9mbG93LnByb3RvEgdwcm9jZXNzIooBCgRGbG93EgoKAmlkGAEgASgJEhIKCnNvdXJjZV9yZWYYAiABKAkSEgoKdGFyZ2V0X3JlZhgDIAEoCRIRCgljb25kaXRpb24YBCABKAkSFQoNZG9jdW1lbnRhdGlvbhgFIAEoCRIkCgl3YXlwb2ludHMYBiADKAsyES5wcm9jZXNzLldheXBvaW50IiAKCFdheXBvaW50EgkKAXgYASABKAUSCQoBeRgCIAEoBUKLAQoLY29tLnByb2Nlc3NCCUZsb3dQcm90b1ABWjVnaXRodWIuY29tL2dzb3VsdGFuL21ldGlzL2FwaS9wcm90by9lbnRpdGllcztlbnRpdGllc6ICA1BYWKoCB1Byb2Nlc3PKAgdQcm9jZXNz4gITUHJvY2Vzc1xHUEJNZXRhZGF0YeoCB1Byb2Nlc3NiBnByb3RvMw");
 
 /**
  * Flow is one sequence flow: an arrow from one node to another, optionally
@@ -48,6 +48,15 @@ export type Flow = Message<"process.Flow"> & {
    * @generated from field: string documentation = 5;
    */
   documentation: string;
+
+  /**
+   * The route the edge was drawn along. BPMN needs at least two points on an
+   * edge; an empty list means the flow came from somewhere with no diagram and
+   * the exporter has to draw a straight line instead.
+   *
+   * @generated from field: repeated process.Waypoint waypoints = 6;
+   */
+  waypoints: Waypoint[];
 };
 
 /**
@@ -56,4 +65,28 @@ export type Flow = Message<"process.Flow"> & {
  */
 export const FlowSchema: GenMessage<Flow> = /*@__PURE__*/
   messageDesc(file_entities_flow, 0);
+
+/**
+ * Waypoint is one point on a sequence flow's drawn route.
+ *
+ * @generated from message process.Waypoint
+ */
+export type Waypoint = Message<"process.Waypoint"> & {
+  /**
+   * @generated from field: int32 x = 1;
+   */
+  x: number;
+
+  /**
+   * @generated from field: int32 y = 2;
+   */
+  y: number;
+};
+
+/**
+ * Describes the message process.Waypoint.
+ * Use `create(WaypointSchema)` to create a new message.
+ */
+export const WaypointSchema: GenMessage<Waypoint> = /*@__PURE__*/
+  messageDesc(file_entities_flow, 1);
 

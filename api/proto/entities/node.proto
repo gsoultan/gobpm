@@ -64,6 +64,14 @@ message Node {
   int32 x = 30;
   int32 y = 31;
 
+  // Diagram size and expansion, carried from an imported BPMN file. The
+  // designer sizes its own nodes with CSS and leaves these zero; a diagram
+  // drawn in another tool keeps the shape its author gave it, and without a
+  // field here saving the process would quietly throw that away.
+  int32 width = 34;
+  int32 height = 35;
+  bool is_expanded = 36;
+
   // A sub-process holds its own nodes and flows.
   repeated Node nodes = 32;
   repeated Flow flows = 33;

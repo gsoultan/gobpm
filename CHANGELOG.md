@@ -63,6 +63,70 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 
 ### Added
 
+- **A BPMN file exported from here now opens in other BPMN tools, and one
+  imported from them keeps its layout.** Export wrote a `<definitions>` element
+  with no namespace on it and no diagram interchange section at all. That is
+  well-formed XML and this parser read it back, which is why the round trip
+  looked healthy — but elements are resolved by namespace and bpmn-js needs a
+  diagram to render anything, so every file this engine produced was a file only
+  this engine could open. Import had the mirror problem: it read no geometry at
+  all, so a diagram drawn in Camunda Modeler arrived with every shape at the
+  origin and its author's layout was gone for good.
+
+  Both directions carry the diagram now: shape bounds, whether a sub-process is
+  drawn expanded, and the bends of every connector. A definition that was never
+  drawn — created over the API, or by a test — is laid out in a row on the way
+  out rather than stacked at the origin, so the file still opens legibly. The
+  geometry has a field everywhere it has to survive: the node entity, the
+  database model, the protobuf, and the designer's save request. That last one
+  matters most, because without it the act that flattened an imported diagram
+  was saving it.
+
+- **Export stopped silently dropping parts of the process.** There was no case
+  for a sub-process, so exporting a process containing one produced a valid file
+  with the sub-process and every node inside it missing — and reported success.
+  Pools, lanes, escalation and compensation throw events, and the terminate
+  marker on an end event went the same way. Import gained the elements it could
+  not read at all: `adHocSubProcess`, and escalation, compensation and
+  conditional event definitions.
+
+- **The attributes that decide what a process does now survive a round trip.** A
+  gateway's `default` flow, a call activity's `calledElement`, a boundary event's
+  `cancelActivity` and multi-instance loop characteristics were all dropped. The
+  default flow is the one to notice: this engine refuses to guess at a decision
+  point, so a gateway that had a default before an import raised an incident
+  after it. External-task topics, assignees and form keys are written in the
+  Camunda namespace, so a process exported from here is deployable by the engine
+  most of these diagrams come from.
+
+- **Conditional events.** A step can wait until something becomes true of the
+  process's own data — "carry on once the total is over the limit" — with no
+  clock and no inbound message. The condition is read when the token arrives, so
+  one that already holds does not wait at all, and again every time the instance
+  advances, because the only thing that can make it true is another part of the
+  same process changing a variable. It is authorable in the designer and it
+  round-trips through BPMN XML.
+
+- **An ad-hoc sub-process can be built in the designer.** The engine has run
+  these for a while — a group of steps a person drives in whatever order the
+  work needs, until a completion condition says it is finished — but nothing in
+  the designer could produce one, so the only way to get one was to import a
+  file that already had one. A sub-process has a property panel now, and it
+  refuses the two configurations that cannot work: an ad-hoc group with nothing
+  in it, and one that is also event-triggered.
+
+- **A project's history exports as an OCEL 2.0 event log**, at
+  `GET /api/v1/projects/{id}/ocel`. The audit trail was already a complete record
+  of what happened; what it was not was portable, so reading it meant using this
+  application. OCEL 2.0 is the current standard for object-centric event data and
+  is read by ProM, pm4py and the commercial mining tools. The activity is the
+  node's name rather than the audit entry's kind, because a log whose every event
+  is `node_reached` discovers a model with four boxes in it however large the
+  process is. Instances relate to a definition *and its version*, so two versions
+  are not mined as one. Process variables are **not** included unless
+  `?include_variables=true` is asked for: an audit entry's data is the instance's
+  business facts, and mining a control-flow model needs none of them.
+
 - **A new version of a process no longer takes over the moment it is deployed.**
   Deploying used to make the new version live immediately, because "live" meant
   "the highest version number" and there was no way to say anything else. It is
@@ -217,6 +281,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   copy cannot cross an organization boundary.
 
 ### Fixed
+
+- **A catch event with nothing to wait for hung the instance in silence.** The
+  handler returned success while leaving the token where it was, so nothing in
+  the system would ever move it: no incident, no log line, and the only symptom
+  was a process that stopped. A catch event exists to wait for something, so one
+  that names nothing to wait for is a modelling error, and it is refused by name
+  now. The same branch handed a *condition* to the timer service as though the
+  condition were a duration, which is what conditional events replace.
 
 - **A user's inbox ignored the paging it was asked for.**
   `GET /api/v1/tasks/assignee/{assignee}` declared `page` and `page_size` and

@@ -207,6 +207,46 @@
         defaults are pinned by test (`TestSecurityDefaults`), because changing
         either one is a security decision with a rollout plan behind it rather
         than a tweak.
+- [x] 9. BPMN interoperability and process mining (2026-09-12)
+  - [x] **Diagram interchange round-trips.** Import and export carry shape bounds,
+        `isExpanded`, and connector waypoints. Export previously wrote a bare
+        `<definitions>` with no namespace and no diagram: valid XML that this
+        parser read back, so the round trip looked healthy, and that no other BPMN
+        tool would open. The geometry has a field at every layer it crosses —
+        entity, database model, protobuf, designer save request — because the
+        adapters copy field by field and a missing one is dropped in silence.
+        Covered by `server/domains/services/impl/bpmn_xml_diagram_test.go`,
+        `server/domains/adapters/definition_geometry_test.go` and the geometry
+        cases in `ui/src/mappers/definitionMapper.test.ts`.
+  - [x] **Export stopped dropping nodes.** `classifyNodes` had no case for a
+        sub-process, so exporting one produced a valid file with the sub-process
+        and its children missing, and reported success. Pools, lanes, escalation
+        and compensation throws and the terminate marker went the same way.
+  - [x] **Execution-affecting attributes survive.** Gateway `default` flow,
+        `calledElement`, `cancelActivity`, multi-instance loop characteristics,
+        and Camunda-namespaced topic/assignee/formKey. The default flow matters
+        most: the engine refuses to guess at a decision point, so losing it turned
+        a working diagram into one that raises an incident.
+  - [x] **Conditional events.** New in both the engine and the designer. Evaluated
+        on arrival and again at the end of every advance of the same instance,
+        which is the only thing that can make the condition true. Re-evaluation
+        reads the tokens rather than a subscription table, so there is no new
+        state and no migration. `tests/bpmn/conditional_event_test.go`.
+  - [x] **A catch event with nothing to wait for is refused.** It used to return
+        success and leave the token in place — a permanent hang with no incident
+        and no log line.
+  - [x] **Ad-hoc sub-processes are authorable.** The engine has run them for a
+        while; nothing in the designer could produce one. `SubProcessConfig` plus
+        `ui/src/domain/adHocSubProcess.ts`, which refuses an ad-hoc group with no
+        steps in it and one that is also event-triggered.
+  - [x] **OCEL 2.0 export** at `GET /api/v1/projects/{id}/ocel`. The activity is
+        the node name, not the audit kind — the obvious mapping discovers a model
+        with four boxes in it. Instances relate to definition *and version*.
+        Process variables are excluded unless `?include_variables=true`: the audit
+        data map is the instance's business facts and a control-flow model needs
+        none of them. Tenant scope comes from the repository, as it does for every
+        other project-scoped read.
+
 - [ ] 7. User-Friendly UX Roadmap
   - [x] Business Timeline audit log: `AuditWriter` contract + `narrativeFor` narrative generator + lifecycle hooks for all task events (Claim/Unclaim/Complete/Assign/Delegate/Create).
   - [x] Task Inbox UX overhaul: priority badges, overdue countdown, bulk actions.

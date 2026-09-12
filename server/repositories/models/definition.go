@@ -60,26 +60,40 @@ type FlowNode struct {
 	// no column here, so it was dropped on save and every boundary event came
 	// back as a catch-all: a path meant for "the card was declined" was taken
 	// for a timeout, a bad URL, anything at all.
-	ErrorCode         string         `json:"error_code,omitzero"`
-	IsAdHoc           bool           `json:"is_ad_hoc,omitzero"`
-	IsEventSubProcess bool           `json:"is_event_sub_process,omitzero"`
-	Incoming          []string       `json:"incoming,omitzero"`
-	Outgoing          []string       `json:"outgoing,omitzero"`
-	X                 int            `json:"x,omitzero"`
-	Y                 int            `json:"y,omitzero"`
-	Condition         string         `json:"condition,omitzero"`
-	Properties        map[string]any `json:"properties,omitzero" gorm:"serializer:json"`
-	Nodes             []FlowNode     `json:"nodes,omitzero"`
-	Flows             []SequenceFlow `json:"flows,omitzero"`
+	ErrorCode         string   `json:"error_code,omitzero"`
+	IsAdHoc           bool     `json:"is_ad_hoc,omitzero"`
+	IsEventSubProcess bool     `json:"is_event_sub_process,omitzero"`
+	Incoming          []string `json:"incoming,omitzero"`
+	Outgoing          []string `json:"outgoing,omitzero"`
+	X                 int      `json:"x,omitzero"`
+	Y                 int      `json:"y,omitzero"`
+	// Width, Height and IsExpanded come from an imported diagram. They need a
+	// field here for the same reason ErrorCode did: the adapters copy field by
+	// field, so anything without one is dropped silently on save — and the
+	// symptom is a diagram that renders correctly until somebody presses save.
+	Width      int            `json:"width,omitzero"`
+	Height     int            `json:"height,omitzero"`
+	IsExpanded bool           `json:"is_expanded,omitzero"`
+	Condition  string         `json:"condition,omitzero"`
+	Properties map[string]any `json:"properties,omitzero" gorm:"serializer:json"`
+	Nodes      []FlowNode     `json:"nodes,omitzero"`
+	Flows      []SequenceFlow `json:"flows,omitzero"`
 }
 
 // SequenceFlow represents a connection between two nodes in the database.
 type SequenceFlow struct {
-	ID            string `json:"id"`
-	SourceRef     string `json:"source_ref"`
-	TargetRef     string `json:"target_ref"`
-	Condition     string `json:"condition,omitzero"`
-	Documentation string `json:"documentation,omitzero"`
+	ID            string     `json:"id"`
+	SourceRef     string     `json:"source_ref"`
+	TargetRef     string     `json:"target_ref"`
+	Condition     string     `json:"condition,omitzero"`
+	Documentation string     `json:"documentation,omitzero"`
+	Waypoints     []Waypoint `json:"waypoints,omitzero"`
+}
+
+// Waypoint is one point on a sequence flow's drawn route.
+type Waypoint struct {
+	X int `json:"x"`
+	Y int `json:"y"`
 }
 
 // ProcessDefinitionModel represents the GORM model for process definitions.

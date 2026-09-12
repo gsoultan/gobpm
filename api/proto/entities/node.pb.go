@@ -72,6 +72,13 @@ type Node struct {
 	// Diagram position, so a saved process reopens looking the way it was drawn.
 	X int32 `protobuf:"varint,30,opt,name=x,proto3" json:"x,omitempty"`
 	Y int32 `protobuf:"varint,31,opt,name=y,proto3" json:"y,omitempty"`
+	// Diagram size and expansion, carried from an imported BPMN file. The
+	// designer sizes its own nodes with CSS and leaves these zero; a diagram
+	// drawn in another tool keeps the shape its author gave it, and without a
+	// field here saving the process would quietly throw that away.
+	Width      int32 `protobuf:"varint,34,opt,name=width,proto3" json:"width,omitempty"`
+	Height     int32 `protobuf:"varint,35,opt,name=height,proto3" json:"height,omitempty"`
+	IsExpanded bool  `protobuf:"varint,36,opt,name=is_expanded,json=isExpanded,proto3" json:"is_expanded,omitempty"`
 	// A sub-process holds its own nodes and flows.
 	Nodes         []*Node `protobuf:"bytes,32,rep,name=nodes,proto3" json:"nodes,omitempty"`
 	Flows         []*Flow `protobuf:"bytes,33,rep,name=flows,proto3" json:"flows,omitempty"`
@@ -326,6 +333,27 @@ func (x *Node) GetY() int32 {
 	return 0
 }
 
+func (x *Node) GetWidth() int32 {
+	if x != nil {
+		return x.Width
+	}
+	return 0
+}
+
+func (x *Node) GetHeight() int32 {
+	if x != nil {
+		return x.Height
+	}
+	return 0
+}
+
+func (x *Node) GetIsExpanded() bool {
+	if x != nil {
+		return x.IsExpanded
+	}
+	return false
+}
+
 func (x *Node) GetNodes() []*Node {
 	if x != nil {
 		return x.Nodes
@@ -344,7 +372,7 @@ var File_entities_node_proto protoreflect.FileDescriptor
 
 const file_entities_node_proto_rawDesc = "" +
 	"\n" +
-	"\x13entities/node.proto\x12\aprocess\x1a\x1cgoogle/protobuf/struct.proto\x1a\x13entities/user.proto\x1a\x14entities/group.proto\x1a\x13entities/flow.proto\"\x83\t\n" +
+	"\x13entities/node.proto\x12\aprocess\x1a\x1cgoogle/protobuf/struct.proto\x1a\x13entities/user.proto\x1a\x14entities/group.proto\x1a\x13entities/flow.proto\"\xd2\t\n" +
 	"\x04Node\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
@@ -382,7 +410,11 @@ const file_entities_node_proto_rawDesc = "" +
 	"\x10element_variable\x18\x1c \x01(\tR\x0felementVariable\x121\n" +
 	"\x14completion_condition\x18\x1d \x01(\tR\x13completionCondition\x12\f\n" +
 	"\x01x\x18\x1e \x01(\x05R\x01x\x12\f\n" +
-	"\x01y\x18\x1f \x01(\x05R\x01y\x12#\n" +
+	"\x01y\x18\x1f \x01(\x05R\x01y\x12\x14\n" +
+	"\x05width\x18\" \x01(\x05R\x05width\x12\x16\n" +
+	"\x06height\x18# \x01(\x05R\x06height\x12\x1f\n" +
+	"\vis_expanded\x18$ \x01(\bR\n" +
+	"isExpanded\x12#\n" +
 	"\x05nodes\x18  \x03(\v2\r.process.NodeR\x05nodes\x12#\n" +
 	"\x05flows\x18! \x03(\v2\r.process.FlowR\x05flowsB\x8b\x01\n" +
 	"\vcom.processB\tNodeProtoP\x01Z5github.com/gsoultan/metis/api/proto/entities;entities\xa2\x02\x03PXX\xaa\x02\aProcess\xca\x02\aProcess\xe2\x02\x13Process\\GPBMetadata\xea\x02\aProcessb\x06proto3"

@@ -35,6 +35,10 @@ type Flow struct {
 	TargetRef     string                 `protobuf:"bytes,3,opt,name=target_ref,json=targetRef,proto3" json:"target_ref,omitempty"`
 	Condition     string                 `protobuf:"bytes,4,opt,name=condition,proto3" json:"condition,omitempty"`
 	Documentation string                 `protobuf:"bytes,5,opt,name=documentation,proto3" json:"documentation,omitempty"`
+	// The route the edge was drawn along. BPMN needs at least two points on an
+	// edge; an empty list means the flow came from somewhere with no diagram and
+	// the exporter has to draw a straight line instead.
+	Waypoints     []*Waypoint `protobuf:"bytes,6,rep,name=waypoints,proto3" json:"waypoints,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -104,11 +108,71 @@ func (x *Flow) GetDocumentation() string {
 	return ""
 }
 
+func (x *Flow) GetWaypoints() []*Waypoint {
+	if x != nil {
+		return x.Waypoints
+	}
+	return nil
+}
+
+// Waypoint is one point on a sequence flow's drawn route.
+type Waypoint struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	X             int32                  `protobuf:"varint,1,opt,name=x,proto3" json:"x,omitempty"`
+	Y             int32                  `protobuf:"varint,2,opt,name=y,proto3" json:"y,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Waypoint) Reset() {
+	*x = Waypoint{}
+	mi := &file_entities_flow_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Waypoint) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Waypoint) ProtoMessage() {}
+
+func (x *Waypoint) ProtoReflect() protoreflect.Message {
+	mi := &file_entities_flow_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Waypoint.ProtoReflect.Descriptor instead.
+func (*Waypoint) Descriptor() ([]byte, []int) {
+	return file_entities_flow_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *Waypoint) GetX() int32 {
+	if x != nil {
+		return x.X
+	}
+	return 0
+}
+
+func (x *Waypoint) GetY() int32 {
+	if x != nil {
+		return x.Y
+	}
+	return 0
+}
+
 var File_entities_flow_proto protoreflect.FileDescriptor
 
 const file_entities_flow_proto_rawDesc = "" +
 	"\n" +
-	"\x13entities/flow.proto\x12\aprocess\"\x98\x01\n" +
+	"\x13entities/flow.proto\x12\aprocess\"\xc9\x01\n" +
 	"\x04Flow\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
@@ -116,7 +180,11 @@ const file_entities_flow_proto_rawDesc = "" +
 	"\n" +
 	"target_ref\x18\x03 \x01(\tR\ttargetRef\x12\x1c\n" +
 	"\tcondition\x18\x04 \x01(\tR\tcondition\x12$\n" +
-	"\rdocumentation\x18\x05 \x01(\tR\rdocumentationB\x8b\x01\n" +
+	"\rdocumentation\x18\x05 \x01(\tR\rdocumentation\x12/\n" +
+	"\twaypoints\x18\x06 \x03(\v2\x11.process.WaypointR\twaypoints\"&\n" +
+	"\bWaypoint\x12\f\n" +
+	"\x01x\x18\x01 \x01(\x05R\x01x\x12\f\n" +
+	"\x01y\x18\x02 \x01(\x05R\x01yB\x8b\x01\n" +
 	"\vcom.processB\tFlowProtoP\x01Z5github.com/gsoultan/metis/api/proto/entities;entities\xa2\x02\x03PXX\xaa\x02\aProcess\xca\x02\aProcess\xe2\x02\x13Process\\GPBMetadata\xea\x02\aProcessb\x06proto3"
 
 var (
@@ -131,16 +199,18 @@ func file_entities_flow_proto_rawDescGZIP() []byte {
 	return file_entities_flow_proto_rawDescData
 }
 
-var file_entities_flow_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
+var file_entities_flow_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_entities_flow_proto_goTypes = []any{
-	(*Flow)(nil), // 0: process.Flow
+	(*Flow)(nil),     // 0: process.Flow
+	(*Waypoint)(nil), // 1: process.Waypoint
 }
 var file_entities_flow_proto_depIdxs = []int32{
-	0, // [0:0] is the sub-list for method output_type
-	0, // [0:0] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	1, // 0: process.Flow.waypoints:type_name -> process.Waypoint
+	1, // [1:1] is the sub-list for method output_type
+	1, // [1:1] is the sub-list for method input_type
+	1, // [1:1] is the sub-list for extension type_name
+	1, // [1:1] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_entities_flow_proto_init() }
@@ -154,7 +224,7 @@ func file_entities_flow_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_entities_flow_proto_rawDesc), len(file_entities_flow_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   1,
+			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

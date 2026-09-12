@@ -40,6 +40,11 @@ type EngineReader interface {
 	GetRootInstance(ctx context.Context, instanceID uuid.UUID) (entities.ProcessInstance, error)
 	GetExecutionPath(ctx context.Context, instanceID uuid.UUID) (entities.ExecutionPath, error)
 	GetAuditLogs(ctx context.Context, instanceID uuid.UUID) ([]entities.AuditEntry, error)
+
+	// ExportOCEL reads a project's audit trail as an OCEL 2.0 object-centric
+	// event log, so the history this engine already records can be mined by the
+	// tools that exist rather than only read in this application's timeline.
+	ExportOCEL(ctx context.Context, projectID uuid.UUID, opts entities.OCELOptions) (entities.OCELLog, error)
 }
 
 // EngineEventBus handles process events, signals, messages, escalation, and compensation.

@@ -47,6 +47,10 @@ export interface ApiNode {
   type: string;
   x: number;
   y: number;
+  /** Size and expansion from an imported diagram; absent for anything drawn here. */
+  width?: number;
+  height?: number;
+  is_expanded?: boolean;
   assignee?: string;
   candidate_users?: Array<{ username: string; full_name?: string; display_name?: string }>;
   candidate_groups?: Array<{ name: string }>;
@@ -80,6 +84,14 @@ export interface ApiFlow {
   target_ref: string;
   condition?: string;
   documentation?: string;
+  /** The route the edge was drawn along, when it came from an imported file. */
+  waypoints?: ApiWaypoint[];
+}
+
+/** One point on a sequence flow's drawn route. */
+export interface ApiWaypoint {
+  x: number;
+  y: number;
 }
 
 /** Full definition with nodes and flows as returned by getDefinition. */
@@ -112,6 +124,9 @@ export interface CreateNodePayload {
   type: string | undefined;
   x: number;
   y: number;
+  width: number;
+  height: number;
+  is_expanded: boolean;
   assignee: string;
   candidate_users: string[];
   candidate_groups: string[];
@@ -144,6 +159,7 @@ export interface CreateFlowPayload {
   target_ref: string;
   condition: string;
   documentation: string;
+  waypoints: ApiWaypoint[];
 }
 
 /** Request body for createDefinition. */

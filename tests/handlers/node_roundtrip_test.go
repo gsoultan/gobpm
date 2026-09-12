@@ -57,6 +57,9 @@ func TestFlow_SurvivesTheRoundTripToProtobuf(t *testing.T) {
 		TargetRef:     "ask-director",
 		Condition:     "approvalLevel = director",
 		Documentation: "Taken when the decision asked for a director.",
+		// The bends an author drew. Without a field to travel in, saving an
+		// imported diagram straightened out every connector in it.
+		Waypoints: []entities.Waypoint{{X: 10, Y: 20}, {X: 10, Y: 90}, {X: 200, Y: 90}},
 	}
 
 	if zero := zeroFields(reflect.ValueOf(*src)); len(zero) > 0 {
@@ -67,8 +70,13 @@ func TestFlow_SurvivesTheRoundTripToProtobuf(t *testing.T) {
 	if got == nil {
 		t.Fatal("round trip produced nil")
 	}
-	if *got != *src {
-		t.Errorf("flow changed in transit:\n  sent %#v\n  got  %#v", *src, *got)
+	// Compared field by field rather than with ==: a flow now carries its
+	// waypoints, and a struct with a slice in it is not comparable.
+	for _, name := range differingFields(reflect.ValueOf(*src), reflect.ValueOf(*got)) {
+		t.Errorf("field %s did not survive the round trip:\n  sent %#v\n  got  %#v",
+			name,
+			reflect.ValueOf(*src).FieldByName(name).Interface(),
+			reflect.ValueOf(*got).FieldByName(name).Interface())
 	}
 }
 
@@ -149,6 +157,9 @@ func fullyPopulatedNode() *entities.Node {
 		Outgoing:            []string{"f2"},
 		X:                   640,
 		Y:                   300,
+		Width:               100,
+		Height:              80,
+		IsExpanded:          true,
 		Condition:           "creditScore = low",
 		Properties:          map[string]any{"http_url": "https://example.invalid", "input_companyNumber": "registration_id"},
 		Nodes:               []*entities.Node{{ID: "inner", Name: "Inner", Type: "task"}},

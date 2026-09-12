@@ -50,6 +50,7 @@ import { DataFlowPanel } from './properties/DataFlowPanel';
 import { PropertySection } from './properties/PropertySection';
 import { computeDataFlow, sampleDataOf } from '../domain/dataFlow';
 import { GatewayConfig } from './properties/GatewayConfig';
+import { SubProcessConfig } from './properties/SubProcessConfig';
 import { ApiExample } from './properties/CommonProperties';
 import { vocabularyFor } from '../domain/bpmnVocabulary';
 import type { BPMNNodeData, BPMNEdgeData } from '../types/bpmn';
@@ -69,6 +70,8 @@ export interface NodeConfigProps {
   selectedNode?: Node;
   /** Provided to GatewayConfig for outgoing-flow condition editing. */
   edges?: Edge[];
+  /** Provided to SubProcessConfig, which has to count the steps drawn inside it. */
+  nodes?: Node<BPMNNodeData>[];
   /** Provided to CallActivityConfig for sub-process lookup. */
   nodeId?: string;
   /** Provided to CallActivityConfig for sub-process instance viewing. */
@@ -100,6 +103,10 @@ const CONFIG_REGISTRY: Record<string, React.ComponentType<NodeConfigProps>> = {
   exclusiveGateway: GatewayConfig,
   inclusiveGateway: GatewayConfig,
   eventBasedGateway: GatewayConfig,
+  // A sub-process had no panel at all, so the one decision that changes how it
+  // runs — whether its steps are driven by the diagram or by a person — could
+  // only be made by importing a file that already said so.
+  subProcess: SubProcessConfig,
 };
 
 interface PropertyPanelProps {
@@ -323,6 +330,7 @@ export function PropertyPanel({
                             selectedNode={selectedNode} 
                             updateNodeData={updateNodeData} 
                             edges={edges}
+                            nodes={nodes}
                             instanceId={instanceId}
                             onViewInstance={onViewInstance}
                           />
@@ -455,12 +463,15 @@ function NodeConfigSection({
   selectedNode, 
   updateNodeData, 
   edges,
+  nodes,
   instanceId,
   onViewInstance,
 }: { 
   selectedNode: Node<BPMNNodeData>, 
   updateNodeData: (id: string, data: Partial<BPMNNodeData>) => void, 
   edges: Edge[],
+  /** The whole canvas, so a sub-process can count the steps drawn inside it. */
+  nodes?: Node<BPMNNodeData>[],
   instanceId?: string | null,
   onViewInstance?: (id: string, defId: string) => void,
 }) {
@@ -473,6 +484,7 @@ function NodeConfigSection({
       onUpdate={(d) => updateNodeData(selectedNode.id, d)}
       selectedNode={selectedNode}
       edges={edges}
+      nodes={nodes}
       instanceId={instanceId}
       onViewInstance={onViewInstance}
       nodeId={selectedNode.id}

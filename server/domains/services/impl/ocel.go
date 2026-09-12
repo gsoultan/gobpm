@@ -1,0 +1,229 @@
+package impl
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/gsoultan/metis/server/domains/adapters"
+	"github.com/gsoultan/metis/server/domains/entities"
+)
+
+// ExportOCEL reads a project's audit trail as an OCEL 2.0 object-centric event
+// log.
+//
+// Scope comes from the repository, not from here: Audit().ListByProject and
+// Process().ListByProject both apply the tenant scope, so a caller asking for a
+// project in another organization gets an empty log rather than a refusal they
+// could use to probe for which project ids exist.
+func (e *Engine) ExportOCEL(ctx context.Context, projectID uuid.UUID, opts entities.OCELOptions) (entities.OCELLog, error) {
+	entries, err := e.repo.Audit().ListByProject(ctx, projectID)
+	if err != nil {
+		return entities.OCELLog{}, fmt.Errorf("read the audit trail for project %s: %w", projectID, err)
+	}
+
+	instances, err := e.repo.Process().ListByProject(ctx, projectID)
+	if err != nil {
+		return entities.OCELLog{}, fmt.Errorf("read the instances for project %s: %w", projectID, err)
+	}
+
+	known := make(map[uuid.UUID]entities.ProcessInstance, len(instances))
+	for _, m := range instances {
+		known[uuid.UUID(m.ID)] = adapters.InstanceEntityAdapter{Model: m}.ToEntity()
+	}
+
+	audit := make([]entities.AuditEntry, len(entries))
+	for i, m := range entries {
+		audit[i] = adapters.AuditEntityAdapter{Model: m}.ToEntity()
+	}
+
+	return buildOCELLog(audit, known, opts), nil
+}
+
+// buildOCELLog is the whole transformation, separated from the reads so it can
+// be tested against a fixed set of entries rather than a database.
+func buildOCELLog(
+	entries []entities.AuditEntry,
+	instances map[uuid.UUID]entities.ProcessInstance,
+	opts entities.OCELOptions,
+) entities.OCELLog {
+	log := entities.OCELLog{
+		Objects: []entities.OCELObject{},
+		Events:  []entities.OCELEvent{},
+	}
+
+	seenInstance := map[uuid.UUID]bool{}
+	seenDefinition := map[string]bool{}
+	eventTypes := map[string]bool{}
+
+	for _, entry := range entries {
+		if entry.Instance == nil || entry.Instance.ID == uuid.Nil {
+			// An entry with no instance describes the project rather than a
+			// case. OCEL has no notion of an event outside every object, and
+			// inventing one would put a phantom case in every discovered model.
+			continue
+		}
+		instanceID := entry.Instance.ID
+
+		if !seenInstance[instanceID] {
+			seenInstance[instanceID] = true
+			object := entities.OCELObject{
+				ID:         instanceID.String(),
+				Type:       entities.OCELObjectProcessInstance,
+				Attributes: []entities.OCELObjectAttr{},
+			}
+			if inst, ok := instances[instanceID]; ok {
+				object.Attributes = instanceAttributes(inst, entry.Timestamp)
+				if key := definitionKey(inst); key != "" {
+					if !seenDefinition[key] {
+						seenDefinition[key] = true
+						log.Objects = append(log.Objects, entities.OCELObject{
+							ID:         key,
+							Type:       entities.OCELObjectDefinition,
+							Attributes: []entities.OCELObjectAttr{},
+						})
+					}
+					// The instance-to-definition edge is what lets a miner
+					// separate one process's cases from another's in a project
+					// that runs several.
+					object.Relationships = []entities.OCELRelationship{
+						{ObjectID: key, Qualifier: entities.OCELQualifierDefines},
+					}
+				}
+			}
+			log.Objects = append(log.Objects, object)
+		}
+
+		activity := activityName(entry)
+		eventTypes[activity] = true
+
+		event := entities.OCELEvent{
+			ID:         entry.ID.String(),
+			Type:       activity,
+			Time:       entry.Timestamp,
+			Attributes: eventAttributes(entry, opts),
+			Relationships: []entities.OCELRelationship{
+				{ObjectID: instanceID.String(), Qualifier: entities.OCELQualifierInstance},
+			},
+		}
+		log.Events = append(log.Events, event)
+	}
+
+	log.ObjectTypes = []entities.OCELType{
+		{
+			Name: entities.OCELObjectProcessInstance,
+			Attributes: []entities.OCELAttributeDecl{
+				{Name: "status", Type: "string"},
+				{Name: "definition_key", Type: "string"},
+				{Name: "definition_version", Type: "string"},
+			},
+		},
+		{Name: entities.OCELObjectDefinition, Attributes: []entities.OCELAttributeDecl{}},
+	}
+	log.EventTypes = declaredEventTypes(eventTypes, opts)
+	return log
+}
+
+// activityName is what a mining tool will label the box in the discovered model.
+//
+// It is the node's name, because that is the only thing in an audit entry a
+// business reader recognises. The entry's Type — node_reached, task_completed —
+// is the lifecycle transition, and using it as the activity would discover a
+// model with four boxes in it no matter how large the process is. Entries with
+// no node at all are process-level, and there the type *is* the activity.
+func activityName(entry entities.AuditEntry) string {
+	if entry.Node != nil {
+		if entry.Node.Name != "" {
+			return entry.Node.Name
+		}
+		if entry.Node.ID != "" {
+			return entry.Node.ID
+		}
+	}
+	return entry.Type
+}
+
+func eventAttributes(entry entities.AuditEntry, opts entities.OCELOptions) []entities.OCELEventAttr {
+	attrs := []entities.OCELEventAttr{
+		// The audit type travels as an attribute rather than as the activity,
+		// so a miner that wants lifecycle-aware discovery can still find it.
+		{Name: "lifecycle", Value: entry.Type},
+	}
+	if entry.Node != nil && entry.Node.ID != "" {
+		attrs = append(attrs, entities.OCELEventAttr{Name: "node_id", Value: entry.Node.ID})
+	}
+	if entry.Message != "" {
+		attrs = append(attrs, entities.OCELEventAttr{Name: "message", Value: entry.Message})
+	}
+
+	if !opts.IncludeVariables {
+		return attrs
+	}
+	// Sorted, because a map's iteration order is random and an export that
+	// reorders its own columns between two runs is one nobody can diff.
+	keys := make([]string, 0, len(entry.Data))
+	for k := range entry.Data {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		attrs = append(attrs, entities.OCELEventAttr{
+			Name:  k,
+			Value: fmt.Sprintf("%v", entry.Data[k]),
+		})
+	}
+	return attrs
+}
+
+// declaredEventTypes lists every activity the log contains. OCEL requires the
+// declaration, and a reader validates events against it.
+func declaredEventTypes(names map[string]bool, opts entities.OCELOptions) []entities.OCELType {
+	declared := []entities.OCELAttributeDecl{
+		{Name: "lifecycle", Type: "string"},
+		{Name: "node_id", Type: "string"},
+		{Name: "message", Type: "string"},
+	}
+	if opts.IncludeVariables {
+		// Variable names are per-process and not knowable up front, so the
+		// declaration cannot enumerate them. Saying so is better than emitting
+		// a list that is wrong for every process but the one it was built from.
+		declared = append(declared, entities.OCELAttributeDecl{Name: "*", Type: "string"})
+	}
+
+	sorted := make([]string, 0, len(names))
+	for name := range names {
+		sorted = append(sorted, name)
+	}
+	sort.Strings(sorted)
+
+	out := make([]entities.OCELType, 0, len(sorted))
+	for _, name := range sorted {
+		out = append(out, entities.OCELType{Name: name, Attributes: declared})
+	}
+	return out
+}
+
+func instanceAttributes(inst entities.ProcessInstance, at time.Time) []entities.OCELObjectAttr {
+	attrs := []entities.OCELObjectAttr{
+		{Name: "status", Time: at, Value: string(inst.Status)},
+	}
+	if inst.Definition != nil {
+		attrs = append(attrs,
+			entities.OCELObjectAttr{Name: "definition_key", Time: at, Value: inst.Definition.Key},
+			entities.OCELObjectAttr{Name: "definition_version", Time: at, Value: fmt.Sprintf("%d", inst.Definition.Version)},
+		)
+	}
+	return attrs
+}
+
+// definitionKey identifies the definition an instance belongs to, version
+// included: two versions of a process are two different control flows, and
+// merging their cases discovers a model that is neither.
+func definitionKey(inst entities.ProcessInstance) string {
+	if inst.Definition == nil || inst.Definition.Key == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s:%d", inst.Definition.Key, inst.Definition.Version)
+}

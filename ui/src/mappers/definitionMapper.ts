@@ -12,6 +12,7 @@ import type { BPMNEdgeData, BPMNNodeData } from '../types/bpmn';
 import type {
   ApiFlow,
   ApiNode,
+  ApiWaypoint,
   CreateDefinitionPayload,
   CreateFlowPayload,
   CreateNodePayload,
@@ -61,6 +62,13 @@ export function mapLoadedNodes(rawNodes: ApiNode[] = []): Node<BPMNNodeData>[] {
       elementVariable: node.element_variable,
       completionCondition: node.completion_condition,
       isEventSubProcess: node.is_event_sub_process,
+      // Geometry from an imported BPMN file. The designer does not draw with
+      // it — its nodes are sized by CSS — but it has to come back out on save,
+      // or the first save of an imported diagram silently flattens it to this
+      // tool's defaults and the author's layout is gone.
+      width: node.width,
+      height: node.height,
+      isExpanded: node.is_expanded,
       // Properties extracted from the server property bag
       implementation: node.properties?.implementation as string | undefined,
       connector_instance_id: node.properties?.connector_instance_id as string | undefined,
@@ -77,6 +85,7 @@ export function mapLoadedNodes(rawNodes: ApiNode[] = []): Node<BPMNNodeData>[] {
       signalName: node.properties?.signal_name as string | undefined,
       messageName: node.properties?.message_name as string | undefined,
       correlationKey: node.properties?.correlation_key as string | undefined,
+      conditionExpression: node.properties?.condition_expression as string | undefined,
       escalationCode: node.properties?.escalation_code as string | undefined,
       activityRef: node.properties?.activity_ref as string | undefined,
       nonInterrupting: node.properties?.non_interrupting as boolean | undefined,
@@ -102,6 +111,7 @@ export function mapLoadedEdges(rawFlows: ApiFlow[] = []): Edge<BPMNEdgeData>[] {
     data: {
       documentation: flow.documentation,
       condition: flow.condition,
+      waypoints: flow.waypoints,
     },
   }));
 }
@@ -117,6 +127,9 @@ function mapNodeToPayload(node: Node<BPMNNodeData>): CreateNodePayload {
     type: node.type || 'userTask',
     x: Math.round(node.position.x),
     y: Math.round(node.position.y),
+    width: (d['width'] as number) || 0,
+    height: (d['height'] as number) || 0,
+    is_expanded: (d['isExpanded'] as boolean) || false,
     assignee: (d['assignee'] as string) || '',
     candidate_users: (d['candidateUsers'] as string[]) || [],
     candidate_groups: (d['candidateGroups'] as string[]) || [],
@@ -167,6 +180,9 @@ const CANVAS_ONLY_KEYS = new Set([
   'attachedToRef', 'parentId', 'cancelActivity', 'errorCode', 'multiInstanceType',
   'loopCardinality', 'collection', 'elementVariable', 'completionCondition',
   'isEventSubProcess', 'condition',
+  // Geometry: it has its own field on the payload, so it must not also be
+  // written into the property bag under a second name.
+  'width', 'height', 'isExpanded',
 ]);
 
 /** Editor field name → the name the server stores the setting under. */
@@ -184,6 +200,7 @@ const PROPERTY_ALIASES: Record<string, string> = {
   signalName: 'signal_name',
   messageName: 'message_name',
   correlationKey: 'correlation_key',
+  conditionExpression: 'condition_expression',
   escalationCode: 'escalation_code',
   activityRef: 'activity_ref',
   nonInterrupting: 'non_interrupting',
@@ -216,6 +233,10 @@ function mapEdgeToPayload(edge: Edge<BPMNEdgeData>): CreateFlowPayload {
     // warning anywhere. A label is a caption; it is not executable.
     condition: (edge.data?.condition as string) ?? '',
     documentation: (edge.data?.documentation as string) ?? '',
+    // An edge the designer drew has no waypoints of its own — React Flow routes
+    // it — so this is empty unless the flow came from an imported file, where
+    // dropping it would straighten out every bend its author put in.
+    waypoints: (edge.data?.waypoints as ApiWaypoint[]) ?? [],
   };
 }
 

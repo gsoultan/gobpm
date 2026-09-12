@@ -72,7 +72,7 @@ func (f *nodeHandlerFactory) GetHandler(nodeType entities.NodeType) (handlercont
 	case entities.EventBasedGateway:
 		internal = &EventBasedGatewayHandler{f.engine}
 	case entities.IntermediateCatchEvent, entities.TimerEvent:
-		internal = &IntermediateCatchEventHandler{f.jobService, f.subRepo}
+		internal = &IntermediateCatchEventHandler{f.jobService, f.subRepo, f.engine}
 	case entities.IntermediateThrowEvent:
 		internal = &IntermediateThrowEventHandler{f.engine}
 	case entities.SignalEvent:
