@@ -247,6 +247,30 @@
         none of them. Tenant scope comes from the repository, as it does for every
         other project-scoped read.
 
+- [x] 10. Connector delivery is proven, not assumed (2026-09-12)
+  - [x] **RabbitMQ publishes are confirmed and mandatory.** Pointing the connector
+        at a real broker for the first time found that the advertised
+        "Queue (Direct Publish)" configuration published to the default exchange
+        with an empty routing key and delivered nothing, while returning
+        `{"status": "published"}`. The unreachable fallback beside it only ran on
+        a publish error, which fire-and-forget publishes never produce.
+        `tests/connector/broker_test.go` failed on all three cases before the fix.
+  - [x] **The broker suite runs in CI.** `METIS_TEST_RABBITMQ_URL` plus a
+        `rabbitmq:3-alpine` service on the `go-security-reliability` job. The
+        existing "No suite skipped for want of a database" step fails the build on
+        any skip, so the gate cannot silently stop running.
+  - [x] **SMTP is tested against a server that speaks SMTP.**
+        `tests/connector/smtp_test.go` runs an in-process server and asserts the
+        envelope sender, recipient, subject header and body. Hermetic, so it needs
+        no gating and always runs.
+  - [ ] **Two publish paths in `messaging.go` still have no confirm.** The
+        external-task bridge (`messaging.go:150`) stalls a task until its lock
+        expires while logging "Forwarded external task to RabbitMQ"; the inbound
+        dead-letter publish (`messaging.go:233`) routes correctly — the DLQ is
+        declared durable at line 223 — but an inbound message is auto-acked
+        before it, so a broker-side rejection loses it. Neither is the connector's
+        "advertised configuration delivers nothing", which is why they were left.
+
 - [ ] 7. User-Friendly UX Roadmap
   - [x] Business Timeline audit log: `AuditWriter` contract + `narrativeFor` narrative generator + lifecycle hooks for all task events (Claim/Unclaim/Complete/Assign/Delegate/Create).
   - [x] Task Inbox UX overhaul: priority badges, overdue countdown, bulk actions.

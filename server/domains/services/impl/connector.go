@@ -896,31 +896,69 @@ func (e *RabbitMQExecutor) Execute(ctx context.Context, config map[string]any, p
 		return nil, fmt.Errorf("failed to marshal payload: %w", err)
 	}
 
-	err = ch.PublishWithContext(ctx,
+	// The connector's schema offers a "Queue (Direct Publish)" field, and
+	// filling in only a url and a queue is the obvious way to use it. That
+	// configuration used to publish to the default exchange with an *empty*
+	// routing key, which routes to nothing: the message was discarded, the
+	// service task reported success and the process carried on. The fallback
+	// written for this was unreachable, because it ran only when the publish
+	// returned an error and a fire-and-forget publish never does.
+	//
+	// The default exchange routes by queue name, so the queue *is* the routing
+	// key.
+	if routingKey == "" && exchange == "" {
+		routingKey = queue
+	}
+
+	// Publisher confirms, and mandatory delivery.
+	//
+	// An AMQP publish is fire-and-forget. Without confirms the broker accepts
+	// the bytes and says nothing, so a rejected message or a connection that
+	// drops mid-publish is indistinguishable from a delivered one. Without the
+	// mandatory flag a message the broker cannot route — no such exchange, or a
+	// routing key nothing is bound to — is discarded in silence.
+	//
+	// Either one reports a business message as sent when it is gone, in an
+	// engine where the token has already advanced and the audit trail already
+	// says it was sent. There is nothing to investigate because nothing looks
+	// wrong. Both are now failures, which is what lets the retry and the
+	// incident do their jobs.
+	if err := ch.Confirm(false); err != nil {
+		return nil, fmt.Errorf("could not put the channel into confirm mode: %w", err)
+	}
+	returned := ch.NotifyReturn(make(chan amqp.Return, 1))
+
+	confirmation, err := ch.PublishWithDeferredConfirmWithContext(ctx,
 		exchange,   // exchange
 		routingKey, // routing key
-		false,      // mandatory
+		true,       // mandatory: an unroutable message comes back rather than vanishing
 		false,      // immediate
 		amqp.Publishing{
 			ContentType: "application/json",
 			Body:        body,
 		})
-
-	if err != nil && queue != "" && exchange == "" {
-		// Try direct queue publish if exchange is empty
-		err = ch.PublishWithContext(ctx,
-			"",    // exchange
-			queue, // routing key (queue name)
-			false, // mandatory
-			false, // immediate
-			amqp.Publishing{
-				ContentType: "application/json",
-				Body:        body,
-			})
-	}
-
 	if err != nil {
 		return nil, fmt.Errorf("failed to publish message: %w", err)
+	}
+
+	acked, err := confirmation.WaitContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("waiting for the broker to confirm the message: %w", err)
+	}
+	if !acked {
+		return nil, fmt.Errorf("the broker refused the message published to exchange %q with routing key %q", exchange, routingKey)
+	}
+
+	// basic.return precedes basic.ack on the wire for an unroutable mandatory
+	// message, and the library dispatches frames in order from one goroutine
+	// into a buffered channel — so by the time the confirmation arrives, a
+	// return for this message is already here if there is going to be one.
+	select {
+	case ret := <-returned:
+		return nil, fmt.Errorf(
+			"the broker could not route the message to exchange %q with routing key %q and returned it (%d %s); nothing is bound to receive it",
+			exchange, routingKey, ret.ReplyCode, ret.ReplyText)
+	default:
 	}
 
 	return map[string]any{"status": "published"}, nil

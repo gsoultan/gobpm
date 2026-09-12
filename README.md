@@ -10,10 +10,10 @@ Metis BPM (formerly GoBPM) is a professional, production-ready BPMN orchestrator
   - **Events**: Start, End and Terminate; Timer, Message, Signal and **Conditional** catch events; Escalation and Compensation throws; boundary events, interrupting or not.
   - **Sub-processes**: ordinary, event-triggered, and **ad-hoc** — a group of steps a person runs in whatever order the work needs, until a completion condition says it is finished.
 - **BPMN XML interop**: import and export round-trip the **diagram**, not just the model — shape bounds, expanded sub-processes and connector routing — so a file from Camunda Modeler or bpmn.io keeps the layout its author drew, and a file exported from here opens in them. Execution-affecting attributes travel too: a gateway's default flow, a call activity's `calledElement`, multi-instance loop characteristics, and external-task topics written in the Camunda namespace.
-- **RabbitMQ Integration**: Production-ready messaging capabilities:
+- **RabbitMQ Integration**: Outbound publishes wait for a publisher confirm and are sent `mandatory`, so a message the broker cannot route is a failure rather than a silent success. Proven against a real broker in `tests/connector/broker_test.go`.
   - **Outbound Connectors**: Publish messages to RabbitMQ exchanges directly from Service Tasks.
   - **Inbound Message Correlation**: Automatically correlate RabbitMQ messages to BPMN Message Events.
-  - **External Task Bridge**: Seamlessly bridge External Tasks to RabbitMQ for distributed worker patterns.
+  - **External Task Bridge**: Bridges External Tasks to RabbitMQ for distributed worker patterns. Unlike the outbound connector this still publishes without a confirm, so a misrouted bridge publish stalls the task until its lock expires and it is retried, rather than failing outright.
 - **Connector Framework**: Plug-and-play architecture for third-party integrations (HTTP, Slack, Email, RabbitMQ).
 - **Visual Designer**: Drag-and-drop BPMN modeler powered by React Flow, featuring:
   - **Edit Mode**: Load and modify existing process definitions.

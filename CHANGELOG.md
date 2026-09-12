@@ -282,6 +282,35 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 
 ### Fixed
 
+- **The RabbitMQ connector reported messages as sent that the broker never
+  received.** Filling in a URL and a queue — the configuration the connector's
+  own schema advertises as "Queue (Direct Publish)" — published to the default
+  exchange with an *empty* routing key, which routes to nothing. The message was
+  discarded, the service task returned `{"status": "published"}`, the token
+  advanced, and the audit trail recorded a message that was sent. The fallback
+  written to catch this was unreachable: it ran only when the publish returned an
+  error, and an AMQP publish is fire-and-forget, so it never does.
+
+  The queue is now used as the routing key it always was on the default
+  exchange. Beyond that, publishes wait for a **publisher confirm** and are sent
+  **mandatory**, so a broker that rejects a message, a connection that drops
+  mid-publish, and a message nothing is bound to receive are all failures now
+  rather than silent successes — which is what lets the retry and the incident
+  do their jobs. This is a deliberate behaviour change: a publish that used to
+  "succeed" into the void now fails and says why.
+
+  Found by pointing the connector at a real broker for the first time. The suite
+  is `tests/connector/broker_test.go`, gated on `METIS_TEST_RABBITMQ_URL`, with
+  the service added to CI — the build fails on any skipped test, so the gate
+  cannot quietly stop running.
+
+- **The SMTP connector is tested against something that speaks SMTP.** Nothing
+  proved an email was ever handed over or what was in it, so the envelope and the
+  message could have been wrong in any way and the suite would have been green.
+  `tests/connector/smtp_test.go` runs an in-process server and asserts the
+  envelope sender, the recipient, the subject header and the body. It needs no
+  broker and no gating, so it always runs.
+
 - **A catch event with nothing to wait for hung the instance in silence.** The
   handler returned success while leaving the token where it was, so nothing in
   the system would ever move it: no incident, no log line, and the only symptom

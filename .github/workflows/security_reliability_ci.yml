@@ -99,6 +99,12 @@ jobs:
     env:
       METIS_TEST_POSTGRES_DSN: "host=127.0.0.1 port=5432 user=postgres password=gobpm dbname=gobpm sslmode=disable"
       STORM_DSN: "postgres://postgres:gobpm@127.0.0.1:5432/gobpm?sslmode=disable"
+      # The RabbitMQ connector's integration suite. It is gated on this URL and
+      # the "No suite skipped" step below fails on any skip, so removing the
+      # service breaks the build rather than quietly running nothing — which is
+      # how the connector shipped a claim of production-ready messaging with no
+      # test that a message was ever delivered.
+      METIS_TEST_RABBITMQ_URL: "amqp://guest:guest@127.0.0.1:5672/"
 
     services:
       postgres:
@@ -113,6 +119,19 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 24
+
+      rabbitmq:
+        image: rabbitmq:3-alpine
+        ports:
+          - 5672:5672
+        # rabbitmq-diagnostics, not a TCP probe: the port accepts connections
+        # well before the broker will accept a channel, and the first thing the
+        # suite does is open one.
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q check_running"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 18
 
     steps:
       - name: Checkout
