@@ -87,7 +87,8 @@ func TestListTasksByAssigneeReadsPagingFromTheQuery(t *testing.T) {
 		},
 	}, nil)
 
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/assignee/alice?page=2&page_size=20", nil)
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodGet,
+		"/api/v1/tasks/assignee/alice?page=2&page_size=20", nil)
 	mux.ServeHTTP(httptest.NewRecorder(), request)
 
 	if got.Assignee != "alice" {
