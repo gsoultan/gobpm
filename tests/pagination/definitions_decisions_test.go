@@ -51,7 +51,7 @@ func seedDecisions(t *testing.T, repo repositories.Repository, projectID uuid.UU
 }
 
 func TestDefinitionsPaged_LimitsTheWindowAndCountsTheWhole(t *testing.T) {
-	repo := repositories.NewRepository(testutils.SetupTestDB(t))
+	repo := repositories.NewRepository(testutils.SetupTestConn(t))
 	projectID := uuid.Must(uuid.NewV7())
 	seedDefinitions(t, repo, projectID, 137)
 
@@ -71,7 +71,7 @@ func TestDefinitionsPaged_LimitsTheWindowAndCountsTheWhole(t *testing.T) {
 }
 
 func TestDefinitionsPaged_PagesDoNotOverlap(t *testing.T) {
-	repo := repositories.NewRepository(testutils.SetupTestDB(t))
+	repo := repositories.NewRepository(testutils.SetupTestConn(t))
 	projectID := uuid.Must(uuid.NewV7())
 	seedDefinitions(t, repo, projectID, 30)
 
@@ -96,7 +96,7 @@ func TestDefinitionsPaged_PagesDoNotOverlap(t *testing.T) {
 }
 
 func TestDecisionsPaged_LimitsTheWindowAndCountsTheWhole(t *testing.T) {
-	repo := repositories.NewRepository(testutils.SetupTestDB(t))
+	repo := repositories.NewRepository(testutils.SetupTestConn(t))
 	projectID := uuid.Must(uuid.NewV7())
 	seedDecisions(t, repo, projectID, 137)
 
@@ -121,7 +121,7 @@ func TestDecisionsPaged_LimitsTheWindowAndCountsTheWhole(t *testing.T) {
 // that fault and failed every scoped request with
 // "SQL logic error: ambiguous column name: created_at".
 func TestDefinitionsPaged_WorksUnderTenantScoping(t *testing.T) {
-	repo := repositories.NewRepository(testutils.SetupTestDB(t))
+	repo := repositories.NewRepository(testutils.SetupTestConn(t))
 	ctx := t.Context()
 
 	orgID := uuid.Must(uuid.NewV7())
@@ -162,7 +162,7 @@ func TestDefinitionsPaged_WorksUnderTenantScoping(t *testing.T) {
 }
 
 func TestDefinitionsPaged_EmptyResultIsAnEmptyPageNotNil(t *testing.T) {
-	repo := repositories.NewRepository(testutils.SetupTestDB(t))
+	repo := repositories.NewRepository(testutils.SetupTestConn(t))
 
 	page, err := repo.Definition().ListByProjectPaged(t.Context(), uuid.Must(uuid.NewV7()), contracts.Pagination{Page: 1, PageSize: 10})
 	if err != nil {

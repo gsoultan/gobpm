@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gsoultan/metis/internal/pkg/config"
@@ -99,7 +100,7 @@ func TestConfig_SaveAndLoad(t *testing.T) {
 func TestConfig_DecryptConnectionString_Empty(t *testing.T) {
 	cfg := &config.Config{
 		Database: config.DatabaseConfig{
-			Driver:              config.DriverSQLite,
+			Driver:              config.DriverPostgres,
 			EncryptedConnection: "",
 		},
 		EncryptionKey: "some-key-1234567",
@@ -127,110 +128,117 @@ func TestLoad_NonExistentFile(t *testing.T) {
 	}
 }
 
-func TestNewConfig_AllDrivers(t *testing.T) {
-	drivers := []string{config.DriverSQLite, config.DriverPostgres, config.DriverMySQL, config.DriverSQLServer}
+func TestNewConfig_Postgres(t *testing.T) {
+	cfg, err := config.NewConfig(config.DriverPostgres, "test-connection", "encryption-key-16ch", "test-jwt-secret")
+	if err != nil {
+		t.Fatalf("NewConfig failed: %v", err)
+	}
+	if cfg.Database.Driver != config.DriverPostgres {
+		t.Fatalf("expected driver %q, got %q", config.DriverPostgres, cfg.Database.Driver)
+	}
+}
 
-	for _, driver := range drivers {
+// A config naming an engine this no longer supports still parses. It has to:
+// an installation upgrading into a PostgreSQL-only build has one, and it needs
+// to be told what to do rather than met with a parse error.
+func TestAConfigNamingARetiredDriverStillReads(t *testing.T) {
+	for _, driver := range []string{"sqlite", "mysql", "sqlserver"} {
 		t.Run(driver, func(t *testing.T) {
-			cfg, err := config.NewConfig(driver, "test-connection", "encryption-key-16ch", "test-jwt-secret")
+			cfg, err := config.NewConfig(driver, "old-connection", "encryption-key-16ch", "test-jwt-secret")
 			if err != nil {
-				t.Fatalf("NewConfig failed for driver %s: %v", driver, err)
+				t.Fatalf("a config naming %s should still be writable: %v", driver, err)
 			}
-			if cfg.Database.Driver != driver {
-				t.Fatalf("expected driver %q, got %q", driver, cfg.Database.Driver)
+			if config.SupportedDriver(cfg.Database.Driver) {
+				t.Fatalf("%s is reported as supported; it is not", driver)
 			}
 		})
+	}
+}
+
+func TestOnlyPostgresIsSupported(t *testing.T) {
+	if !config.SupportedDriver(config.DriverPostgres) {
+		t.Fatal("PostgreSQL is the engine this runs on and is reported as unsupported")
+	}
+	for _, driver := range []string{"", "sqlite", "mysql", "sqlserver", "oracle"} {
+		if config.SupportedDriver(driver) {
+			t.Fatalf("%q is reported as supported", driver)
+		}
 	}
 }
 
 func TestDefaultPort(t *testing.T) {
-	tests := []struct {
-		driver string
-		want   int
-	}{
-		{config.DriverPostgres, 5432},
-		{config.DriverMySQL, 3306},
-		{config.DriverSQLServer, 1433},
-		{config.DriverSQLite, 0},
-		{"unknown", 0},
+	if got := config.DefaultPort(config.DriverPostgres); got != 5432 {
+		t.Fatalf("DefaultPort(postgres) = %d, want 5432", got)
 	}
-	for _, tt := range tests {
-		t.Run(tt.driver, func(t *testing.T) {
-			got := config.DefaultPort(tt.driver)
-			if got != tt.want {
-				t.Fatalf("DefaultPort(%q) = %d, want %d", tt.driver, got, tt.want)
-			}
-		})
+	// Zero rather than 5432 for anything else: a wrong port is a connection
+	// error naming the host, which reads better than a silent default that
+	// connects to whatever happens to be listening there.
+	for _, driver := range []string{"", "mysql", "sqlserver", "unknown"} {
+		if got := config.DefaultPort(driver); got != 0 {
+			t.Fatalf("DefaultPort(%q) = %d, want 0", driver, got)
+		}
 	}
 }
 
 func TestBuildConnectionString(t *testing.T) {
-	tests := []struct {
-		name   string
-		driver string
-		fields config.DatabaseFields
-		want   string
-	}{
-		{
-			name:   "postgres without ssl",
-			driver: config.DriverPostgres,
-			fields: config.DatabaseFields{Host: "localhost", Port: 5432, Username: "user", Password: "pass", DBName: "mydb"},
-			want:   "host=localhost port=5432 user=user password=pass dbname=mydb sslmode=disable",
-		},
-		{
-			name:   "postgres with ssl",
-			driver: config.DriverPostgres,
-			fields: config.DatabaseFields{Host: "db.example.com", Port: 5432, Username: "user", Password: "pass", DBName: "mydb", SSLEnabled: true},
-			want:   "host=db.example.com port=5432 user=user password=pass dbname=mydb sslmode=require",
-		},
-		{
-			name:   "mysql without ssl",
-			driver: config.DriverMySQL,
-			fields: config.DatabaseFields{Host: "localhost", Port: 3306, Username: "root", Password: "secret", DBName: "gobpm"},
-			want:   "root:secret@tcp(localhost:3306)/gobpm?parseTime=true&tls=false",
-		},
-		{
-			name:   "mysql with ssl",
-			driver: config.DriverMySQL,
-			fields: config.DatabaseFields{Host: "db.example.com", Port: 3306, Username: "root", Password: "secret", DBName: "gobpm", SSLEnabled: true},
-			want:   "root:secret@tcp(db.example.com:3306)/gobpm?parseTime=true&tls=true",
-		},
-		{
-			name:   "sqlserver without ssl",
-			driver: config.DriverSQLServer,
-			fields: config.DatabaseFields{Host: "localhost", Port: 1433, Username: "sa", Password: "pass", DBName: "gobpm"},
-			want:   "sqlserver://sa:pass@localhost:1433?database=gobpm&encrypt=disable",
-		},
-		{
-			name:   "sqlserver with ssl",
-			driver: config.DriverSQLServer,
-			fields: config.DatabaseFields{Host: "localhost", Port: 1433, Username: "sa", Password: "pass", DBName: "gobpm", SSLEnabled: true},
-			want:   "sqlserver://sa:pass@localhost:1433?database=gobpm&encrypt=true",
-		},
-		{
-			name:   "sqlite with db name",
-			driver: config.DriverSQLite,
-			fields: config.DatabaseFields{DBName: "custom.db"},
-			want:   "custom.db",
-		},
-		{
-			// A fresh install. An existing gobpm.db from before the rename is
-			// still opened instead — see DefaultSQLitePath and its own tests,
-			// which run in a temp directory so this table stays about the
-			// connection string rather than about what is on disk.
-			name:   "sqlite default",
-			driver: config.DriverSQLite,
-			fields: config.DatabaseFields{},
-			want:   "metis.db",
-		},
+	fields := config.DatabaseFields{
+		Host: "db.internal", Port: 5432, Username: "metis", Password: "s3cr3t", DBName: "metis",
+	}
+	got := config.BuildConnectionString(config.DriverPostgres, fields)
+	want := "host=db.internal port=5432 user=metis password=s3cr3t dbname=metis sslmode=disable"
+	if got != want {
+		t.Fatalf("BuildConnectionString(postgres) = %q, want %q", got, want)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := config.BuildConnectionString(tt.driver, tt.fields)
-			if got != tt.want {
-				t.Fatalf("BuildConnectionString(%q) = %q, want %q", tt.driver, got, tt.want)
-			}
-		})
+	fields.SSLEnabled = true
+	if got := config.BuildConnectionString(config.DriverPostgres, fields); !strings.Contains(got, "sslmode=require") {
+		t.Fatalf("SSL was asked for and the connection string does not require it: %q", got)
+	}
+}
+
+// An engine this no longer supports builds nothing, rather than a best-effort
+// string. Opening on empty fails immediately and says so; a guess would connect
+// to something — a local socket, a default database — and the first sign of
+// trouble would be data in the wrong place.
+func TestARetiredDriverBuildsNoConnectionString(t *testing.T) {
+	for _, driver := range []string{"sqlite", "mysql", "sqlserver", ""} {
+		if got := config.BuildConnectionString(driver, config.DatabaseFields{DBName: "metis"}); got != "" {
+			t.Fatalf("BuildConnectionString(%q) = %q, want the empty string", driver, got)
+		}
+	}
+}
+
+func TestLoad_RefusesAnUnknownKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("databse:\n  driver: postgres\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := config.Load(path); err == nil {
+		t.Fatal("a misspelled key was accepted as a valid config")
+	}
+}
+
+func TestLoad_RefusesMalformedYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("database:\n  driver: [unclosed\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := config.Load(path); err == nil {
+		t.Fatal("malformed YAML was accepted")
+	}
+}
+
+func TestLoad_AcceptsAnEmptyFile(t *testing.T) {
+	// An empty file is not a typo; it is a config with nothing set, and the
+	// caller decides what that means.
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := config.Load(path); err != nil {
+		t.Fatalf("an empty config was refused: %v", err)
 	}
 }

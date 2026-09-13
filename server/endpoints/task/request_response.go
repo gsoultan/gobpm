@@ -23,6 +23,11 @@ type ListTasksRequest struct {
 	PageSize int `json:"page_size,omitzero"`
 
 	ProjectID string `json:"project_id,omitzero"`
+
+	// InstanceID narrows the listing to one process instance. It takes
+	// precedence over ProjectID, which it already implies — an instance belongs
+	// to exactly one project.
+	InstanceID string `json:"instance_id,omitzero"`
 }
 
 type ListTasksResponse struct {

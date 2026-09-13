@@ -1,0 +1,91 @@
+/**
+ * The English catalogue: the source of truth.
+ *
+ * Keys are `area.thing`, flat and sorted, so a translator can read the file top
+ * to bottom and a reviewer can see what changed in a diff. The English text
+ * here is the wording the product actually uses — when it changes, this is the
+ * file that changes, and every other catalogue is then visibly behind.
+ *
+ * Only strings that have been migrated are here. The rest of the interface is
+ * still hardcoded English; see src/i18n/README.md for the convention and what
+ * remains.
+ */
+import type { Catalogue } from '../translate';
+
+const en: Catalogue = {
+  // Shell and navigation
+  'nav.dashboard': 'Dashboard',
+  'nav.inbox': 'My Inbox',
+  'nav.allTasks': 'All Tasks',
+  'nav.processes': 'Processes',
+  'nav.decisions': 'Decisions',
+  'nav.connectors': 'Connectors',
+  'nav.instances': 'Instances',
+  'nav.projects': 'Projects',
+  'nav.organizations': 'Organizations',
+  'nav.groups': 'Groups',
+  'nav.people': 'People',
+  'nav.platformAccess': 'Platform access',
+  'nav.sectionWork': 'Work',
+  'nav.sectionBuild': 'Build',
+  'nav.sectionOperate': 'Operate',
+  'nav.sectionAdminister': 'Administer',
+  'nav.collapse': 'Collapse',
+  'nav.mainLabel': 'Main navigation',
+
+  // Signing in
+  'login.welcome': 'Welcome back',
+  'login.subtitle': 'Sign in to continue to your workspace',
+  'login.username': 'Username',
+  'login.password': 'Password',
+  'login.submit': 'Sign in',
+  'login.failedTitle': 'Could not sign in',
+  'login.failedHelp': 'Check your username and password, or ask an administrator to reset it.',
+
+  // The inbox
+  'inbox.title': 'Task Inbox',
+  'inbox.subtitle': 'Manage and complete tasks for {name}.',
+  'inbox.assignedToMe': 'Assigned to Me',
+  'inbox.availableToClaim': 'Available to Claim',
+  'inbox.search': 'Search tasks…',
+  'inbox.columnTask': 'Task Info',
+  'inbox.columnAssignment': 'Assignment',
+  'inbox.columnAbout': 'What it is about',
+  'inbox.columnTimeline': 'Timeline',
+  'inbox.columnStatus': 'Status',
+  'inbox.columnActions': 'Actions',
+  'inbox.claim': 'Claim Task',
+  'inbox.complete': 'Complete',
+  'inbox.noDueDate': 'No due date',
+  'inbox.reference': 'Reference {code}',
+  'inbox.allCaughtUp': "You're all caught up",
+  'inbox.nothingWaiting':
+    '{count, plural, =0 {Nothing needs your attention} one {# task waiting} other {# tasks waiting}}',
+
+  // Offline and updates
+  'offline.title': 'You are offline',
+  'offline.body':
+    'You can still read what has already loaded, and complete the tasks in your inbox. They will be sent when you are back online.',
+  'offline.savedTitle': 'Saved on this device',
+  'offline.queued':
+    '{count, plural, one {# change waiting to be sent} other {# changes waiting to be sent}}',
+  'offline.sending': 'Sending them now. They are kept here until the server confirms each one.',
+  'offline.keptHere': 'Kept on this device until you are back online.',
+  'offline.tryAgain': 'Try again now',
+  'update.title': 'A new version is ready',
+  'update.body':
+    'Reload when you are at a good stopping point. Anything you are part way through typing is not saved yet.',
+  'update.reload': 'Reload now',
+  'update.later': 'Later',
+
+  // Words used all over
+  'common.cancel': 'Cancel',
+  'common.save': 'Save',
+  'common.delete': 'Delete',
+  'common.close': 'Close',
+  'common.retry': 'Try again',
+  'common.loading': 'Loading…',
+  'common.language': 'Language',
+};
+
+export default en;

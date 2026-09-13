@@ -5,13 +5,15 @@ Metis BPM (formerly GoBPM) is a professional, production-ready BPMN orchestrator
 ## 🚀 Key Features
 
 - **BPMN 2.0 Engine**: Supports essential BPMN elements including:
-  - **Tasks**: User Tasks, Service Tasks (HTTP/Connectors), Script Tasks (JavaScript), and Call Activities (sub-processes).
-  - **Gateways**: Exclusive and Parallel Gateways.
-  - **Events**: Start, End, and Intermediate Timer/Message Catch Events.
-- **RabbitMQ Integration**: Production-ready messaging capabilities:
+  - **Tasks**: User Tasks, Service Tasks (HTTP/Connectors), Script Tasks (JavaScript), Business Rule Tasks (DMN), Manual Tasks, and Call Activities.
+  - **Gateways**: Exclusive, Parallel, Inclusive and Event-Based Gateways.
+  - **Events**: Start, End and Terminate; Timer, Message, Signal and **Conditional** catch events; Escalation and Compensation throws; boundary events, interrupting or not.
+  - **Sub-processes**: ordinary, event-triggered, and **ad-hoc** — a group of steps a person runs in whatever order the work needs, until a completion condition says it is finished.
+- **BPMN XML interop**: import and export round-trip the **diagram**, not just the model — shape bounds, expanded sub-processes and connector routing — so a file from Camunda Modeler or bpmn.io keeps the layout its author drew, and a file exported from here opens in them. Execution-affecting attributes travel too: a gateway's default flow, a call activity's `calledElement`, multi-instance loop characteristics, and external-task topics written in the Camunda namespace.
+- **RabbitMQ Integration**: Outbound publishes wait for a publisher confirm and are sent `mandatory`, so a message the broker cannot route is a failure rather than a silent success. Proven against a real broker in `tests/connector/broker_test.go`.
   - **Outbound Connectors**: Publish messages to RabbitMQ exchanges directly from Service Tasks.
   - **Inbound Message Correlation**: Automatically correlate RabbitMQ messages to BPMN Message Events.
-  - **External Task Bridge**: Seamlessly bridge External Tasks to RabbitMQ for distributed worker patterns.
+  - **External Task Bridge**: Bridges External Tasks to RabbitMQ for distributed worker patterns. Unlike the outbound connector this still publishes without a confirm, so a misrouted bridge publish stalls the task until its lock expires and it is retried, rather than failing outright.
 - **Connector Framework**: Plug-and-play architecture for third-party integrations (HTTP, Slack, Email, RabbitMQ).
 - **Visual Designer**: Drag-and-drop BPMN modeler powered by React Flow, featuring:
   - **Edit Mode**: Load and modify existing process definitions.
@@ -25,10 +27,11 @@ Metis BPM (formerly GoBPM) is a professional, production-ready BPMN orchestrator
   - Legacy `js:` gateway conditions are **refused by default** — the JavaScript runtime cannot be memory-bounded. Installations still migrating can set `METIS_FEATURE_JAVASCRIPT_CONDITIONS=true`; `GET /api/v1/definitions/javascript-conditions` lists every stored condition that still needs rewriting.
 - **Scripting Engine**: Integrated **Goja** (JavaScript engine) for **Script Tasks** — complex data transformations within workflows, under a wall-clock budget and interrupt.
 - **Task Inbox**: A dedicated view for users to manage, claim, and complete their assigned tasks.
+- **Process mining**: a project's audit trail exports as an **OCEL 2.0** object-centric event log (`GET /api/v1/projects/{id}/ocel`), readable by ProM, pm4py and the commercial mining tools. Process variables are excluded unless explicitly asked for — a control-flow model does not need them.
 - **Enterprise Persistence**:
   - **Audit Logging**: Comprehensive, persistent audit trail for every state change and node transition.
   - **Security**: **AES-256-GCM encryption** for process and task variables at rest. Requires `ENCRYPTION_KEY`; the server refuses to start without it once configured.
-  - **Dual DB Support**: Supports **SQLite** for development and **PostgreSQL** for production.
+  - **PostgreSQL**: one engine, so a constraint has one spelling and every test runs against what production runs.
 - **Topology**: job claiming, migrations, correlation, idempotency, live UI updates and rate limits are all safe across replicas. What remains per-process is circuit breakers, which open on consecutive failures by design — so a failing partner sees up to the threshold per replica before all back off, rather than in total. See [`docs/recovery.md` §2.1](docs/recovery.md) before raising the replica count.
 
 ## 🏗️ Architecture & Design Patterns
@@ -94,6 +97,7 @@ One command runs the backend and the UI together:
 ./scripts/dev.sh backend    # backend only
 ./scripts/dev.sh ui         # UI only
 ./scripts/dev.sh --reset    # wipe the local database and re-run setup
+./scripts/dev.sh --sample   # set up and fill it with worked examples
 UI_PORT=3000 API_PORT=9000 GRPC_PORT=9001 ./scripts/dev.sh   # different ports
 ```
 
@@ -115,7 +119,7 @@ Release notes are in [`CHANGELOG.md`](CHANGELOG.md); upgrading from GoBPM is [`d
 | `ENCRYPTION_KEY` | **Required.** Encrypts process and task variables at rest. The server refuses to start without it once configured, and refuses a weak one — see below. Rotating it makes existing variables unreadable. |
 | `JWT_SECRET` | **Required** once configured. Rotating it invalidates every session. A weak one is forgeable into an administrator's token. |
 | `METIS_ALLOW_WEAK_SECRETS` | Start anyway with a secret that would be refused. For an existing installation that cannot rotate `ENCRYPTION_KEY` without losing data; warns on every boot. |
-| `DATABASE_URL` | PostgreSQL DSN. Defaults to a local SQLite file. |
+| `DATABASE_URL` | PostgreSQL DSN. Required unless `config.yaml` names a database; there is no local-file fallback, because one that appears silently is one somebody starts using and then loses. |
 | `METIS_HTTP_ADDRESS` | HTTP listen address (default `:8080`). |
 | `METIS_GRPC_ADDRESS` | gRPC listen address (default `:8081`). |
 | `METIS_CORS_ORIGINS` | Comma-separated allowed origins, or `*`. Unset means no CORS, which is correct when the Go server serves the UI. |
@@ -128,6 +132,19 @@ Release notes are in [`CHANGELOG.md`](CHANGELOG.md); upgrading from GoBPM is [`d
 | `METIS_ALLOW_IMPLICIT_DEFAULT_FLOW` | Restores the legacy behaviour where a gateway with no matching condition took its first outgoing flow. Off by default — that silently routed processes down arbitrary branches. |
 | `METIS_TRUSTED_PROXIES` | Which peers may set `X-Forwarded-For`, as comma-separated CIDRs. Defaults to loopback and private space, which is where a load balancer or sidecar connects from. Set it to `none` when the server is exposed directly. **Requests from anywhere else have the header ignored** — it is a client-set header, and believing it unconditionally let one address take 30 requests through a limit of 3 by varying it. |
 | `METIS_PPROF_ENABLED` | Expose pprof on `127.0.0.1:6060`. |
+| `METIS_DB_MAX_OPEN_CONNS` | Connection pool ceiling (default `25`). Previously unset, which means *unlimited* — a burst could open more connections than PostgreSQL's default `max_connections` of 100 and fail every caller at once. |
+| `METIS_DB_MAX_IDLE_CONNS` | Idle connections kept open (defaults to the open ceiling). The `database/sql` default of 2 closes the rest as soon as a burst subsides and pays a fresh handshake on the next one. |
+| `METIS_DB_CONN_MAX_LIFETIME` | How long a connection may live (default `30m`). Bounded so a database failover or rolling restart is picked up without restarting Metis. |
+| `METIS_DB_CONN_MAX_IDLE_TIME` | How long an unused connection is kept (default `5m`). |
+| `METIS_DEFINITION_CACHE_SIZE` | Decoded process definitions held in memory (default `256`). A definition is immutable once deployed but is read on every job, message and timer; the cache is bounded, evicts least-recently-used, and is keyed by tenant so a cached copy can never cross an organization boundary. |
+| `METIS_JOB_WORKERS` | Jobs run at once (default `10`). Was a compile-time 5, which with a fixed 2-second poll capped a replica at about 2.5 jobs a second whatever the hardware. Keep it at or below the database pool: above that, workers queue on connections instead of working. |
+| `METIS_JOB_POLL_INTERVAL` | How long an idle worker waits before looking again (default `2s`). It bounds how late the *first* job of a quiet period starts; once work exists the worker keeps claiming without waiting. |
+| `METIS_JOB_LEASE` | How long a claim is held before another worker may take the job (default `5m`). Values under 2 minutes are refused: an outbound call may run for 30 seconds, and a lease shorter than that permits a second worker to run a job still in flight, which is a duplicate service call. |
+| `METIS_AUTH_CACHE_TTL` | How long a resolved caller is reused (default `5s`, `0s` disables). Validating a token read the account twice with associations preloaded — about six queries before a request reached its handler. Deliberately seconds: the cached value carries the credential cutoff that invalidates tokens, so a stale entry extends a compromised session. Password, role and membership changes drop the entry immediately. |
+| `METIS_AUTH_CACHE_SIZE` | Accounts held (default `10000`, evicting least-recently-used). |
+| `METIS_REFUSE_SCHEMA_DRIFT` | Refuse to start when a model change has no migration (default off, a warning). The drift count is published as `metis_schema_drift_items` and alerted on either way — features behind a missing table return 500 while `/readyz` stays green, so this is not otherwise visible. Useful in staging to fail the deploy rather than discover it in production. |
+| `METIS_SHUTDOWN_DRAIN` | How long a stopping process waits for jobs it has already claimed (default `20s`). Shutdown used to abandon them: the final status write rode the cancelled context and failed, so the row kept its lock until the five-minute lease expired — and the shipped manifest uses a Recreate strategy, so that was every deploy. Keep it inside your termination grace period. |
+| `METIS_HTTP_MAX_RESPONSE_BYTES` | Ceiling on a single outbound reply a service task or connector reads into memory (default `8388608`, 8 MiB). Exceeding it is refused rather than truncated: a process must not act on half a document it believes is whole. Without a bound, a partner streaming an unbounded body exhausts the pod's memory. |
 
 ### Production build
 
@@ -197,13 +214,30 @@ To start it already carrying the examples from `docs/data-flow.md`:
 ```
 
 That runs the setup wizard for you, imports an expense approval and a new
-supplier check with the decision tables they consult, and starts four
-approvals — so the process list, the decision list, the instance list and the
-task inbox all have something in them. Sign in as `admin` / `admin`.
+supplier check with the decision tables they consult, creates the people and
+groups those approvals are offered to, and starts five instances — so the
+process list, the decision list, the instance list, the task inbox and the
+incident inbox all have something in them.
+
+Sign in as `admin` / `admin`, which belongs to every group and so sees
+everything. The others use the password `sample-password`:
+
+| Account | Sees |
+| :-- | :-- |
+| `manager` | Approvals under GBP 1,000 |
+| `director` | Approvals above it |
+| `reviewer` | The supplier compliance review, once the incident below is resolved |
 
 The amount decides who approves: under 100 needs nobody, under 1000 a manager,
 anything more a director. `docs/data-flow.md` follows one through, value by
 value.
+
+One supplier check **fails on purpose** — its first step calls a web address
+that does not exist. It retries with backoff first, so give it a couple of
+minutes; the incident appears once the retries are spent. Then open Instances,
+pick the failed one and choose "Show what failed" to read the cause and retry
+it. That is the operator's half of the product, and showing it needs something
+broken.
 
 To seed an installation that is already set up, give it the password you chose:
 
@@ -251,12 +285,14 @@ instances, correlate messages, work human tasks from your own UI, and serve
 process steps with external workers — over plain HTTP or the Go SDK:
 
 ```bash
-go get github.com/gsoultan/metis/sdk
+go get github.com/gsoultan/metis-sdk
 ```
 
-The SDK has no dependencies outside the Go standard library. Start with
-[`docs/integration.md`](docs/integration.md); `sdk/examples/quickstart` runs
-the whole journey against a live server.
+The SDK has no dependencies outside the Go standard library and lives in its
+own repository, [gsoultan/metis-sdk](https://github.com/gsoultan/metis-sdk),
+so it versions independently of the server. Start with
+[`docs/integration.md`](docs/integration.md); the SDK's `examples/quickstart`
+runs the whole journey against a live server.
 
 ## 🧪 Testing
 

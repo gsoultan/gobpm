@@ -1,9 +1,9 @@
 # Integrating with Metis
 
 Everything below is the real wire contract: each call is exercised end to end
-by `sdk/examples/quickstart`, which runs the whole journey against a live
-server. If this document drifts from the API, that program is the test that
-fails.
+by the Go SDK's `examples/quickstart`, which runs the whole journey against a
+live server. If this document drifts from the API, that program is the test
+that fails.
 
 There are four ways an application integrates with the engine, and they
 compose:
@@ -33,12 +33,14 @@ caller's actual memberships — it is a selection, never an assertion.
 ## The Go SDK
 
 ```bash
-go get github.com/gsoultan/metis/sdk
+go get github.com/gsoultan/metis-sdk
 ```
 
-The SDK is a separate module with **no dependencies outside the standard
-library** — importing it does not pull the engine's dependency graph into
-your build.
+The SDK lives in its own repository,
+[gsoultan/metis-sdk](https://github.com/gsoultan/metis-sdk), and has **no
+dependencies outside the standard library** — importing it does not pull the
+engine's dependency graph into your build. It versions independently of the
+server; see its README for the full client reference.
 
 ```go
 client := metis.NewClient("https://bpm.example.com")
@@ -91,9 +93,17 @@ unambiguous.
 
 ```go
 tasks, page, _ := client.ListTasks(ctx, metis.ListTasksOptions{PageSize: 50})
-err := client.ClaimTask(ctx, task.ID, "alice")        // so nobody works it twice
-err = client.CompleteTask(ctx, task.ID, "alice", metis.Variables{"approved": true})
+err := client.ClaimTask(ctx, task.ID)                 // so nobody works it twice
+err = client.CompleteTask(ctx, task.ID, metis.Variables{"approved": true})
+err = client.UnclaimTask(ctx, task.ID)                // or give it back
 ```
+
+**Who acts is the token.** Claiming and completing take no user argument: the
+server reads the acting user from the `Authorization` header and ignores any
+override, so an application acting for many people needs a client per person
+rather than one client passing user IDs around. To hand a task to somebody
+specific there is `AssignTask`, allowed for an administrator or for whoever
+currently holds the task.
 
 Completing writes the variables back into the process and the instance moves
 on. The instance's story is readable as plain language:
@@ -120,7 +130,12 @@ server.
 worker := metis.NewWorker(client, "reverse-charge", "billing-service-1",
     metis.WorkerOptions{},          // sensible defaults; see WorkerOptions
     func(ctx context.Context, task *metis.ExternalTask) (metis.Variables, error) {
-        amount := task.Variables["amount"]
+        // Typed accessors, because JSON has one number type: every number
+        // the engine sends is a float64, so a .(int) assertion would panic.
+        amount, ok := task.Variables.Float64("amount")
+        if !ok {
+            return nil, fmt.Errorf("task %s carries no amount", task.ID)
+        }
         // … call your payment provider …
         return metis.Variables{"reversed": true}, nil
     })
@@ -462,16 +477,28 @@ calls the right endpoint with the right shape.
 ## Errors
 
 Failures are JSON with an HTTP status: `{"error": "…"}`. The SDK surfaces
-them as `*metis.APIError` with `IsNotFound` / `IsUnauthorized` helpers. Under
-tenant scoping, another organization's resource answers **404, not 403** —
-"not yours" and "does not exist" are deliberately indistinguishable.
+them as `*metis.APIError`, with four predicates that say what a status means
+here rather than leaving you to compare codes:
+
+```go
+switch {
+case metis.IsNotFound(err):     // gone — or, under tenant scoping, never yours
+case metis.IsUnauthorized(err): // 401 or 403: expired, missing, or not allowed
+case metis.IsInvalid(err):      // 400: the request was wrong; retrying will not help
+case metis.IsServerError(err):  // 5xx: the engine faltered; worth retrying
+}
+```
+
+Under tenant scoping, another organization's resource answers **404, not 403** —
+"not yours" and "does not exist" are deliberately indistinguishable, because a
+403 would confirm the thing exists. The engine does not answer 409.
 
 ## Run the whole journey
 
 ```bash
 METIS_URL=http://localhost:8080 METIS_USERNAME=admin \
 METIS_PASSWORD=… METIS_PROJECT="Default Project" \
-  go run github.com/gsoultan/metis/sdk/examples/quickstart
+  go run github.com/gsoultan/metis-sdk/examples/quickstart
 ```
 
 It deploys a definition, starts an instance, serves its external task with a

@@ -3,6 +3,8 @@ package feel
 import (
 	"fmt"
 	"sync"
+
+	"github.com/gsoultan/metis/internal/pkg/lru"
 )
 
 // Evaluate parses and evaluates an expression against variables.
@@ -47,10 +49,13 @@ var (
 // strings are parsed repeatedly. Parsing is pure and evaluation never mutates
 // the tree, so a parsed AST is safe to share across goroutines.
 type astCache struct {
-	entries sync.Map // string -> cacheEntry
+	once    sync.Once
+	entries *lru.Cache[string, cacheEntry]
+}
 
-	mu   sync.Mutex
-	size int
+func (c *astCache) cache() *lru.Cache[string, cacheEntry] {
+	c.once.Do(func() { c.entries = lru.New[string, cacheEntry](maxCachedExpressions) })
+	return c.entries
 }
 
 type cacheEntry struct {
@@ -63,17 +68,18 @@ type cacheEntry struct {
 // Expressions come from deployed definitions, so the set is normally small and
 // stable — but "normally" is not a guarantee when the input is untrusted, and
 // an unbounded map keyed by remote input is how a service becomes a memory
-// leak. Past the bound parsing still works; it just stops being remembered.
+// leak.
+//
+// The bound used to be enforced by refusing to grow: past 4096 entries nothing
+// new was ever cached again, so one tenant deploying that many distinct
+// conditions turned parsing back on for the whole installation, permanently and
+// silently. It evicts the least recently used entry instead.
 const maxCachedExpressions = 4096
 
 func (c *astCache) parse(text string, parse func(string) (Node, error)) (Node, error) {
-	if cached, ok := c.entries.Load(text); ok {
-		// Comma-ok rather than a bare assertion: this map is package-private
-		// and only ever holds cacheEntry, but a panic on the engine's hot path
-		// is not the way to discover that changed.
-		if entry, isEntry := cached.(cacheEntry); isEntry {
-			return entry.node, entry.err
-		}
+	cache := c.cache()
+	if entry, ok := cache.Get(text); ok {
+		return entry.node, entry.err
 	}
 
 	node, err := parse(text)
@@ -81,13 +87,7 @@ func (c *astCache) parse(text string, parse func(string) (Node, error)) (Node, e
 	// Failures are cached too: a broken expression in a deployed definition is
 	// re-evaluated on every instance, and re-parsing it each time to reach the
 	// same error is pure waste.
-	c.mu.Lock()
-	if c.size < maxCachedExpressions {
-		if _, loaded := c.entries.LoadOrStore(text, cacheEntry{node: node, err: err}); !loaded {
-			c.size++
-		}
-	}
-	c.mu.Unlock()
+	cache.Put(text, cacheEntry{node: node, err: err})
 
 	return node, err
 }

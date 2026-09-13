@@ -8,13 +8,10 @@ import {
   Box, 
   Title, 
   Button, 
-  Divider, 
   Badge, 
   rem, 
   Progress,
-  Modal,
 } from '@mantine/core';
-import { useDisclosure } from '@mantine/hooks';
 import type { LucideIcon } from 'lucide-react';
 import { 
   GitBranch, 
@@ -22,7 +19,6 @@ import {
   Activity, 
   CheckCircle, 
   AlertCircle,
-  LayoutGrid,
 } from 'lucide-react';
 import { 
   useDefinitions, 
@@ -33,12 +29,9 @@ import {
 import { useAppStore } from '../store/useAppStore';
 import { PageHeader } from '../components/PageHeader';
 import { BusinessTimeline } from '../components/BusinessTimeline';
-import { BPMNGraph } from '../components/BPMNGraph';
-import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { ComingSoonButton } from '../components/state/ComingSoon';
 import { StatsLoadingState, ErrorState } from '../components/state';
-import type { ProcessDefinition } from '../gen/entities/definition_pb';
 
 /**
  * A single headline number.
@@ -108,14 +101,12 @@ function StatCard({
 }
 
 export function Dashboard() {
-  const { currentProjectId, setActiveTab, currentOrganizationId } = useAppStore();
+  const { currentProjectId, currentOrganizationId } = useAppStore();
   const { data: statsData, isLoading: statsLoading, error: statsError, refetch: refetchStats } = useProcessStatistics();
   const { data: defs } = useDefinitions();
   const { data: projectsData } = useProjects(currentOrganizationId);
   const { data: instancesData } = useInstances();
   
-  const [heatmapOpened, { open: openHeatmap, close: closeHeatmap }] = useDisclosure(false);
-  const [selectedHeatmapDef, setSelectedHeatmapDef] = useState<ProcessDefinition | null>(null);
 
   // Falling back to zeros made an unloaded dashboard indistinguishable from a
   // real, idle one — "we don't know yet" rendered as "we know, and it's none".
@@ -136,18 +127,12 @@ export function Dashboard() {
   const failedInstances = stats?.failedInstances ?? 0;
   const totalTasks = stats?.totalTasks ?? 0;
   const pendingTasks = stats?.pendingTasks ?? 0;
-  const completedInstances = stats?.completedInstances ?? 0;
-  const nodeFrequencies = (stats as unknown as { nodeFrequencies?: Record<string, number> })?.nodeFrequencies ?? {};
 
   const lastInstanceId = instancesData?.instances?.[0]?.id;
 
   const totalDefinitions = defs?.definitions?.length || 0;
   const totalProjects = projectsData?.projects?.length || 0;
 
-  const nodeFreqs = nodeFrequencies;
-  const topNodes = Object.entries(nodeFreqs)
-    .sort(([, a], [, b]) => (b as number) - (a as number))
-    .slice(0, 5);
 
   if (!currentProjectId) {
     return (
@@ -163,14 +148,20 @@ export function Dashboard() {
               <TrendingUp size={40} />
             </ThemeIcon>
             <Title order={2}>Ready to automate?</Title>
+            {/*
+              A project is now chosen automatically, so this is reached when
+              there is none to choose rather than because somebody skipped a
+              step. Telling them to "select one from the header" when the header
+              is empty was the old, unhelpful half of this.
+            */}
             <Text c="dimmed" ta="center" maw={500}>
-              You haven't selected a project yet. Projects allow you to group related process models and tasks together.
+              {totalProjects > 0
+                ? 'Loading your project. If this stays here, pick one from the header.'
+                : "Projects group related process models, tasks and instances. You'll need one to start."}
             </Text>
-            
-            {totalProjects > 0 ? (
-              <Text fw={700}>Select an existing project from the header to see its dashboard.</Text>
-            ) : (
-              <Button size="md" radius="md" color="indigo" onClick={() => setActiveTab('projects')}>
+
+            {totalProjects === 0 && (
+              <Button component={Link} to="/projects" size="md" radius="md" color="indigo">
                 Create your first project
               </Button>
             )}
@@ -247,7 +238,7 @@ export function Dashboard() {
       )}
 
       <Grid gap="xl">
-        <Grid.Col span={{ base: 12, md: 8 }}>
+        <Grid.Col span={12}>
           <Card shadow="sm" radius="lg" withBorder h="100%">
             <Group justify="space-between" mb="xl">
               <Group gap="sm">
@@ -271,85 +262,8 @@ export function Dashboard() {
           </Card>
         </Grid.Col>
         
-        <Grid.Col span={{ base: 12, md: 4 }}>
-          <Card shadow="sm" radius="lg" withBorder h="100%">
-            <Title order={4} mb="lg">Most Active Nodes</Title>
-            <Stack gap="md">
-              {topNodes.length === 0 ? (
-                <Text size="sm" c="dimmed">No activity data yet.</Text>
-              ) : (
-                topNodes.map(([nodeId, count]) => (
-                  <Box key={nodeId}>
-                    <Group justify="space-between" mb={4}>
-                      <Text size="sm" fw={700} lineClamp={1}>{nodeId}</Text>
-                      <Badge variant="light" color="orange">{(count as number)} hits</Badge>
-                    </Group>
-                    <Progress 
-                      value={Math.min(((count as number) / (completedInstances || 1)) * 100, 100)} 
-                      color="orange" 
-                      size="xs" 
-                      radius="xl" 
-                    />
-                  </Box>
-                ))
-              )}
-              <Divider my="sm" />
-              <Stack gap="xs">
-                <Text size="xs" fw={700} c="dimmed" tt="uppercase">Heatmap Overlays</Text>
-                {defs?.definitions?.slice(0, 3).map((def) => (
-                  <Button 
-                    key={def.id}
-                    variant="light" 
-                    size="xs"
-                    leftSection={<LayoutGrid size={14} />} 
-                    onClick={() => {
-                      setSelectedHeatmapDef(def);
-                      openHeatmap();
-                    }}
-                  >
-                    {def.name}
-                  </Button>
-                ))}
-              </Stack>
-            </Stack>
-          </Card>
-        </Grid.Col>
       </Grid>
 
-      <Modal
-        opened={heatmapOpened}
-        onClose={closeHeatmap}
-        title={<Group gap="xs"><Activity size={20} color="orange" /><Text fw={800}>Process Heatmap: {selectedHeatmapDef?.name}</Text></Group>}
-        size="90%"
-        radius="lg"
-      >
-        <Box h={600} style={{ position: 'relative' }}>
-          {selectedHeatmapDef && (
-            <BPMNGraph 
-              // The graph draws the REST shape: an assignee is a name and a
-              // flow names its ends source_ref/target_ref. A definition read
-              // over Connect uses nested objects and camelCase, so it is
-              // translated here rather than drawn as blanks.
-              nodes={selectedHeatmapDef.nodes.map((n) => ({
-                id: n.id,
-                name: n.name,
-                type: n.type,
-                assignee: n.assignee?.username,
-                x: n.x,
-                y: n.y,
-              }))}
-              flows={selectedHeatmapDef.flows.map((f) => ({
-                id: f.id,
-                source_ref: f.sourceRef,
-                target_ref: f.targetRef,
-                condition: f.condition,
-              }))}
-              isReadOnly 
-              heatmapData={nodeFrequencies}
-            />
-          )}
-        </Box>
-      </Modal>
 
       <Card shadow="sm" radius="lg" withBorder mb="xl">
         <Group justify="space-between" mb="xl">

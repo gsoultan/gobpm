@@ -50,6 +50,7 @@ import { DataFlowPanel } from './properties/DataFlowPanel';
 import { PropertySection } from './properties/PropertySection';
 import { computeDataFlow, sampleDataOf } from '../domain/dataFlow';
 import { GatewayConfig } from './properties/GatewayConfig';
+import { SubProcessConfig } from './properties/SubProcessConfig';
 import { ApiExample } from './properties/CommonProperties';
 import { vocabularyFor } from '../domain/bpmnVocabulary';
 import type { BPMNNodeData, BPMNEdgeData } from '../types/bpmn';
@@ -69,6 +70,8 @@ export interface NodeConfigProps {
   selectedNode?: Node;
   /** Provided to GatewayConfig for outgoing-flow condition editing. */
   edges?: Edge[];
+  /** Provided to SubProcessConfig, which has to count the steps drawn inside it. */
+  nodes?: Node<BPMNNodeData>[];
   /** Provided to CallActivityConfig for sub-process lookup. */
   nodeId?: string;
   /** Provided to CallActivityConfig for sub-process instance viewing. */
@@ -100,6 +103,10 @@ const CONFIG_REGISTRY: Record<string, React.ComponentType<NodeConfigProps>> = {
   exclusiveGateway: GatewayConfig,
   inclusiveGateway: GatewayConfig,
   eventBasedGateway: GatewayConfig,
+  // A sub-process had no panel at all, so the one decision that changes how it
+  // runs — whether its steps are driven by the diagram or by a person — could
+  // only be made by importing a file that already said so.
+  subProcess: SubProcessConfig,
 };
 
 interface PropertyPanelProps {
@@ -270,14 +277,16 @@ export function PropertyPanel({
 
                         {selectedEdge && (
                           <Stack gap="md">
-                            <TextInput
-                              label="Label"
-                              placeholder="e.g. Yes / No"
-                              description="Text displayed on the flow arrow"
-                              size="md"
-                              value={selectedEdge.label as string || ''}
-                              onChange={(e) => updateEdgeData(selectedEdge.id, e.target.value)}
-                            />
+                            {/*
+                              There is no separate "label" field here any more.
+                              A sequence flow has no name on the server, so a
+                              typed caption could never be saved — and the save
+                              mapper used to fall back to it as the *condition*,
+                              which deployed a path captioned "Yes" with the
+                              unbound condition `Yes`: never true, never taken,
+                              no warning. The arrow is captioned with its
+                              condition instead.
+                            */}
                             <TextInput
                               label="Take this path when"
                               placeholder="e.g. approvalLevel = director"
@@ -285,10 +294,11 @@ export function PropertyPanel({
                               description={
                                 'One "=" and no quotes: approvalLevel = director. ' +
                                 'Writing == looks more like code and never matches, ' +
-                                'so the path is silently never taken. Leave empty to always take it.'
+                                'so the path is silently never taken. Leave empty to always take it. ' +
+                                'This text is what the arrow shows on the canvas.'
                               }
                               value={selectedEdge.data?.condition as string || ''}
-                              onChange={(e) => updateEdgeData(selectedEdge.id, selectedEdge.label as string, { ...selectedEdge.data, condition: e.target.value })}
+                              onChange={(e) => updateEdgeData(selectedEdge.id, e.target.value, { ...selectedEdge.data, condition: e.target.value })}
                             />
                             <Textarea
                               label="Documentation"
@@ -320,6 +330,7 @@ export function PropertyPanel({
                             selectedNode={selectedNode} 
                             updateNodeData={updateNodeData} 
                             edges={edges}
+                            nodes={nodes}
                             instanceId={instanceId}
                             onViewInstance={onViewInstance}
                           />
@@ -452,12 +463,15 @@ function NodeConfigSection({
   selectedNode, 
   updateNodeData, 
   edges,
+  nodes,
   instanceId,
   onViewInstance,
 }: { 
   selectedNode: Node<BPMNNodeData>, 
   updateNodeData: (id: string, data: Partial<BPMNNodeData>) => void, 
   edges: Edge[],
+  /** The whole canvas, so a sub-process can count the steps drawn inside it. */
+  nodes?: Node<BPMNNodeData>[],
   instanceId?: string | null,
   onViewInstance?: (id: string, defId: string) => void,
 }) {
@@ -470,6 +484,7 @@ function NodeConfigSection({
       onUpdate={(d) => updateNodeData(selectedNode.id, d)}
       selectedNode={selectedNode}
       edges={edges}
+      nodes={nodes}
       instanceId={instanceId}
       onViewInstance={onViewInstance}
       nodeId={selectedNode.id}
@@ -532,14 +547,10 @@ function EdgeConfigSection({
           <Text fw={700} size="md">Sequence Flow Properties</Text>
         </Group>
 
-        <TextInput
-          label="Label"
-          placeholder="e.g. Yes / No / Approved"
-          description="Name displayed on the connection"
-          size="md"
-          value={label}
-          onChange={(e) => updateEdgeData(selectedEdge.id, e.target.value, data)}
-        />
+        <Text size="sm" c="dimmed">
+          The arrow shows the condition below, so the canvas always says what
+          decides this path. A flow has no separate name to save.
+        </Text>
       </Stack>
 
       <Divider variant="dashed" />

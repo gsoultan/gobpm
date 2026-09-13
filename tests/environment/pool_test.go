@@ -1,0 +1,160 @@
+package environment_test
+
+import (
+	"fmt"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/gsoultan/metis/server/domains/entities"
+	"github.com/gsoultan/metis/server/repositories/gorms"
+	"github.com/gsoultan/metis/server/repositories/migrations"
+	"github.com/gsoultan/metis/server/repositories/models"
+)
+
+// A saved environment row is enough to open and migrate its database.
+//
+// This is what turns the registry from a record of intent into something the
+// server can serve: the row names a driver and a database, and nothing else has
+// to be configured for that runtime to exist.
+func TestAnEnvironmentRowOpensAndMigratesItsDatabase(t *testing.T) {
+	db, err := gorms.Open("postgres", environmentDSN(t))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	// Opening does not contact the database; asking it something does.
+	if err := gorms.Ping(db); err != nil {
+		t.Fatalf("ping: %v", err)
+	}
+
+	ctx := entities.WithSystemContext(t.Context())
+	result, err := migrations.Run(ctx, db, migrations.Schema(models.MigrationModels()))
+	if err != nil {
+		t.Fatalf("migrate the environment database: %v", err)
+	}
+	if len(result.Applied) == 0 {
+		t.Fatal("a fresh environment database should have had migrations applied")
+	}
+
+	// The runtime tables are what an environment holds.
+	for _, table := range []string{"process_definitions", "process_instances", "tasks", "jobs"} {
+		if !db.Migrator().HasTable(table) {
+			t.Errorf("an environment database needs %s", table)
+		}
+	}
+
+	// And it is genuinely a different database: writing here leaves the main
+	// one alone, which is the whole guarantee.
+	if err := db.Create(&models.OrganizationModel{
+		Base: models.Base{ID: models.FromUUID(uuid.Must(uuid.NewV7()))}, Name: "only here",
+	}).Error; err != nil {
+		t.Fatalf("write to the environment database: %v", err)
+	}
+}
+
+// The registry hands back the connection for an environment, and says plainly
+// when there is none.
+func TestTheRegistryTracksConnectionsPerEnvironment(t *testing.T) {
+	gorms.ResetEnvironmentDBs()
+	t.Cleanup(gorms.ResetEnvironmentDBs)
+
+	staging, production := uuid.New(), uuid.New()
+	stagingDB, err := gorms.Open("postgres", environmentDSN(t))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	if _, ok := gorms.EnvironmentDB(staging); ok {
+		t.Fatal("nothing is registered yet")
+	}
+
+	if replaced := gorms.RegisterEnvironmentDB(staging, stagingDB); replaced != nil {
+		t.Fatal("registering the first connection replaces nothing")
+	}
+
+	got, ok := gorms.EnvironmentDB(staging)
+	if !ok || got != stagingDB {
+		t.Fatal("the registered connection should come back")
+	}
+
+	// An environment nobody registered is a normal answer, not an error: it can
+	// be disabled, or its database can have been unreachable at boot.
+	if _, ok := gorms.EnvironmentDB(production); ok {
+		t.Fatal("an unregistered environment has no connection")
+	}
+
+	// Re-opening an environment hands back the old handle so the caller can
+	// close it, rather than closing it out from under requests in flight.
+	replacement, err := gorms.Open("postgres", environmentDSN(t))
+	if err != nil {
+		t.Fatalf("open replacement: %v", err)
+	}
+	if replaced := gorms.RegisterEnvironmentDB(staging, replacement); replaced != stagingDB {
+		t.Fatal("re-registering should hand back the connection it displaced")
+	}
+
+	if _, ok := gorms.ForgetEnvironmentDB(staging); !ok {
+		t.Fatal("forgetting a registered environment should report what it dropped")
+	}
+	if _, ok := gorms.EnvironmentDB(staging); ok {
+		t.Fatal("a forgotten environment has no connection")
+	}
+}
+
+// A database that is not there fails at open, not at the first request.
+//
+// Opening in GORM does not contact the server, so without an explicit ping a
+// misconfigured environment would register as ready and fail later, away from
+// whoever was watching the boot.
+func TestAnUnreachableDatabaseIsRefusedAtOpen(t *testing.T) {
+	db, err := gorms.Open("postgres", "host=127.0.0.1 port=1 user=nobody password=x dbname=nothing sslmode=disable")
+	if err != nil {
+		return // refused already, which is also correct
+	}
+	t.Cleanup(func() {
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	if err := gorms.Ping(db); err == nil {
+		t.Fatal("a database on a closed port should not answer")
+	}
+}
+
+// environmentDSN gives each test its own schema on the configured PostgreSQL,
+// so two of them cannot see one another's tables.
+//
+// A file used to do this job: an environment's database was a SQLite file in a
+// temp directory, which needed nothing configured. That is gone with SQLite,
+// and the cost is that these skip without a DSN — which is why the CI job that
+// provides one also fails on a skip.
+func environmentDSN(t *testing.T) string {
+	t.Helper()
+	base := os.Getenv("METIS_TEST_POSTGRES_DSN")
+	if base == "" {
+		t.Skip("set METIS_TEST_POSTGRES_DSN to run this against a live PostgreSQL instance")
+	}
+
+	namespace := "env_" + strings.ReplaceAll(uuid.NewString()[:8], "-", "")
+	admin, err := gorms.Open("postgres", base)
+	if err != nil {
+		t.Fatalf("open the admin connection: %v", err)
+	}
+	if err := admin.Exec("CREATE SCHEMA " + namespace).Error; err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = admin.Exec("DROP SCHEMA IF EXISTS " + namespace + " CASCADE").Error
+		if sqlDB, err := admin.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	return fmt.Sprintf("%s search_path=%s", base, namespace)
+}

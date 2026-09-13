@@ -6,17 +6,24 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gsoultan/metis/server/domains/entities"
+	"github.com/gsoultan/metis/server/domains/services/contracts"
 	"github.com/gsoultan/metis/server/repositories"
+	"github.com/gsoultan/metis/server/repositories/models"
 	"github.com/gsoultan/metis/tests/testutils"
 )
 
 func TestDecisionService_FullDMN(t *testing.T) {
 	ctx := context.Background()
 	db := testutils.SetupTestDB(t)
-	repo := repositories.NewRepository(db)
+	repo := repositories.NewRepository(testutils.StormConn(db))
 	svc := NewDecisionService(repo, NewDecisionTableEvaluator(NewFEELEvaluator()))
 
-	projectID, _ := uuid.NewV7()
+	// A real project, not an invented id. decision_definitions references
+	// projects now, so a decision pointing at a project that does not exist is
+	// refused by the database — which is right, and which this test used to
+	// hide by discarding the error from CreateDecision and only noticing at
+	// evaluation time.
+	projectID := seedProject(t, repo)
 
 	t.Run("HitPolicy UNIQUE", func(t *testing.T) {
 		d := entities.DecisionDefinition{
@@ -30,7 +37,7 @@ func TestDecisionService_FullDMN(t *testing.T) {
 				{Inputs: []string{"<= 80"}, Outputs: []any{"Good"}},
 			},
 		}
-		_, _ = svc.CreateDecision(ctx, d)
+		mustCreateDecision(t, svc, ctx, d)
 
 		res, err := svc.Evaluate(ctx, "unique-decision", 0, map[string]any{"score": 90})
 		if err != nil {
@@ -52,7 +59,7 @@ func TestDecisionService_FullDMN(t *testing.T) {
 				{Inputs: []string{"> 80"}, Outputs: []any{"Excellent"}},
 			},
 		}
-		_, _ = svc.CreateDecision(ctx, d2)
+		mustCreateDecision(t, svc, ctx, d2)
 		_, err = svc.Evaluate(ctx, "unique-fail", 0, map[string]any{"score": 90})
 		if err == nil {
 			t.Fatal("Expected error for UNIQUE hit policy with multiple matches")
@@ -72,7 +79,7 @@ func TestDecisionService_FullDMN(t *testing.T) {
 				{Inputs: []string{"> 20"}, Outputs: []any{200}},
 			},
 		}
-		_, _ = svc.CreateDecision(ctx, d)
+		mustCreateDecision(t, svc, ctx, d)
 
 		res, err := svc.Evaluate(ctx, "collect-sum", 0, map[string]any{"val": 25})
 		if err != nil {
@@ -95,7 +102,7 @@ func TestDecisionService_FullDMN(t *testing.T) {
 				{Inputs: []string{"B"}, Outputs: []any{200}},
 			},
 		}
-		_, _ = svc.CreateDecision(ctx, d1)
+		mustCreateDecision(t, svc, ctx, d1)
 
 		// Dependent decision
 		d2 := entities.DecisionDefinition{
@@ -109,7 +116,7 @@ func TestDecisionService_FullDMN(t *testing.T) {
 				{Inputs: []string{"<= 150"}, Outputs: []any{100}},
 			},
 		}
-		_, _ = svc.CreateDecision(ctx, d2)
+		mustCreateDecision(t, svc, ctx, d2)
 
 		res, err := svc.Evaluate(ctx, "final-price", 0, map[string]any{"category": "B"})
 		if err != nil {
@@ -131,11 +138,52 @@ func TestDecisionService_FullDMN(t *testing.T) {
 				{Inputs: []string{"CLOSED"}, Outputs: []any{false}},
 			},
 		}
-		_, _ = svc.CreateDecision(ctx, d)
+		mustCreateDecision(t, svc, ctx, d)
 
 		res, _ := svc.Evaluate(ctx, "list-test", 0, map[string]any{"status": "IN_PROGRESS"})
 		if res.Values["ok"] != true {
 			t.Errorf("Expected true for IN_PROGRESS in [OPEN, IN_PROGRESS]")
 		}
 	})
+}
+
+// seedProject creates an organization and a project to hang decisions off.
+func seedProject(t *testing.T, repo repositories.Repository) uuid.UUID {
+	t.Helper()
+	ctx := entities.WithSystemContext(context.Background())
+
+	orgID, err := uuid.NewV7()
+	if err != nil {
+		t.Fatalf("generate an organization id: %v", err)
+	}
+	if err := repo.Organization().Create(ctx, models.OrganizationModel{
+		Base: models.Base{ID: models.FromUUID(orgID)}, Name: "Decision Org " + orgID.String()[:8],
+	}); err != nil {
+		t.Fatalf("seed the organization: %v", err)
+	}
+
+	projectID, err := uuid.NewV7()
+	if err != nil {
+		t.Fatalf("generate a project id: %v", err)
+	}
+	if err := repo.Project().Create(ctx, models.ProjectModel{
+		Base:           models.Base{ID: models.FromUUID(projectID)},
+		OrganizationID: models.FromUUID(orgID),
+		Name:           "Decisions",
+	}); err != nil {
+		t.Fatalf("seed the project: %v", err)
+	}
+	return projectID
+}
+
+// mustCreateDecision fails the test when a decision cannot be created.
+//
+// It used to be `_, _ = svc.CreateDecision(...)`. A discarded error there meant
+// every assertion below it was really testing "evaluating a decision that does
+// not exist", and reported that as a wrong answer rather than a missing row.
+func mustCreateDecision(t *testing.T, svc contracts.DecisionService, ctx context.Context, d entities.DecisionDefinition) {
+	t.Helper()
+	if _, err := svc.CreateDecision(ctx, d); err != nil {
+		t.Fatalf("create decision %q: %v", d.Key, err)
+	}
 }

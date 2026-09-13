@@ -33,7 +33,7 @@ func newEngineHarness(t *testing.T, projectName string) engineHarness {
 	ctx := t.Context()
 	db := testutils.SetupTestDB(t)
 
-	repo := repositories.NewRepository(db)
+	repo := repositories.NewRepository(testutils.StormConn(db))
 	dispatcher := impl.NewEventDispatcher()
 
 	orgSvc := service_impl2.NewOrganizationService(repo)

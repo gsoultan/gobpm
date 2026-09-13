@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/gsoultan/metis/server/repositories/contracts"
-	"gorm.io/gorm"
+	"github.com/gsoultan/storm/runtime"
 )
 
 // Deploying a process or a decision allocates a version number by reading the
@@ -68,7 +68,9 @@ func allocateVersion(
 		if err == nil {
 			return nil
 		}
-		if !errors.Is(err, gorm.ErrDuplicatedKey) {
+		// Another deploy won the race for that number, which is contention
+		// rather than a bad request: the answer is to propose the next one.
+		if !errors.Is(err, runtime.ErrUniqueViolation) {
 			return err
 		}
 		lastErr = err

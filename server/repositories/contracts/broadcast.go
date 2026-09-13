@@ -4,14 +4,19 @@ import (
 	"context"
 	"time"
 
+	"github.com/gsoultan/metis/server/domains/entities"
 	"github.com/gsoultan/metis/server/repositories/models"
 )
 
 // BroadcastRepository is the shared bus that lets an SSE event produced on one
 // replica reach browsers connected to another.
 type BroadcastRepository interface {
-	// Publish records one encoded event.
-	Publish(ctx context.Context, origin, payload string) error
+	// Publish records one encoded event, with the scope it may be delivered in.
+	//
+	// The scope is stored rather than recomputed because the replica that
+	// delivers the event has no context to recompute it from: the request that
+	// produced it happened on another machine.
+	Publish(ctx context.Context, origin string, scope entities.SSEScope, payload string) error
 
 	// Since returns events newer than afterID that some *other* replica
 	// produced, oldest first, at most limit of them. A replica delivers its own

@@ -1,7 +1,5 @@
 package contracts
 
-import "gorm.io/gorm"
-
 // Pagination limits how much of a result set a query returns.
 //
 // Every list endpoint previously returned every row. That is fine for the
@@ -56,11 +54,9 @@ func (p Pagination) Offset() int {
 	return (n.Page - 1) * n.PageSize
 }
 
-// Apply adds LIMIT and OFFSET to a query.
-func (p Pagination) Apply(db *gorm.DB) *gorm.DB {
-	n := p.Normalize()
-	return db.Limit(n.PageSize).Offset(n.Offset())
-}
+// The repositories build their own LIMIT and OFFSET from Normalize and Offset.
+// This carried an Apply(*gorm.DB) helper, which is what made a persistence-
+// agnostic contract import an ORM.
 
 // Page is one slice of a larger result set, with enough context for a caller
 // to render "showing 51–100 of 1,234" and decide whether to offer a next page.

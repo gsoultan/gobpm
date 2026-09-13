@@ -64,6 +64,10 @@ func (s *SynchronousJobService) EnqueueBoundaryTimer(ctx context.Context, instan
 
 func (s *SynchronousJobService) StartWorkers(_ context.Context) {}
 
+// StopWorkers has nothing to wait for: this double runs each task inline at
+// enqueue time, so nothing is ever in flight when a test finishes.
+func (s *SynchronousJobService) StopWorkers(_ context.Context) error { return nil }
+
 // ProcessPendingJobs has nothing to process: this double runs each task inline
 // at enqueue time rather than persisting a job. Use the real job service when
 // what a service task actually does is the thing under test.

@@ -4,8 +4,7 @@ import {
   Paper, 
   Stack, 
   Group, 
-  Avatar, 
-  Badge, 
+  Avatar,  
   Divider, 
   TextInput, 
   Button, 
@@ -22,6 +21,8 @@ import { z } from 'zod';
 import { useForm, fieldProps, zodField } from '../components/form/AppForm';
 import { useUpdateUser } from '../hooks/useUser';
 import { notifications } from '@mantine/notifications';
+import { roleLabels } from '../domain/roles';
+import { failureMessage } from '../services/shared/errors';
 
 export function Profile() {
   const { user, setAuth, token } = useAppStore();
@@ -39,7 +40,6 @@ export function Profile() {
       name: user?.name ?? '',
       displayName: user?.displayName ?? '',
       organization: user?.organization ?? '',
-      role: user?.role ?? '',
     },
     onSubmit: async ({ value }) => handleSubmit(value),
   });
@@ -50,16 +50,18 @@ export function Profile() {
     name: string;
     displayName: string;
     organization: string;
-    role: string;
   }) => {
     try {
+      // The profile edits a person's own name and details, never their roles:
+      // "Job Title" is free text, and submitting it as a role turned a user
+      // with ["ADMIN","USER"] who only changed their name into one holding the
+      // single bogus role "ADMIN, USER". Roles are managed under People.
       await updateUser.mutateAsync({
         id: user.id,
         full_name: values.name,
         display_name: values.displayName,
         organization: values.organization,
         email: user.username,
-        roles: [values.role],
       });
 
       // Update local store
@@ -69,7 +71,6 @@ export function Profile() {
           name: values.name,
           displayName: values.displayName,
           organization: values.organization,
-          role: values.role,
         }, token);
       }
 
@@ -78,10 +79,10 @@ export function Profile() {
         message: 'Your profile has been successfully updated.',
         color: 'green',
       });
-    } catch {
+    } catch (err) {
       notifications.show({
-        title: 'Error',
-        message: 'Failed to update profile.',
+        title: 'Could not update your profile',
+        message: failureMessage('update your profile', err),
         color: 'red',
       });
     }
@@ -106,13 +107,9 @@ export function Profile() {
             >
               {user.displayName?.charAt(0) || user.name?.charAt(0) || 'U'}
             </Avatar>
-            <Title order={3} mt="md">{user.displayName || user.name}</Title>
-            <Text c="dimmed" size="sm">{user.role}</Text>
+            <Title order={2} size="h3" mt="md">{user.displayName || user.name}</Title>
+            <Text c="dimmed" size="sm">{roleLabels(user.role)}</Text>
             
-            <Group justify="center" gap="xs" mt="md">
-              <Badge variant="dot" color="green">Active</Badge>
-            </Group>
-
             <Divider my="lg" />
 
             <Stack gap="sm">
@@ -131,7 +128,7 @@ export function Profile() {
           </Paper>
 
           <Paper p="xl" radius="lg" withBorder shadow="sm">
-            <Title order={5} mb="md">Your Organizations</Title>
+            <Title order={3} size="h5" mb="md">Your Organizations</Title>
             <Stack gap="sm">
               {user.organizations?.map((org) => (
                 <Paper key={org.id} withBorder p="xs" radius="md" bg="gray.0">
@@ -155,7 +152,7 @@ export function Profile() {
               void form.handleSubmit();
             }}
           >
-            <Title order={4} mb="lg">Public Profile</Title>
+            <Title order={2} size="h4" mb="lg">Public Profile</Title>
             <Stack gap="md">
               <SimpleGrid cols={2}>
                 <form.Field name="name" validators={{ onChange: zodField(nameField) }}>
@@ -177,9 +174,6 @@ export function Profile() {
                 {(field) => <TextInput label="Organization" placeholder="Organization" {...fieldProps(field)} />}
               </form.Field>
               <TextInput label="Email Address" placeholder="Email" value={user.username} disabled />
-              <form.Field name="role" validators={{ onChange: zodField(optionalField) }}>
-                {(field) => <TextInput label="Job Title" placeholder="Your role" {...fieldProps(field)} />}
-              </form.Field>
               
               <Divider my="md" label="Security" labelPosition="center" />
               
@@ -191,9 +185,6 @@ export function Profile() {
                   one that is visibly unavailable: the user cannot tell the
                   difference between "not built" and "broken".
                 */}
-                <Text size="xs" c="dimmed" mb="sm">
-                  Password changes are not available yet.
-                </Text>
                 <Button variant="light" color="blue" size="xs" onClick={() => setChangingPassword(true)}>
                   Change Password
                 </Button>

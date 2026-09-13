@@ -9,7 +9,7 @@ export const organizationService = {
 
   async createOrganization(name: string, description: string, signal?: AbortSignal) {
     const response = await organizationClient.createOrganization({ name, description }, { signal });
-    return { organization: response.organization, err: response.error };
+    return { organization: raiseIfRefused(response).organization };
   },
 
   async updateOrganization(id: string, name: string, description: string, signal?: AbortSignal) {

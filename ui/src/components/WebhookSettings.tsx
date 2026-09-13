@@ -54,6 +54,14 @@ export function WebhookSettings() {
 
   const webhooks = data?.webhooks ?? [];
 
+  const removeWebhook = (hook: ApiWebhook) => {
+    const who = hook.name || hook.message_name;
+    if (!window.confirm(`Remove the ${who} webhook? The partner's URL stops working and their deliveries are refused.`)) return;
+    remove.mutate(hook.id, {
+      onError: (err) => notifications.show({ title: `Could not remove ${who}`, message: err.message, color: 'red' }),
+    });
+  };
+
   const submit = async () => {
     try {
       const created = await create.mutateAsync({
@@ -61,11 +69,15 @@ export function WebhookSettings() {
         message_name: messageName,
         correlation_expression: correlation || undefined,
       });
+      // A refusal used to arrive here as `undefined`: the form closed, nothing
+      // was said, and the secret that is shown exactly once was never shown.
+      // The form stays open until there is a webhook to hand over.
+      if (!created) throw new Error('The server did not return the webhook.');
       form.close();
       setName('');
       setMessageName('');
       setCorrelation('');
-      if (created) setJustCreated(created);
+      setJustCreated(created);
     } catch (err: unknown) {
       notifications.show({
         title: 'Could not create the webhook',
@@ -138,7 +150,15 @@ export function WebhookSettings() {
                       size="xs"
                       aria-label={`Switch ${hook.name || hook.message_name} ${hook.enabled ? 'off' : 'on'}`}
                       checked={hook.enabled}
-                      onChange={(event) => setEnabled.mutate({ id: hook.id, enabled: event.currentTarget.checked })}
+                      onChange={(event) =>
+                        setEnabled.mutate(
+                          { id: hook.id, enabled: event.currentTarget.checked },
+                          {
+                            onError: (err) =>
+                              notifications.show({ title: 'Could not switch it', message: err.message, color: 'red' }),
+                          },
+                        )
+                      }
                     />
                   </Table.Td>
                   <Table.Td>
@@ -148,7 +168,7 @@ export function WebhookSettings() {
                         variant="subtle"
                         color="red"
                         size="sm"
-                        onClick={() => remove.mutate(hook.id)}
+                        onClick={() => removeWebhook(hook)}
                       >
                         <Trash2 size={14} />
                       </ActionIcon>

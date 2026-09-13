@@ -29,6 +29,7 @@ type TaskRepository interface {
 	// row and are not driven by a request.
 	ListByAssigneePaged(ctx context.Context, assignee string, p Pagination) (Page[models.TaskModel], error)
 	ListByProjectPaged(ctx context.Context, projectID uuid.UUID, p Pagination) (Page[models.TaskModel], error)
+	ListByInstancePaged(ctx context.Context, instanceID uuid.UUID, p Pagination) (Page[models.TaskModel], error)
 	ListByCandidatesPaged(ctx context.Context, userID string, groups []string, p Pagination) (Page[models.TaskModel], error)
 	ListPaged(ctx context.Context, p Pagination) (Page[models.TaskModel], error)
 	Update(ctx context.Context, task models.TaskModel) error

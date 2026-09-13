@@ -5,6 +5,12 @@ on:
   push:
     branches:
       - main
+  # The load test is too slow to seed on every pull request and too important to
+  # leave un-run — a performance harness nobody has executed proves nothing at
+  # all, which is how the dialect suites came to be skipping silently.
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -89,6 +95,44 @@ jobs:
     name: Go (build, vet, race, vuln)
     needs: ui
     runs-on: ubuntu-latest
+
+    env:
+      METIS_TEST_POSTGRES_DSN: "host=127.0.0.1 port=5432 user=postgres password=gobpm dbname=gobpm sslmode=disable"
+      STORM_DSN: "postgres://postgres:gobpm@127.0.0.1:5432/gobpm?sslmode=disable"
+      # The RabbitMQ connector's integration suite. It is gated on this URL and
+      # the "No suite skipped" step below fails on any skip, so removing the
+      # service breaks the build rather than quietly running nothing — which is
+      # how the connector shipped a claim of production-ready messaging with no
+      # test that a message was ever delivered.
+      METIS_TEST_RABBITMQ_URL: "amqp://guest:guest@127.0.0.1:5672/"
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: gobpm
+          POSTGRES_DB: gobpm
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d gobpm"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 24
+
+      rabbitmq:
+        image: rabbitmq:3-alpine
+        ports:
+          - 5672:5672
+        # rabbitmq-diagnostics, not a TCP probe: the port accepts connections
+        # well before the broker will accept a channel, and the first thing the
+        # suite does is open one.
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q check_running"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 18
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -138,8 +182,31 @@ jobs:
       # race pass is not a race pass at all.
       #
       # The default stays cached for local runs; only CI opts out.
+      # The test harness is PostgreSQL: a suite with no DSN skips, so this job
+      # would go green having run nothing. That is why there is no longer a
+      # separate "databases" job — every suite needs one now, and a split where
+      # only half the tests met a database is how three dialect suites went
+      # years without running.
+      #
+      # -p 2 because every package opens its own pool against one server and the
+      # default parallelism exhausts PostgreSQL's connections; the dial timeout
+      # that produces reads exactly like a defect.
       - name: Tests
-        run: make test GO_TEST_FLAGS=-count=1
+        run: make test GO_TEST_FLAGS="-count=1 -p 2"
+
+      # A skip means a DSN did not reach the tests, which is the failure this
+      # guards. Asserted rather than eyeballed, and -count=1 above because a
+      # cached run prints no test lines at all — so the assertion would pass by
+      # having nothing to read.
+      - name: No suite skipped for want of a database
+        run: |
+          set -o pipefail
+          go test -count=1 -p 2 ./... 2>&1 | tee /tmp/suite.log
+          if grep -q -- "--- SKIP" /tmp/suite.log; then
+            echo "::error::A test skipped, which means its DSN did not reach it:"
+            grep -- "--- SKIP" /tmp/suite.log
+            exit 1
+          fi
 
       - name: Race detector
         run: make race GO_TEST_FLAGS=-count=1
@@ -159,15 +226,6 @@ jobs:
           METIS_FEATURE_STRICT_TENANT_SCOPE: "true"
         run: go test -count=1 ./tests/strictscope/...
 
-      # The SDK is its own zero-dependency module, so the module-wide commands
-      # above never see it. Untested here, it would only break in a consumer's
-      # build — the one place we cannot fix it from.
-      - name: Client SDK (vet, race)
-        working-directory: sdk
-        run: |
-          go vet ./...
-          go test -race -count=1 ./...
-
       - name: Vulnerability scan (govulncheck)
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
@@ -176,124 +234,6 @@ jobs:
           # arguments, and govulncheck would scan neither.
           mapfile -t packages < <(go list ./... | grep -v '/node_modules/')
           govulncheck "${packages[@]}"
-
-  dialects:
-    name: Databases (postgres, mysql, sqlserver)
-    needs: ui
-    runs-on: ubuntu-latest
-
-    # Every dialect-specific test in this repository skips when its DSN is
-    # unset, and none of the three DSNs was ever set anywhere. So the tests that
-    # exist to catch "this query behaves differently on MySQL" — and the schema
-    # tests that exist to catch "this column type does not exist on that engine"
-    # — have never run outside a developer's own machine, which is how SQL
-    # Server came to declare `uuid` columns it has no word for.
-    #
-    # The three databases are service containers. That is only possible on a
-    # Linux runner with a Docker daemon — on the self-hosted Mac this job used
-    # to run on they were ordinary steps driven by Apple's `container` CLI,
-    # with SQL Server forced to amd64 under Rosetta because it ships no arm64
-    # build. Here the runner is amd64 Linux, so SQL Server runs natively and
-    # the orchestration is the runner's job rather than this file's.
-    #
-    # Health checks replace the wait loop the previous version carried: the job
-    # does not start until every database answers, so a test can no longer fail
-    # because it opened a connection a second too early.
-
-    env:
-      METIS_TEST_POSTGRES_DSN: "host=127.0.0.1 port=5432 user=postgres password=gobpm dbname=gobpm sslmode=disable"
-      METIS_TEST_MYSQL_DSN: "root:gobpm@tcp(127.0.0.1:3306)/gobpm?charset=utf8mb4&parseTime=True&loc=Local"
-      METIS_TEST_SQLSERVER_DSN: "sqlserver://sa:Gobpm_Str0ngPass1@127.0.0.1:1433?database=master&encrypt=disable"
-      MSSQL_SA_PASSWORD: "Gobpm_Str0ngPass1"
-
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_PASSWORD: gobpm
-          POSTGRES_DB: gobpm
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d gobpm"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 24
-
-      mysql:
-        image: mysql:8
-        env:
-          MYSQL_ROOT_PASSWORD: gobpm
-          MYSQL_DATABASE: gobpm
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pgobpm --silent"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 36
-
-      # SQL Server takes the longest to accept connections and is the reason
-      # the retry budget here is generous. The password is repeated as a
-      # literal because a health-cmd is passed to Docker, not to the shell that
-      # knows this job's env.
-      mssql:
-        image: mcr.microsoft.com/mssql/server:2022-latest
-        env:
-          ACCEPT_EULA: "Y"
-          MSSQL_SA_PASSWORD: "Gobpm_Str0ngPass1"
-          MSSQL_PID: Developer
-        ports:
-          - 1433:1433
-        options: >-
-          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P Gobpm_Str0ngPass1 -Q 'SELECT 1'"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 30
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-
-      - name: Download UI dist
-        uses: actions/download-artifact@v4
-        with:
-          name: ui-dist
-          path: ui/dist
-
-      # A skip here means a DSN did not reach the tests, which is the failure
-      # this job exists to prevent — so the count is asserted rather than eyeballed.
-      #
-      # -count=1 for the same reason. Go's test cache is content-addressed over
-      # the code, and models nothing about which database answered: on a runner
-      # whose GOCACHE survives between runs, an unchanged tree returns
-      # "ok ... (cached)" without opening a connection. That is not a hypothesis
-      # — it is what this job did on the run that added it, going green in 34s
-      # having started three databases and talked to none of them. Worse, a
-      # cached run prints no test lines at all, so the skip assertion below
-      # passes by having nothing to read. Both checks are asserted here because
-      # both failures look exactly like success.
-      - name: Run the dialect suites
-        run: |
-          set -o pipefail
-          go test -count=1 -v ./tests/postgres/... ./tests/mysqldb/... ./tests/mssql/... \
-            ./tests/tenant/... ./tests/migrations/... ./tests/replicas/... ./tests/outage/... \
-            2>&1 | tee /tmp/dialects.log
-          if grep -q -- "--- SKIP" /tmp/dialects.log; then
-            echo "::error::A dialect test skipped, which means its DSN did not reach it:"
-            grep -- "--- SKIP" /tmp/dialects.log
-            exit 1
-          fi
-          if grep -q -- "(cached)" /tmp/dialects.log; then
-            echo "::error::A dialect suite was served from the test cache, so no database was contacted:"
-            grep -- "(cached)" /tmp/dialects.log
-            exit 1
-          fi
 
   golangci-lint:
     name: golangci-lint
@@ -450,6 +390,57 @@ jobs:
       - name: Lint the workflows
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/*.yml
 
+  loadtest:
+    name: Load (read latency at volume)
+    runs-on: ubuntu-latest
+    # Weekly and on demand only. Seeding a hundred thousand instances takes
+    # minutes, which is the wrong tax on every pull request — but "we never
+    # measured" is the wrong answer when a list endpoint gets slow.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: gobpm
+          POSTGRES_DB: gobpm
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+
+    env:
+      METIS_TEST_POSTGRES_DSN: "host=127.0.0.1 port=5432 user=postgres password=gobpm dbname=gobpm sslmode=disable"
+      METIS_LOADTEST: '1'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Place the embedded UI
+        # ui/embed.go carries //go:embed all:dist, so the Go build needs the
+        # directory to exist. The load test measures API latency, not the
+        # bundle, so a placeholder is enough and building the real one would
+        # add minutes for nothing.
+        run: mkdir -p ui/dist && touch ui/dist/index.html
+
+      - name: Read latency at volume
+        run: |
+          set -o pipefail
+          go test -count=1 -v -timeout 30m ./tests/loadtest/... 2>&1 | tee /tmp/loadtest.log
+          if grep -q -- "--- SKIP" /tmp/loadtest.log; then
+            echo "::error::The load test skipped, so nothing was measured:"
+            grep -- "--- SKIP" /tmp/loadtest.log
+            exit 1
+          fi
+
   image:
     name: Image (build and boot)
     runs-on: ubuntu-latest
@@ -500,6 +491,20 @@ jobs:
           docker build \
             --build-arg VERSION="$(git describe --tags --always --dirty)" \
             -t metis:ci .
+
+      # A distroless base carries almost nothing, which is the point — but "almost
+      # nothing" is not "nothing", and the Go binary itself is in scope. This
+      # fails on CRITICAL only: a job that fails on every advisory in every
+      # severity is a job people learn to rerun until it passes.
+      - name: Scan the image for known vulnerabilities
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: metis:ci
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: CRITICAL
+          vuln-type: os,library
 
       # The release publishes arm64 too, and until this existed that path was
       # only exercised by tagging — which is how the first release broke, on a

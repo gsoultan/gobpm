@@ -1,66 +1,51 @@
 import {
-  Table,
-  Card,
-  Text,
-  Button,
-  Group,
-  Stack,
-  Badge,
   ActionIcon,
-  Tooltip,
-  Skeleton,
+  Badge,
+  Button,
+  Card,
   Center,
+  Drawer,
+  Group,
   Pagination,
   Select,
-  Drawer,
+  Skeleton,
+  Stack,
+  Table,
+  Text,
+  Tooltip,
 } from '@mantine/core';
-import {
-  Eye,
-  RefreshCw,
-  AlertTriangle,
-} from 'lucide-react';
-import { useInstances } from '../hooks/useProcess';
-import { PageHeader } from '../components/PageHeader';
-import { ErrorState } from '../components/state';
-import {useState} from 'react';
-import { useDefinitions } from '../hooks/useDefinitions';
-import { StatusBadge } from '../components/StatusBadge';
+import dayjs from 'dayjs';
+import relativeTime from 'dayjs/plugin/relativeTime';
+import { AlertTriangle, Eye, RefreshCw } from 'lucide-react';
+import { useState } from 'react';
+
 import { IncidentInbox } from '../components/IncidentInbox';
+import { PageHeader } from '../components/PageHeader';
+import { StatusBadge } from '../components/StatusBadge';
+import { ErrorState } from '../components/state';
+import { STATUS } from '../components/statusVocabulary';
+import {
+  definitionName,
+  humanizeNodeId,
+  instanceReference,
+  startedAtFromId,
+  statusesOnPage,
+  withStatus,
+} from '../domain/instanceList';
+import { useDefinitions } from '../hooks/useDefinitions';
+import { useInstances } from '../hooks/useProcess';
 
-/**
- * Turns a node identifier into something readable.
- *
- * Node IDs are authored in the designer and usually carry the step's name in
- * them — "Activity_ApproveExpense", "approve-expense", "Task_1". Splitting the
- * generated prefix and the separators recovers a usable label without needing
- * the whole definition loaded just to render a row.
- */
-/** The name of the process an instance belongs to, resolved through its id. */
-function definitionName(
-  instance: { definition?: { id?: string; key?: string; name?: string } },
-  definitions: Array<{ id: string; key?: string; name?: string }>,
-): string {
-  const fromInstance = instance.definition?.name || instance.definition?.key;
-  if (fromInstance) return fromInstance;
-  const match = definitions.find((d) => d.id === instance.definition?.id);
-  return match?.name || match?.key || 'Process';
-}
+dayjs.extend(relativeTime);
 
-function humanizeNodeId(nodeId: string): string {
-  const withoutPrefix = nodeId.replace(/^(Activity|Task|Event|Gateway|Flow|Node)[_-]/i, '');
-  const spaced = withoutPrefix
-    .replace(/[_-]+/g, ' ')
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .trim();
-  if (!spaced || /^\d+$/.test(spaced)) return nodeId;
-  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
-}
+const PAGE_SIZES = ['25', '50', '100'];
+const COLUMNS = 4;
 
 export function InstanceList({ onViewInstance }: { onViewInstance: (instanceId: string, definitionId: string) => void }) {
   // Which instance's failures are on screen, if any.
   const [inspecting, setInspecting] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
+  const [status, setStatus] = useState<string | null>(null);
   const { data, isLoading, error, refetch } = useInstances(page, pageSize);
   // A listed instance carries only its definition's id, so every row read
   // "Process". The definitions are already a cached query; joining them here
@@ -82,23 +67,13 @@ export function InstanceList({ onViewInstance }: { onViewInstance: (instanceId: 
     return (
       <Stack gap="xl">
         <Skeleton height={40} radius="md" />
-        <Drawer
-        opened={inspecting !== null}
-        onClose={() => setInspecting(null)}
-        position="right"
-        size="lg"
-        title="What went wrong"
-      >
-        {inspecting && <IncidentInbox instanceId={inspecting} />}
-      </Drawer>
-
-      <Card withBorder radius="lg" p={0}>
+        <Card withBorder radius="lg" p={0}>
           <Table verticalSpacing="md">
             <thead>
               <tr>
-                <th>Instance ID</th>
+                <th>Process</th>
                 <th>Status</th>
-                <th>Active Nodes</th>
+                <th>Where it is</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -124,105 +99,125 @@ export function InstanceList({ onViewInstance }: { onViewInstance: (instanceId: 
     return <ErrorState error={error} action="load your process instances" onRetry={() => refetch()} />;
   }
 
-  const instances = data?.instances || [];
-
-
+  const onPage = data?.instances ?? [];
+  const instances = withStatus(onPage, status);
+  // The server has no status filter, so this narrows the page on screen and
+  // says so: a filter that looks server-wide and is not would hide the rest.
+  const statusOptions = statusesOnPage(onPage).map((value) => ({ value, label: STATUS[value]?.label ?? value }));
 
   return (
     <Stack gap="xl">
-      <PageHeader 
-        title="Process Instances" 
-        description="Monitor and track the execution of process definitions."
+      <PageHeader
+        title="Process Instances"
+        description="Every run of a process in this project, and where each one is."
         actions={
           <Button variant="light" leftSection={<RefreshCw size={16} />} onClick={() => refetch()}>Refresh</Button>
         }
       />
 
+      {/* The failures drawer was mounted only while the page was loading, so
+          the button that opens it did nothing once there were rows to click. */}
+      <Drawer
+        opened={inspecting !== null}
+        onClose={() => setInspecting(null)}
+        position="right"
+        size="lg"
+        title="What went wrong"
+      >
+        {inspecting && <IncidentInbox instanceId={inspecting} />}
+      </Drawer>
+
       <Card withBorder radius="lg" p={0}>
+        <Group px="md" py="sm" justify="flex-end">
+          <Select
+            aria-label="Show only one status, on this page"
+            placeholder="Any status on this page"
+            data={statusOptions}
+            value={status}
+            onChange={setStatus}
+            clearable
+            size="xs"
+            w={220}
+            comboboxProps={{ withinPortal: true }}
+          />
+        </Group>
         <Table verticalSpacing="md">
           <thead>
             <tr>
-              <th>Instance ID</th>
+              <th>Process</th>
               <th>Status</th>
-              <th>Active Nodes</th>
+              <th>Where it is</th>
               <th>Actions</th>
             </tr>
           </thead>
           <tbody>
             {instances.length === 0 ? (
               <tr>
-                <td colSpan={4}>
+                <td colSpan={COLUMNS}>
                   <Center py="xl">
-                    <Stack align="center" gap="xs">
-                      <Text size="sm" c="dimmed">No instances found for this project</Text>
-                    </Stack>
+                    <Text size="sm" c="dimmed">
+                      {status ? 'Nothing on this page has that status.' : 'No instances found for this project'}
+                    </Text>
                   </Center>
                 </td>
               </tr>
             ) : (
-              instances.map((inst) => (
-                <tr key={inst.id}>
-                  <td>
-                    {/* The full UUID was the first column, in bold monospace,
-                        as though it were the thing a person identifies an
-                        instance by. It is not — the process is. */}
-                    <Text size="sm" fw={500}>{definitionName(inst, definitions)}</Text>
-                    <Text size="xs" c="dimmed" ff="monospace">{String(inst.id).slice(0, 8)}</Text>
-                  </td>
-                  <td><StatusBadge status={inst.status} withIcon /></td>
-                  <td>
-                    {/*
-                      This printed the raw node ID — "Activity_1x2y3z" — as the
-                      answer to "where is this process right now", which is the
-                      single most-asked question about a running instance and
-                      the one a machine identifier cannot answer.
-
-                      It also read `active_nodes`; the field arrives from the
-                      Connect client as `activeNodes`, so it was always empty
-                      and every running instance claimed to have no active
-                      steps.
-                    */}
-                    <Group gap={4}>
-                      {(inst.activeNodes ?? []).map((node) => (
-                        <Badge key={node.id} size="sm" variant="light" color="blue">
-                          {humanizeNodeId(node.id)}
-                        </Badge>
-                      ))}
-                      {(inst.activeNodes ?? []).length === 0 && (
-                        <Text size="xs" c="dimmed">
-                          {inst.status === 'active' ? 'Starting…' : 'Nothing in progress'}
-                        </Text>
-                      )}
-                    </Group>
-                  </td>
-                  <td>
-                    <Group gap={6} wrap="nowrap">
-                      <Tooltip label="View Execution Path">
-                        <ActionIcon aria-label="View instance"
-                          variant="light"
-                          color="blue"
-                          onClick={() => onViewInstance(inst.id, inst.definition?.id ?? '')}
-                        >
-                          <Eye size={16} />
-                        </ActionIcon>
-                      </Tooltip>
-                      {/* A failed instance used to sit here looking stuck with
-                          nothing to click. The engine could always put the step
-                          back on the queue; nothing in the interface asked it
-                          to. */}
-                      <Tooltip label="What went wrong, and try again">
-                        <ActionIcon aria-label="Show what failed"
-                          variant="light"
-                          color={inst.status === 'failed' ? 'red' : 'gray'}
-                          onClick={() => setInspecting(inst.id)}
-                        >
-                          <AlertTriangle size={16} />
-                        </ActionIcon>
-                      </Tooltip>
-                    </Group>
-                  </td>
-                </tr>
-              ))
+              instances.map((inst) => {
+                const startedAt = startedAtFromId(inst.id);
+                return (
+                  <tr key={inst.id}>
+                    <td>
+                      {/* The process is what a person identifies an instance
+                          by; the started time and a short reference are what
+                          tell two runs of the same process apart. */}
+                      <Text size="sm" fw={500}>{definitionName(inst, definitions)}</Text>
+                      <Text size="xs" c="dimmed">
+                        {startedAt ? `Started ${dayjs(startedAt).fromNow()} · ` : ''}
+                        {instanceReference(inst.id)}
+                      </Text>
+                    </td>
+                    <td><StatusBadge status={inst.status} withIcon /></td>
+                    <td>
+                      <Group gap={4}>
+                        {(inst.activeNodes ?? []).map((node) => (
+                          <Badge key={node.id} size="sm" variant="light" color="blue">
+                            {humanizeNodeId(node.id)}
+                          </Badge>
+                        ))}
+                        {(inst.activeNodes ?? []).length === 0 && (
+                          <Text size="xs" c="dimmed">
+                            {inst.status === 'active' ? 'Starting…' : 'Nothing in progress'}
+                          </Text>
+                        )}
+                      </Group>
+                    </td>
+                    <td>
+                      <Group gap={6} wrap="nowrap">
+                        <Tooltip label="Follow its path">
+                          <ActionIcon
+                            aria-label="View instance"
+                            variant="light"
+                            color="blue"
+                            onClick={() => onViewInstance(inst.id, inst.definition?.id ?? '')}
+                          >
+                            <Eye size={16} />
+                          </ActionIcon>
+                        </Tooltip>
+                        <Tooltip label="What went wrong, and try again">
+                          <ActionIcon
+                            aria-label="Show what failed"
+                            variant="light"
+                            color={inst.status === 'failed' ? 'red' : 'gray'}
+                            onClick={() => setInspecting(inst.id)}
+                          >
+                            <AlertTriangle size={16} />
+                          </ActionIcon>
+                        </Tooltip>
+                      </Group>
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </Table>
@@ -243,7 +238,7 @@ export function InstanceList({ onViewInstance }: { onViewInstance: (instanceId: 
             <Group gap="sm" wrap="nowrap">
               <Select
                 aria-label="Instances per page"
-                data={['25', '50', '100']}
+                data={PAGE_SIZES}
                 value={String(pageSize)}
                 onChange={(value) => value && setPageSize(Number(value))}
                 size="xs"

@@ -8,7 +8,479 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 
 ## [Unreleased]
 
+### Security
+
+- **The live event stream carried every organization's process variables to
+  every signed-in browser.** The SSE client registry was a flat set with no
+  record of who was listening, and a process event carries the instance's
+  variables — an amount, an applicant's name, an approval decision. So anybody
+  with the stream open received all of it, from every tenant, as it happened.
+  Confirmed against the running handler before it was changed.
+
+  Events are scoped now, by organization and by environment, compared for
+  equality. There is no "unscoped means everybody": an event whose audience
+  cannot be worked out reaches nobody, and the unscoped broadcast has been
+  removed from the API so delivering to everyone is a compile error rather than
+  an omission. The scope comes from the token and from the port a connection
+  arrived on, never from anything a caller sends, and it travels with the event
+  across the replica bus — a replica reading one back has no request context to
+  recompute it from.
+
+
+- **Connector credentials were returned to the browser and stored in clear
+  text.** A connector instance's configuration holds whatever it needs to
+  authenticate — a bearer token, an SMTP password, a signing secret — and the
+  API returned that map verbatim. Opening the Connectors page put every
+  third-party credential an organization had into the response and the browser's
+  developer tools, and the column was plain JSON, so a database backup or a read
+  replica carried them too.
+
+  Secrets are now replaced with a placeholder at the API boundary and the column
+  is encrypted at rest. Editing an unrelated field keeps the stored credential
+  rather than overwriting it with the placeholder, clearing one is still
+  possible, and the placeholder can never itself become a stored value. The
+  executor is unaffected: it reads instances through the service, not the API.
+  Existing rows are read as they are and re-encrypted on their next write, so no
+  migration is needed.
+
+- **A task could be completed by somebody who was not holding it.** The task
+  endpoints took the acting user from a `user_id` field in the request body and
+  the service then checked *that name* against the assignee. So any signed-in
+  member of an organization could complete, claim or delegate a colleague's task
+  by naming the colleague, and the audit trail recorded the colleague as having
+  done it. In an engine that runs approvals and payments, that is impersonation
+  with a forged record attached.
+
+  The actor now comes from the verified token and any `user_id` on the wire is
+  ignored. Handing a task to somebody else is still possible, and still a
+  parameter, but only for the person holding it or an administrator. Proven end
+  to end through the real HTTP chain.
+
+- **The embedded UI is served with security headers.** A Content-Security-Policy
+  written for exactly what the app loads, plus `X-Frame-Options`,
+  `Referrer-Policy` and `X-Content-Type-Options`. There were none, on a UI whose
+  session token lives in `localStorage`.
+
+### Added
+
+- **A BPMN file exported from here now opens in other BPMN tools, and one
+  imported from them keeps its layout.** Export wrote a `<definitions>` element
+  with no namespace on it and no diagram interchange section at all. That is
+  well-formed XML and this parser read it back, which is why the round trip
+  looked healthy — but elements are resolved by namespace and bpmn-js needs a
+  diagram to render anything, so every file this engine produced was a file only
+  this engine could open. Import had the mirror problem: it read no geometry at
+  all, so a diagram drawn in Camunda Modeler arrived with every shape at the
+  origin and its author's layout was gone for good.
+
+  Both directions carry the diagram now: shape bounds, whether a sub-process is
+  drawn expanded, and the bends of every connector. A definition that was never
+  drawn — created over the API, or by a test — is laid out in a row on the way
+  out rather than stacked at the origin, so the file still opens legibly. The
+  geometry has a field everywhere it has to survive: the node entity, the
+  database model, the protobuf, and the designer's save request. That last one
+  matters most, because without it the act that flattened an imported diagram
+  was saving it.
+
+- **Export stopped silently dropping parts of the process.** There was no case
+  for a sub-process, so exporting a process containing one produced a valid file
+  with the sub-process and every node inside it missing — and reported success.
+  Pools, lanes, escalation and compensation throw events, and the terminate
+  marker on an end event went the same way. Import gained the elements it could
+  not read at all: `adHocSubProcess`, and escalation, compensation and
+  conditional event definitions.
+
+- **The attributes that decide what a process does now survive a round trip.** A
+  gateway's `default` flow, a call activity's `calledElement`, a boundary event's
+  `cancelActivity` and multi-instance loop characteristics were all dropped. The
+  default flow is the one to notice: this engine refuses to guess at a decision
+  point, so a gateway that had a default before an import raised an incident
+  after it. External-task topics, assignees and form keys are written in the
+  Camunda namespace, so a process exported from here is deployable by the engine
+  most of these diagrams come from.
+
+- **Conditional events.** A step can wait until something becomes true of the
+  process's own data — "carry on once the total is over the limit" — with no
+  clock and no inbound message. The condition is read when the token arrives, so
+  one that already holds does not wait at all, and again every time the instance
+  advances, because the only thing that can make it true is another part of the
+  same process changing a variable. It is authorable in the designer and it
+  round-trips through BPMN XML.
+
+- **An ad-hoc sub-process can be built in the designer.** The engine has run
+  these for a while — a group of steps a person drives in whatever order the
+  work needs, until a completion condition says it is finished — but nothing in
+  the designer could produce one, so the only way to get one was to import a
+  file that already had one. A sub-process has a property panel now, and it
+  refuses the two configurations that cannot work: an ad-hoc group with nothing
+  in it, and one that is also event-triggered.
+
+- **A project's history exports as an OCEL 2.0 event log**, at
+  `GET /api/v1/projects/{id}/ocel`. The audit trail was already a complete record
+  of what happened; what it was not was portable, so reading it meant using this
+  application. OCEL 2.0 is the current standard for object-centric event data and
+  is read by ProM, pm4py and the commercial mining tools. The activity is the
+  node's name rather than the audit entry's kind, because a log whose every event
+  is `node_reached` discovers a model with four boxes in it however large the
+  process is. Instances relate to a definition *and its version*, so two versions
+  are not mined as one. Process variables are **not** included unless
+  `?include_variables=true` is asked for: an audit entry's data is the instance's
+  business facts, and mining a control-flow model needs none of them.
+
+- **A new version of a process no longer takes over the moment it is deployed.**
+  Deploying used to make the new version live immediately, because "live" meant
+  "the highest version number" and there was no way to say anything else. It is
+  a choice now: promote it and let the old version drain — it keeps running the
+  instances it has and takes nothing new until the last one finishes — or stage
+  it and leave the old one live, or schedule the change for a chosen moment.
+
+  Running instances are never moved. An instance finishes on the graph it
+  started with, which is the only property an edit cannot break.
+
+- **A project can have several environments, each with its own database and its
+  own port.** Development, staging and production are configured from the UI and
+  served on the same server. What one holds is absent from another rather than
+  filtered out of it. Which runtime a request belongs to is decided by the port
+  it arrived on, never by a header or a body — an environment a caller could
+  name is one a staging user could set to production.
+
+  A new environment is served from the next restart, which the settings page
+  says.
+
+- **Running instances can be moved onto another version, with a preview.** The
+  supported way to change version is still to promote and drain; this is for the
+  case drain cannot serve — work in flight on a version that must not continue.
+  It shows what would move and where before it moves anything, refuses a mapping
+  that would leave a task somewhere the new version has no node for, and is
+  administrative, because every other action on that page decides what future
+  instances do and this one rewrites instances that have already started.
+
+- **The people who run Metis and the people a process assigns work to are now
+  separate.** One table held both, so one role list served both and giving
+  somebody a task inbox meant creating them an account on the platform.
+  Participants belong to a project, have no roles, and arrive in bulk — from a
+  CSV upload, an HTTP endpoint, or a PostgreSQL query, optionally on a schedule.
+  An import is additive: somebody absent from the file is left alone rather than
+  deactivated.
+
+  Somebody can also be removed from a project's directory. The removal is
+  reversible — importing a directory that names them again brings back the same
+  person with their teams — and their open tasks stay where they are, because a
+  task names its assignee rather than pointing at them.
+
+
+- **The interface can be shown in another language.** There was no
+  internationalization layer at all; every string was hardcoded English. There
+  is now a small, tested one: interpolation and plurals, with plural categories
+  taken from `Intl.PluralRules` so a language with four of them is handled by
+  the platform rather than by a rule written here. English ships with the app
+  and every other catalogue is fetched only when chosen, so a language nobody
+  selects costs nothing at first paint. A missing key shows the key rather than
+  falling back to English, which is what keeps a gap visible.
+
+  **The shell is translated; the pages are not yet.** Navigation, the language
+  menu and the offline and update messages go through it — the rest is still
+  hardcoded English, which is the large majority of the strings. The machinery
+  is proven by a second language that is not a copy of English, and
+  `ui/src/i18n/README.md` states the convention and what remains.
+
+- **Tasks can be completed and claimed offline.** They are kept on the device
+  and sent when the connection returns. The idempotency key is generated when
+  the button is pressed rather than when the request is sent, so a flush that
+  succeeds on the server but loses the answer replays instead of completing the
+  task twice. A queued action says "Saved on this device", never "Task
+  completed". If the server refuses one on arrival — the task was claimed by
+  somebody else while the phone was in a pocket — the person is told in a
+  notification that does not disappear, and the entry is dropped rather than
+  retried forever. Only completing and claiming queue; a write with wider
+  consequences still fails outright.
+
+  Offline *reading* is still limited to the application shell: the task list
+  comes over Connect RPC, which is a POST, and the worker's cache is
+  deliberately GET-only. `ui/src/pwa/README.md` says so and names the fix.
+
+- **The task inbox says what a task is about.** Its widest column showed the
+  first eight characters of the process instance's identifier — and those
+  identifiers are time-ordered, so every approval created in the same period
+  showed the same eight characters. It named nothing, and there was no way to
+  tell one row from another. Rows now carry the description the process was
+  started with ("Expense of GBP 1,750"), with a short reference code taken from
+  the *end* of the identifier, where the characters actually differ. The same
+  fix covers the All Tasks list, and a gateway's fallback badge on the canvas
+  now says it has one rather than printing part of a flow's identifier.
+
+- **A project is chosen for you.** Signing in left none selected, so the first
+  thing after entering a password was "Choose a project to continue" — on every
+  screen, every session, even for somebody who belongs to exactly one. The app
+  now keeps whatever is already selected, falls back to the first available when
+  there is nothing selected or the stored one has gone (deleted, or access
+  withdrawn), and only asks when there is genuinely nothing to pick. The empty
+  state says that instead of telling people to choose from a header with nothing
+  in it.
+
+- **The sample data is a working demo.** `./scripts/dev.sh --sample` created
+  none of the groups its own approvals are offered to, so every seeded task sat
+  unclaimed in a queue with no members: the inbox — the screen the demo most
+  needs to show — was empty on a fresh install, while the script's own summary
+  promised approvals waiting in it. It now creates the three groups, a person in
+  each, and puts the admin in all of them. It also starts the supplier check,
+  which fails on purpose, so the incident inbox has something in it too; the
+  summary says the retries have to run out first rather than sending you to look
+  at nothing.
+
+- **Runbooks.** [`docs/runbooks.md`](docs/runbooks.md) covers every alerting
+  rule plus the four incidents that were not written down: a stuck instance, a
+  poison job, an expired connector credential and a database failover. Each
+  entry gives the query to run rather than a description of one, and every
+  destructive step is preceded by the `SELECT` that shows what it will touch.
+
+- **PostgreSQL guidance.** [`docs/postgresql.md`](docs/postgresql.md): pool
+  sizing against the in-flight limit, the three server timeouts that bound
+  failures Metis cannot bound from outside (`statement_timeout`,
+  `idle_in_transaction_session_timeout`, `lock_timeout`), what to watch, and a
+  worked production secret.
+
+- **Missing migrations are visible.** Schema drift is published as
+  `metis_schema_drift_items` and alerted on by `MetisSchemaDrift`, with unit
+  tests proving the rule fires and stays quiet. It was previously a log line
+  only, on a failure that is silent by construction — `/readyz` only pings the
+  database, so a feature returning 500 on every request never paged anybody.
+  `METIS_REFUSE_SCHEMA_DRIFT=true` turns it into a refusal to start.
+
+- **The supply chain is attestable.** The release now publishes a software bill
+  of materials and a maximum-detail provenance attestation, and signs the image
+  with cosign keyless — so there is no long-lived signing key to leak. CI scans
+  the built image for critical vulnerabilities, and Dependabot proposes updates
+  weekly rather than leaving them to be discovered during an incident.
+
+- **The latency targets are measured on the database people deploy.** The SLO
+  suite ran in a job with no DSN, so it measured SQLite; it now runs against
+  PostgreSQL in the dialects job. The load test — a hundred thousand instances —
+  had never run at all, and now runs weekly and on demand.
+
+- **Job throughput is configurable, and a burst drains.** Five workers on a
+  fixed two-second poll, claiming at most five jobs a tick, capped a replica at
+  roughly 2.5 jobs a second regardless of the machine — and a burst of a
+  thousand timers trickled out at that rate with the pool idle in between. The
+  sizing is now `METIS_JOB_WORKERS`, `METIS_JOB_POLL_INTERVAL` and
+  `METIS_JOB_LEASE`, the worker keeps claiming while rounds come back full, and
+  the claim query is ordered oldest-due-first over a new composite index rather
+  than returning whatever the database found convenient.
+
+- **The connection pool is sized.** Only SQLite was ever configured. PostgreSQL,
+  MySQL and SQL Server ran on `database/sql`'s defaults — unlimited open
+  connections and two idle — so a burst could open more than PostgreSQL's
+  default `max_connections` and fail every caller at once, while a steady load
+  reconnected between bursts for no reason. See `METIS_DB_*` in the README.
+
+- **Deployed process definitions are cached.** A definition is immutable once
+  deployed but was read from the database and decoded on every job, every
+  message, every timer and twice per task completion — each read a row whose
+  node and flow columns are large JSON documents. The cache is bounded, evicts
+  least-recently-used, drops on deletion, and is keyed by tenant so a cached
+  copy cannot cross an organization boundary.
+
 ### Fixed
+
+- **The RabbitMQ connector reported messages as sent that the broker never
+  received.** Filling in a URL and a queue — the configuration the connector's
+  own schema advertises as "Queue (Direct Publish)" — published to the default
+  exchange with an *empty* routing key, which routes to nothing. The message was
+  discarded, the service task returned `{"status": "published"}`, the token
+  advanced, and the audit trail recorded a message that was sent. The fallback
+  written to catch this was unreachable: it ran only when the publish returned an
+  error, and an AMQP publish is fire-and-forget, so it never does.
+
+  The queue is now used as the routing key it always was on the default
+  exchange. Beyond that, publishes wait for a **publisher confirm** and are sent
+  **mandatory**, so a broker that rejects a message, a connection that drops
+  mid-publish, and a message nothing is bound to receive are all failures now
+  rather than silent successes — which is what lets the retry and the incident
+  do their jobs. This is a deliberate behaviour change: a publish that used to
+  "succeed" into the void now fails and says why.
+
+  Found by pointing the connector at a real broker for the first time. The suite
+  is `tests/connector/broker_test.go`, gated on `METIS_TEST_RABBITMQ_URL`, with
+  the service added to CI — the build fails on any skipped test, so the gate
+  cannot quietly stop running.
+
+- **The SMTP connector is tested against something that speaks SMTP.** Nothing
+  proved an email was ever handed over or what was in it, so the envelope and the
+  message could have been wrong in any way and the suite would have been green.
+  `tests/connector/smtp_test.go` runs an in-process server and asserts the
+  envelope sender, the recipient, the subject header and the body. It needs no
+  broker and no gating, so it always runs.
+
+- **A catch event with nothing to wait for hung the instance in silence.** The
+  handler returned success while leaving the token where it was, so nothing in
+  the system would ever move it: no incident, no log line, and the only symptom
+  was a process that stopped. A catch event exists to wait for something, so one
+  that names nothing to wait for is a modelling error, and it is refused by name
+  now. The same branch handed a *condition* to the timer service as though the
+  condition were a duration, which is what conditional events replace.
+
+- **A user's inbox ignored the paging it was asked for.**
+  `GET /api/v1/tasks/assignee/{assignee}` declared `page` and `page_size` and
+  the endpoint handed them to `ListTasksByAssigneePaged`, but the decoder read
+  only the path — so the listing most likely to outgrow one page answered its
+  first and nothing could ask for the second. The same omission as the instance
+  listing below, in the place it costs most.
+
+- **The instance listing ignored the paging it was asked for.**
+  `GET /api/v1/instances` declared `page` and `page_size`, and the query behind
+  it ordered and windowed correctly — but the HTTP decoder read only
+  `project_id`, so the parameters never reached the endpoint. Every caller got
+  the first page at the server default, and a project with more instances than
+  that page holds had no way to reach the rest. The decoder now reads them, as
+  the task listing's already did.
+
+### Added
+
+- **`GET /api/v1/tasks?instance_id=` filters tasks to one process instance.**
+  "What is this run waiting on" previously had no answer: the listing took a
+  project and nothing else, so a client holding an instance id had to page the
+  whole project and match, which worked only while the task it wanted was still
+  on a reachable page. The filter is tenant-scoped like the other request-driven
+  reads, so an id from another organization finds nothing rather than somebody
+  else's work. It takes precedence over `project_id`, which an instance already
+  implies, and a malformed one is refused rather than quietly widening the
+  listing to the project.
+
+- **Task responses carry the node's type.** Every task named its node by id
+  alone, so a client could not tell a user task from a manual task from the
+  node — only from `Task.Type`, and only by knowing that `Node.Type`, the
+  obvious place, was never filled in. The type is on the task row already.
+
+  `Node.Name` is deliberately still empty: `UpdateTask` can rename a task, after
+  which its name is no longer the diagram's label for that node, and filling the
+  field from it would hand callers the newer of the two with no way to tell.
+  `Task.Name` is the label to display.
+
+### Changed
+
+- **Soft deletion is declared in the schema rather than remembered at each
+  query.** Every read of a table that soft-deletes now carries `deleted_at IS
+  NULL` because the model says so, not because the query did. One consequence is
+  worth knowing before adding a table: a unique key on such a table covers only
+  the live rows by default, so the value frees up when a row is removed. That is
+  right for a connector key and wrong for a version number, an idempotency key or
+  a participant's username, where reissuing the value would let a second subject
+  inherit the first one's history — those declare that they cover the deleted
+  rows too, and say on the line above why.
+
+  A schema that has drifted from the model is reported at startup rather than
+  altered. Existing tables belong to the numbered migrations; two things deciding
+  the shape of one table means the one that ran last wins.
+
+
+- **The Go SDK moved to its own repository.** It was already its own module —
+  a client for an HTTP API has no business making consumers inherit GORM, goja,
+  RabbitMQ and OpenTelemetry — and it is now published from
+  [gsoultan/metis-sdk](https://github.com/gsoultan/metis-sdk), so it versions
+  independently of the engine it talks to and its own CI fails the build if
+  `go.mod` ever grows a `require` block.
+
+  For anyone importing it, the package name and every exported symbol are
+  unchanged; only the path moves:
+
+  ```go
+  github.com/gsoultan/metis/sdk  →  github.com/gsoultan/metis-sdk
+  ```
+
+  There is no fallback for this one — a nested module path cannot redirect — so
+  it is an edit to make now rather than one with an expiry.
+  [`docs/upgrading.md`](docs/upgrading.md) says so alongside the other renames.
+
+### Fixed
+
+- **The UI was served uncompressed and uncacheable.** The embedded assets went
+  out through a bare file server: no compression and no `Cache-Control`, and the
+  image has no reverse proxy to add either. A first paint was about 1.25 MB on
+  the wire where the same bytes gzip to about 330 kB, and every reload refetched
+  the whole application. Assets are now compressed once at startup, hashed
+  bundles are immutable for a year, the shell revalidates, and conditional
+  requests get a 304.
+
+- **A corrupt config file booted the server onto an empty database.** An
+  unreadable `config.yaml` was a warning, then the server fell back to the
+  environment — and with no `DATABASE_URL` set, that meant creating a *fresh,
+  empty SQLite file* and serving from it. The process passed its own readiness
+  probe while every list in the product was empty and every write went somewhere
+  nobody would look. It now refuses to start and says which file it could not
+  read. Unknown keys are refused too: `databse:` used to parse cleanly as "no
+  database configured".
+
+- **Every deploy froze in-flight jobs for five minutes.** Shutdown cancelled the
+  worker's context and returned. Anything already running was abandoned, and its
+  final status write rode that cancelled context and failed — so the row stayed
+  marked running, holding this worker's lock, until the lease expired. The
+  shipped manifest uses a Recreate strategy, so this happened on every rollout.
+  The worker now stops claiming and waits for what it holds
+  (`METIS_SHUTDOWN_DRAIN`, 20s), and the status write is made on a context that
+  survives the cancellation.
+
+- **Every authenticated request cost about six queries before it started.**
+  Validating a token read the account twice — once for the credential cutoff and
+  once to build the caller — and each read preloaded the user's organizations
+  and projects. One cached read now serves both. The lifetime is five seconds by
+  default and deliberately not longer: the cached value carries the cutoff that
+  ends sessions, so a stale entry would extend a compromised one. Password, role
+  and membership changes drop the entry immediately, which the existing
+  password-change tests prove by failing without it.
+
+- **The interface failed WCAG AA on every screen.** Secondary text measured
+  3.15:1 against the page background where AA asks for 4.5:1 — Mantine's default
+  grey, chosen against pure white, on a page that is slightly grey. Badges and
+  filled buttons were short too, and the shell emitted two `banner` landmarks
+  and two `navigation` landmarks, one nested inside the other, so a screen
+  reader offered indistinguishable duplicates and lost the ability to jump to
+  the header. Section headings jumped from `h1` to `h4` or `h5`, breaking the
+  outline people navigate by.
+
+  Measured with axe across eleven pages: 12 to 33 violations each before, zero
+  after. The colour values are asserted by a unit test against the same surfaces
+  they are used on, so a future palette change fails a test rather than shipping.
+
+- **The signed-webhook feature returned 500 on every installation.** Its two
+  tables were declared by models and given a repository, but no migration
+  created them, so every install newer than the versioning baseline answered the
+  feature's endpoints with "no such table". `/readyz` only pings the database,
+  so nothing ever paged. Migration 12 creates them.
+
+- **The designer deployed processes that could not run.** Three separate ways,
+  each silent: labelling a gateway path deployed the label as the path's
+  *condition*, so a path captioned "Yes" carried the unbound condition `Yes` and
+  was never taken; a "call a web address" step wrote its address and its
+  external topic under names nothing reads, so the step deployed and did
+  nothing at all; and the checks that would have caught an undecidable gateway
+  lived in a module nothing imported, while the Deploy button consulted a much
+  weaker one. Deploy is now held on a gateway whose paths carry no conditions
+  and no fallback, and every message names the step and says what to do.
+
+- **Unsaved work in the designer was thrown away.** The canvas autosaved to the
+  browser every few seconds and never read it back, while the header said "last
+  saved" — so a closed tab lost everything since the last *deploy*, which was
+  the only way to save. The draft is offered back on open, Ctrl-S keeps it
+  rather than publishing, and deploying clears it.
+
+- **An outbound reply could exhaust the server's memory.** Service tasks and
+  connectors read a whole HTTP response into memory with no ceiling, and the URL
+  comes from a user-authored definition. Replies are now bounded and an
+  oversized one is refused rather than truncated.
+
+- **The expression cache stopped caching instead of evicting.** Past 4096
+  distinct expressions nothing new was ever remembered again, so one tenant
+  deploying that many conditions turned parsing back on for the whole
+  installation, permanently and silently. It evicts least-recently-used now.
+
+- **The decision editor had a dead end for a first-time author.** A new result
+  column is created without a process variable, which is an error that disables
+  Save — and the only control that fixed it was hidden behind Advanced → Expert.
+  The variable is always visible now and fills itself in from the column
+  heading. Saving also keeps you in the editor rather than returning to the
+  list, so the try-fix-try loop is possible, and a trial run that matched
+  nothing is no longer reported under a green tick.
+
 
 - **Asking for something that is not there returned 500.** A well-formed
   identifier naming nothing reached GORM, came back as `ErrRecordNotFound`, and

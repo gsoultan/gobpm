@@ -1,5 +1,61 @@
 # Upgrading
 
+## Rehearse it first
+
+`scripts/upgrade-rehearsal.sh <backup-directory>` restores a backup into a
+scratch database, boots this build against it, and checks the things a green
+readiness probe does not: that no process instance was lost, that the columns
+this release renames carried their data across, and that every account still
+belongs to an organization.
+
+It is read-only with respect to production — everything happens in a scratch
+database, which is dropped afterwards unless you pass `--keep`.
+
+Run it. The migrations that rename columns are only reachable *from* the old
+schema, so a fresh install skips them entirely: they were written, reviewed, and
+until this was added, never executed against a table that had the old names.
+The first version of one of them silently left every form without its
+definition. `tests/upgrade` is the automated version of the same rehearsal and
+runs in CI; this is the one that uses your data.
+
+## Moving to PostgreSQL
+
+Metis runs on PostgreSQL and nothing else. SQLite, MySQL and SQL Server were
+supported and are not any more.
+
+An installation on one of them will not start. That is deliberate: the previous
+behaviour for a driver the build did not recognise was to fall back to a local
+SQLite file, which meant coming up healthy and empty — every process, task and
+definition apparently gone, with a successful startup log and a readiness probe
+that passed. Refusing to start says what happened.
+
+To move:
+
+1. **Back up first**, including the encryption key. `scripts/backup.sh` writes
+   both, separately. A database backup without `ENCRYPTION_KEY` restores rows
+   nothing can read.
+2. **Stop the engine.** Migrating a database that is being written to gives you
+   a copy of a moment that never existed.
+3. **Move the data.** There is no built-in converter — the schemas differ in the
+   column types each engine has a word for, which is the reason for the move.
+   `pgloader` handles MySQL and SQLite; for SQL Server, dump and load.
+4. **Point at the new database.** Either set `DATABASE_URL`, or edit
+   `config.yaml` so `database.driver` reads `postgres` and re-encrypt the
+   connection string with the same key.
+5. **Start, and read the first hundred lines.** Schema drift between what is in
+   the database and what this build expects is reported at startup rather than
+   altered.
+
+Why one engine: the storage layer is compiled rather than assembled at run time,
+which is what lets a query's shape be checked before it runs and a soft-delete
+predicate be a property of the schema rather than a rule every call site
+remembers. That compiler emits PostgreSQL. Four dialects also meant four
+spellings of every constraint, three of them exercised by a suite that skipped
+unless somebody had a server running — so "the tests pass" routinely meant
+"SQLite passes", and SQL Server once shipped declaring a column type it has no
+word for.
+
+
 ## GoBPM is now Metis
 
 The project, its module path and its repository are renamed. **An existing
@@ -15,12 +71,28 @@ Nothing, to keep running. One thing, to keep building:
 ```go
 // go.mod, and every import
 github.com/gsoultan/gobpm      →  github.com/gsoultan/metis
-github.com/gsoultan/gobpm/sdk  →  github.com/gsoultan/metis/sdk
+github.com/gsoultan/gobpm/sdk  →  github.com/gsoultan/metis-sdk
 ```
 
 The Go client's package name changed with it — `gobpm.NewClient` is now
 `metis.NewClient`. GitHub redirects the old repository URL, so `git remote` and
 `go get` keep resolving, but the import path in your source has to be edited.
+
+### The Go SDK is its own repository
+
+The client was always its own module; it is now published from its own
+repository, [gsoultan/metis-sdk](https://github.com/gsoultan/metis-sdk), so it
+versions independently of the engine it talks to. If you already moved to the
+`metis` spelling, this is the one further edit:
+
+```go
+github.com/gsoultan/metis/sdk  →  github.com/gsoultan/metis-sdk
+```
+
+Nothing else changes. The package name is still `metis` and every exported
+symbol is identical, so only the import line moves. Unlike the environment
+variables below, this one has no fallback — a nested module path cannot redirect
+— so it is an edit to make now rather than one with an expiry.
 
 ### What still works, and for how long
 

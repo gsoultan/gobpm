@@ -66,7 +66,10 @@ export function EmptyState({
         <Icon size={compact ? 20 : 26} strokeWidth={1.75} />
       </ThemeIcon>
 
-      <Title order={compact ? 5 : 4} ta="center" mt={compact ? 4 : 'xs'}>
+      {/* An empty state's heading sits directly under the page title, so it is
+          an h2 — rendered at the smaller size it always had. As an h4 it made
+          every empty list report an invalid heading order. */}
+      <Title order={2} size={compact ? 'h5' : 'h4'} ta="center" mt={compact ? 4 : 'xs'}>
         {title}
       </Title>
 

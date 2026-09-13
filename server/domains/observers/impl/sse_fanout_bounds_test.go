@@ -6,13 +6,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/gsoultan/metis/server/domains/entities"
 	"github.com/gsoultan/metis/server/repositories/models"
 )
+
+// testScope is one organization's audience. Any resolved scope will do here —
+// these tests are about the bus's bounds, not about who an event reaches — but
+// it has to be resolved, because an unresolved scope is not delivered at all.
+var testScope = entities.SSEScope{Organization: uuid.MustParse("00000000-0000-0000-0000-0000000000ff")}
 
 // slowBus stands in for a database that has stopped keeping up.
 type slowBus struct{ delay time.Duration }
 
-func (s *slowBus) Publish(ctx context.Context, _, _ string) error {
+func (s *slowBus) Publish(ctx context.Context, _ string, _ entities.SSEScope, _ string) error {
 	select {
 	case <-time.After(s.delay):
 		return nil
@@ -49,7 +56,7 @@ func TestPublishingDoesNotGrowWithoutBound(t *testing.T) {
 	// About what one instance of a twenty-node process produces, times a few
 	// hundred instances: a second or two of a busy engine.
 	for range 5000 {
-		observer.Broadcast(map[string]string{"type": "NodeCompleted"})
+		observer.BroadcastTo(testScope, map[string]string{"type": "NodeCompleted"})
 	}
 	time.Sleep(300 * time.Millisecond)
 	growth := runtime.NumGoroutine() - before
@@ -76,7 +83,7 @@ func TestOverflowIsCountedRatherThanSwallowed(t *testing.T) {
 
 	// Comfortably past the queue depth and the workers holding one each.
 	for range publishQueueDepth * 3 {
-		observer.Broadcast(map[string]string{"type": "NodeCompleted"})
+		observer.BroadcastTo(testScope, map[string]string{"type": "NodeCompleted"})
 	}
 
 	if dropped := fanout.dropped.Load(); dropped == 0 {
@@ -96,11 +103,11 @@ func TestASlowBusDoesNotStallLocalDelivery(t *testing.T) {
 		t.Fatalf("start the fan-out: %v", err)
 	}
 
-	browser := observer.AddClient()
+	browser := observer.AddClient(testScope)
 	defer observer.RemoveClient(browser)
 
 	start := time.Now()
-	observer.Broadcast(map[string]string{"type": "TaskCreated"})
+	observer.BroadcastTo(testScope, map[string]string{"type": "TaskCreated"})
 	elapsed := time.Since(start)
 
 	select {

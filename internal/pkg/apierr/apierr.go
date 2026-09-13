@@ -29,6 +29,18 @@ var ErrInvalidArgument = errors.New("invalid argument")
 // confirms the row exists.
 var ErrNotFound = errors.New("not found")
 
+// ErrForbidden marks a request from a caller we know, for something they may
+// not do — hand a colleague's task to someone else, act as an administrator.
+// Distinct from ErrNotFound on purpose: the row exists and the caller may know
+// it does; what they lack is the right, and 403 says so.
+var ErrForbidden = errors.New("forbidden")
+
+// Forbiddenf builds an ErrForbidden with a message that names the missing
+// right, so the person reading it knows who to ask.
+func Forbiddenf(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", ErrForbidden, fmt.Sprintf(format, args...))
+}
+
 // Invalidf builds an ErrInvalidArgument with a message a caller can act on.
 //
 // The message should say which field and why, because "invalid argument" alone

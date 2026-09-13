@@ -43,14 +43,100 @@ func (r GetDefinitionResponse) Failed() error { return r.Err }
 
 type CreateDefinitionRequest struct {
 	Definition *entities.ProcessDefinition `json:"definition,omitzero"`
+
+	// Stage deploys the version without making it live: new instances keep
+	// starting on whichever version is live now, and this one waits to be
+	// promoted.
+	//
+	// Negative ("stage") rather than positive ("promote") so that a client that
+	// has never heard of staging — which is every client written before this
+	// field existed — keeps getting a deploy that goes live.
+	Stage bool `json:"stage,omitzero"`
 }
 
 type CreateDefinitionResponse struct {
 	ID  uuid.UUID `json:"id"`
 	Err error     `json:"err,omitzero"`
+	// Version and Live report what the deploy actually did, so the UI can say
+	// "v4 deployed and live" or "v4 staged, v3 still live" without a second
+	// round trip to find out.
+	Version int  `json:"version,omitzero"`
+	Live    bool `json:"live"`
 }
 
 func (r CreateDefinitionResponse) Failed() error { return r.Err }
+
+// PromoteDefinitionRequest names the version new instances should start on.
+type PromoteDefinitionRequest struct {
+	ProjectID string `json:"project_id"`
+	Key       string `json:"key"`
+	Version   int    `json:"version"`
+}
+
+type PromoteDefinitionResponse struct {
+	Err error `json:"err,omitzero"`
+}
+
+func (r PromoteDefinitionResponse) Failed() error { return r.Err }
+
+// ScheduleDefinitionRequest arranges for a version to take over at a time.
+type ScheduleDefinitionRequest struct {
+	ProjectID string `json:"project_id"`
+	Key       string `json:"key"`
+	Version   int    `json:"version"`
+	// ActivateAt is an RFC 3339 timestamp. A string rather than a parsed time so
+	// a malformed one is the caller's mistake reported as such, rather than a
+	// decode failure that never reaches the endpoint's validation.
+	ActivateAt string `json:"activate_at"`
+}
+
+type ScheduleDefinitionResponse struct {
+	Err error `json:"err,omitzero"`
+}
+
+func (r ScheduleDefinitionResponse) Failed() error { return r.Err }
+
+// CancelScheduledDefinitionRequest names one pending cutover to drop.
+type CancelScheduledDefinitionRequest struct {
+	ProjectID string `json:"project_id"`
+	// ReleaseID names the timeline entry, not the version: the same version can
+	// be scheduled more than once.
+	ReleaseID string `json:"release_id"`
+}
+
+type CancelScheduledDefinitionResponse struct {
+	Err error `json:"err,omitzero"`
+}
+
+func (r CancelScheduledDefinitionResponse) Failed() error { return r.Err }
+
+// ListDefinitionVersionsRequest asks for one process key's version history.
+type ListDefinitionVersionsRequest struct {
+	ProjectID string `json:"project_id"`
+	Key       string `json:"key"`
+}
+
+type ListDefinitionVersionsResponse struct {
+	Versions []entities.DefinitionVersionStatus `json:"versions"`
+	Err      error                              `json:"err,omitzero"`
+}
+
+func (r ListDefinitionVersionsResponse) Failed() error { return r.Err }
+
+// ListLiveVersionsRequest asks which version of each process key is live.
+type ListLiveVersionsRequest struct {
+	ProjectID string `json:"project_id"`
+}
+
+type ListLiveVersionsResponse struct {
+	// Live maps process key to the version new instances start on. A key that
+	// nobody has promoted is absent, which the caller reads the same way the
+	// engine does: the highest version.
+	Live map[string]int `json:"live"`
+	Err  error          `json:"err,omitzero"`
+}
+
+func (r ListLiveVersionsResponse) Failed() error { return r.Err }
 
 type DeleteDefinitionRequest struct {
 	ID string `json:"id"`
@@ -98,3 +184,29 @@ type ImportDefinitionResponse struct {
 }
 
 func (r ImportDefinitionResponse) Failed() error { return r.Err }
+
+// MigrateInstancesRequest moves running instances onto another version.
+//
+// The mapping is only needed where a node changed id. Anything unlisted is
+// carried across unchanged, which is the common case: most edits add or change
+// a node without renaming the ones work is parked on.
+type MigrateInstancesRequest struct {
+	SourceDefinitionID string            `json:"source_definition_id"`
+	TargetDefinitionID string            `json:"target_definition_id"`
+	NodeMapping        map[string]string `json:"node_mapping,omitzero"`
+
+	// DryRun asks what would happen and changes nothing. The default, because
+	// this rewrites instances that are somebody's purchase order — committing
+	// has to be the thing you ask for, not the thing you get by omission.
+	DryRun bool `json:"dry_run,omitzero"`
+}
+
+type MigrateInstancesResponse struct {
+	Plan entities.MigrationPlan `json:"plan"`
+	// Applied says whether anything was written. False for a dry run, and false
+	// for an apply that the plan refused.
+	Applied bool  `json:"applied"`
+	Err     error `json:"err,omitzero"`
+}
+
+func (r MigrateInstancesResponse) Failed() error { return r.Err }

@@ -14,9 +14,10 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/gsoultan/metis/internal/pkg/apierr"
 	"github.com/gsoultan/metis/server/domains/entities"
-	"github.com/gsoultan/metis/server/repositories/gorms"
 	"github.com/gsoultan/metis/server/repositories/models"
+	"github.com/gsoultan/metis/server/repositories/pg"
 	"github.com/gsoultan/metis/tests/testutils"
 	"gorm.io/gorm"
 )
@@ -35,18 +36,21 @@ const (
 	testMaxConns = 2
 )
 
-// forEachDialect runs body against every SQL engine the product supports.
-// PostgreSQL and MySQL skip themselves unless their DSN is configured.
+// forEachDialect runs body against the engine the product supports.
+// The name is kept because every caller says it and there is nothing clearer
+// to call "run this against a database".
 func forEachDialect(t *testing.T, body func(t *testing.T, db *gorm.DB)) {
 	t.Helper()
 
+	// One engine. This ran each case against SQLite and then PostgreSQL, back
+	// when both were supported and the SQLite pass was the only one that ever
+	// ran — the PostgreSQL DSN was set nowhere. Both helpers now open the same
+	// engine, so running twice would assert the same thing twice.
 	engines := []struct {
 		name string
 		open func(*testing.T) *gorm.DB
 	}{
-		{"sqlite", func(t *testing.T) *gorm.DB { return testutils.SetupTestDB(t) }},
 		{"postgres", func(t *testing.T) *gorm.DB { return testutils.SetupPostgresDB(t, testMaxConns) }},
-		{"mysql", func(t *testing.T) *gorm.DB { return testutils.SetupMySQLDB(t, testMaxConns) }},
 	}
 
 	for _, engine := range engines {
@@ -183,7 +187,7 @@ func TestTenantIsolation_ListsExcludeOtherTenants(t *testing.T) {
 			{
 				name: "audit of another tenant's project",
 				read: func() ([]uuid.UUID, error) {
-					rows, err := gorms.NewAuditRepository(db).ListByProject(ctx, f.projectB)
+					rows, err := pg.NewAuditRepository(testutils.StormConn(db)).ListByProject(ctx, f.projectB)
 					return idsOf(rows, func(m models.AuditModel) uuid.UUID { return uuid.UUID(m.ID) }), err
 				},
 				want: nil,
@@ -191,7 +195,7 @@ func TestTenantIsolation_ListsExcludeOtherTenants(t *testing.T) {
 			{
 				name: "audit of another tenant's instance",
 				read: func() ([]uuid.UUID, error) {
-					rows, err := gorms.NewAuditRepository(db).ListByInstance(ctx, f.instanceB)
+					rows, err := pg.NewAuditRepository(testutils.StormConn(db)).ListByInstance(ctx, f.instanceB)
 					return idsOf(rows, func(m models.AuditModel) uuid.UUID { return uuid.UUID(m.ID) }), err
 				},
 				want: nil,
@@ -199,7 +203,7 @@ func TestTenantIsolation_ListsExcludeOtherTenants(t *testing.T) {
 			{
 				name: "audit of own project",
 				read: func() ([]uuid.UUID, error) {
-					rows, err := gorms.NewAuditRepository(db).ListByProject(ctx, f.projectA)
+					rows, err := pg.NewAuditRepository(testutils.StormConn(db)).ListByProject(ctx, f.projectA)
 					return idsOf(rows, func(m models.AuditModel) uuid.UUID { return uuid.UUID(m.ID) }), err
 				},
 				want: []uuid.UUID{f.auditA},
@@ -207,7 +211,7 @@ func TestTenantIsolation_ListsExcludeOtherTenants(t *testing.T) {
 			{
 				name: "forms across all projects",
 				read: func() ([]uuid.UUID, error) {
-					rows, err := gorms.NewFormRepository(db).ListByProject(ctx, uuid.Nil)
+					rows, err := pg.NewFormRepository(testutils.StormConn(db)).ListByProject(ctx, uuid.Nil)
 					return idsOf(rows, func(m models.FormModel) uuid.UUID { return uuid.UUID(m.ID) }), err
 				},
 				want: []uuid.UUID{f.formA},
@@ -215,7 +219,7 @@ func TestTenantIsolation_ListsExcludeOtherTenants(t *testing.T) {
 			{
 				name: "deployments across all projects",
 				read: func() ([]uuid.UUID, error) {
-					rows, err := gorms.NewDeploymentRepository(db).ListByProject(ctx, uuid.Nil)
+					rows, err := pg.NewDeploymentRepository(testutils.StormConn(db)).ListByProject(ctx, uuid.Nil)
 					return idsOf(rows, func(m models.DeploymentModel) uuid.UUID { return uuid.UUID(m.ID) }), err
 				},
 				want: []uuid.UUID{f.deploymentA},
@@ -223,7 +227,7 @@ func TestTenantIsolation_ListsExcludeOtherTenants(t *testing.T) {
 			{
 				name: "deployment resources of another tenant's deployment",
 				read: func() ([]uuid.UUID, error) {
-					rows, err := gorms.NewDeploymentRepository(db).ListResources(ctx, f.deploymentB)
+					rows, err := pg.NewDeploymentRepository(testutils.StormConn(db)).ListResources(ctx, f.deploymentB)
 					return idsOf(rows, func(m models.ResourceModel) uuid.UUID { return uuid.UUID(m.ID) }), err
 				},
 				want: nil,
@@ -231,7 +235,7 @@ func TestTenantIsolation_ListsExcludeOtherTenants(t *testing.T) {
 			{
 				name: "signal correlation cannot cross tenants",
 				read: func() ([]uuid.UUID, error) {
-					rows, err := gorms.NewSubscriptionRepository(db).FindSignals(ctx, f.projectB, sharedSignal)
+					rows, err := pg.NewSubscriptionRepository(testutils.StormConn(db)).FindSignals(ctx, f.projectB, sharedSignal)
 					return idsOf(rows, func(m models.Subscription) uuid.UUID { return uuid.UUID(m.ID) }), err
 				},
 				want: nil,
@@ -239,7 +243,7 @@ func TestTenantIsolation_ListsExcludeOtherTenants(t *testing.T) {
 			{
 				name: "subscriptions of another tenant's instance",
 				read: func() ([]uuid.UUID, error) {
-					rows, err := gorms.NewSubscriptionRepository(db).ListByInstance(ctx, f.instanceB)
+					rows, err := pg.NewSubscriptionRepository(testutils.StormConn(db)).ListByInstance(ctx, f.instanceB)
 					return idsOf(rows, func(m models.Subscription) uuid.UUID { return uuid.UUID(m.ID) }), err
 				},
 				want: nil,
@@ -247,7 +251,7 @@ func TestTenantIsolation_ListsExcludeOtherTenants(t *testing.T) {
 			{
 				name: "external tasks of another tenant's instance",
 				read: func() ([]uuid.UUID, error) {
-					rows, err := gorms.NewExternalTaskRepository(db).ListByProcessInstance(ctx, f.instanceB)
+					rows, err := pg.NewExternalTaskRepository(testutils.StormConn(db)).ListByProcessInstance(ctx, f.instanceB)
 					return idsOf(rows, func(m *models.ExternalTaskModel) uuid.UUID { return uuid.UUID(m.ID) }), err
 				},
 				want: nil,
@@ -258,7 +262,7 @@ func TestTenantIsolation_ListsExcludeOtherTenants(t *testing.T) {
 				// B's task, and both tasks are unlocked and eligible here.
 				name: "worker long-poll on a topic both tenants use",
 				read: func() ([]uuid.UUID, error) {
-					rows, err := gorms.NewExternalTaskRepository(db).FetchAndLock(ctx, sharedTopic, "worker-a", 10, 30_000)
+					rows, err := pg.NewExternalTaskRepository(testutils.StormConn(db)).FetchAndLock(ctx, sharedTopic, "worker-a", 10, 30_000)
 					return idsOf(rows, func(m *models.ExternalTaskModel) uuid.UUID { return uuid.UUID(m.ID) }), err
 				},
 				want: []uuid.UUID{f.externalTaskA},
@@ -266,7 +270,7 @@ func TestTenantIsolation_ListsExcludeOtherTenants(t *testing.T) {
 			{
 				name: "connector instances of another tenant's project",
 				read: func() ([]uuid.UUID, error) {
-					rows, err := gorms.NewConnectorInstanceRepository(db).ListByProject(ctx, f.projectB)
+					rows, err := pg.NewConnectorInstanceRepository(testutils.StormConn(db)).ListByProject(ctx, f.projectB)
 					return idsOf(rows, func(m models.ConnectorInstance) uuid.UUID { return uuid.UUID(m.ID) }), err
 				},
 				want: nil,
@@ -274,7 +278,7 @@ func TestTenantIsolation_ListsExcludeOtherTenants(t *testing.T) {
 			{
 				name: "notifications keep system messages and drop the other tenant's",
 				read: func() ([]uuid.UUID, error) {
-					rows, err := gorms.NewNotificationRepository(db).ListByUser(ctx, sharedUserID)
+					rows, err := pg.NewNotificationRepository(testutils.StormConn(db)).ListByUser(ctx, sharedUserID)
 					return idsOf(rows, func(m models.NotificationModel) uuid.UUID { return uuid.UUID(m.ID) }), err
 				},
 				want: []uuid.UUID{f.notificationA, f.systemNotification},
@@ -305,43 +309,55 @@ func TestTenantIsolation_GetByIDDeniesOtherTenants(t *testing.T) {
 			name string
 			read func() error
 		}{
-			{"form", func() error { _, err := gorms.NewFormRepository(db).Get(ctx, f.formB); return err }},
+			{"form", func() error { _, err := pg.NewFormRepository(testutils.StormConn(db)).Get(ctx, f.formB); return err }},
 			{"form by key", func() error {
-				_, err := gorms.NewFormRepository(db).GetByKey(ctx, f.projectB, sharedFormKey)
+				_, err := pg.NewFormRepository(testutils.StormConn(db)).GetByKey(ctx, f.projectB, sharedFormKey)
 				return err
 			}},
-			{"deployment", func() error { _, err := gorms.NewDeploymentRepository(db).Get(ctx, f.deploymentB); return err }},
+			{"deployment", func() error {
+				_, err := pg.NewDeploymentRepository(testutils.StormConn(db)).Get(ctx, f.deploymentB)
+				return err
+			}},
 			{"deployment resource", func() error {
-				_, err := gorms.NewDeploymentRepository(db).GetResource(ctx, f.resourceB)
+				_, err := pg.NewDeploymentRepository(testutils.StormConn(db)).GetResource(ctx, f.resourceB)
 				return err
 			}},
-			{"external task", func() error { _, err := gorms.NewExternalTaskRepository(db).Get(ctx, f.extB); return err }},
+			{"external task", func() error {
+				_, err := pg.NewExternalTaskRepository(testutils.StormConn(db)).Get(ctx, f.extB)
+				return err
+			}},
 			{"connector instance", func() error {
-				_, err := gorms.NewConnectorInstanceRepository(db).Get(ctx, f.connInstB)
+				_, err := pg.NewConnectorInstanceRepository(testutils.StormConn(db)).Get(ctx, f.connInstB)
 				return err
 			}},
 			{"connector instance by project and connector", func() error {
-				_, err := gorms.NewConnectorInstanceRepository(db).GetByProjectAndConnector(ctx, f.projectB, f.connectorID)
+				_, err := pg.NewConnectorInstanceRepository(testutils.StormConn(db)).GetByProjectAndConnector(ctx, f.projectB, f.connectorID)
 				return err
 			}},
-			{"task", func() error { _, err := gorms.NewTaskRepository(db).Get(ctx, f.taskB); return err }},
-			{"process instance", func() error { _, err := gorms.NewProcessRepository(db).Get(ctx, f.instanceB); return err }},
+			{"task", func() error { _, err := pg.NewTaskRepository(testutils.StormConn(db)).Get(ctx, f.taskB); return err }},
+			{"process instance", func() error {
+				_, err := pg.NewProcessRepository(testutils.StormConn(db)).Get(ctx, f.instanceB)
+				return err
+			}},
 			{"process instance for update", func() error {
-				_, err := gorms.NewProcessRepository(db).GetForUpdate(ctx, f.instanceB)
+				_, err := pg.NewProcessRepository(testutils.StormConn(db)).GetForUpdate(ctx, f.instanceB)
 				return err
 			}},
 			{"process definition", func() error {
-				_, err := gorms.NewDefinitionRepository(db).Get(ctx, f.definitionB)
+				_, err := pg.NewDefinitionRepository(testutils.StormConn(db)).Get(ctx, f.definitionB)
 				return err
 			}},
-			{"decision", func() error { _, err := gorms.NewDecisionRepository(db).Get(ctx, f.decisionB); return err }},
+			{"decision", func() error {
+				_, err := pg.NewDecisionRepository(testutils.StormConn(db)).Get(ctx, f.decisionB)
+				return err
+			}},
 		}
 
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
 				err := tc.read()
-				if !errors.Is(err, gorm.ErrRecordNotFound) {
-					t.Fatalf("reading another tenant's row: got err %v, want %v", err, gorm.ErrRecordNotFound)
+				if !isNotFound(err) {
+					t.Fatalf("reading another tenant's row: got err %v, want a not-found", err)
 				}
 			})
 		}
@@ -359,7 +375,7 @@ func TestTenantIsolation_KeyLookupsStayInTenant(t *testing.T) {
 		t.Run("definition by key resolves to own project", func(t *testing.T) {
 			// B's row has the higher version, so an unscoped "latest wins"
 			// lookup returns B.
-			got, err := gorms.NewDefinitionRepository(db).GetByKey(ctx, sharedDefinitionKey)
+			got, err := pg.NewDefinitionRepository(testutils.StormConn(db)).GetByKey(ctx, sharedDefinitionKey)
 			if err != nil {
 				t.Fatalf("get: %v", err)
 			}
@@ -369,14 +385,14 @@ func TestTenantIsolation_KeyLookupsStayInTenant(t *testing.T) {
 		})
 
 		t.Run("definition by key and version denies another tenant's version", func(t *testing.T) {
-			_, err := gorms.NewDefinitionRepository(db).GetByKeyAndVersion(ctx, sharedDefinitionKey, 2)
-			if !errors.Is(err, gorm.ErrRecordNotFound) {
-				t.Fatalf("got %v, want %v", err, gorm.ErrRecordNotFound)
+			_, err := pg.NewDefinitionRepository(testutils.StormConn(db)).GetByKeyAndVersion(ctx, sharedDefinitionKey, 2)
+			if !isNotFound(err) {
+				t.Fatalf("got %v, want a not-found", err)
 			}
 		})
 
 		t.Run("decision by key resolves to own project", func(t *testing.T) {
-			got, err := gorms.NewDecisionRepository(db).GetByKey(ctx, sharedDecisionKey)
+			got, err := pg.NewDecisionRepository(testutils.StormConn(db)).GetByKey(ctx, sharedDecisionKey)
 			if err != nil {
 				t.Fatalf("get: %v", err)
 			}
@@ -386,9 +402,9 @@ func TestTenantIsolation_KeyLookupsStayInTenant(t *testing.T) {
 		})
 
 		t.Run("decision by key and version denies another tenant's version", func(t *testing.T) {
-			_, err := gorms.NewDecisionRepository(db).GetByKeyAndVersion(ctx, sharedDecisionKey, 2)
-			if !errors.Is(err, gorm.ErrRecordNotFound) {
-				t.Fatalf("got %v, want %v", err, gorm.ErrRecordNotFound)
+			_, err := pg.NewDecisionRepository(testutils.StormConn(db)).GetByKeyAndVersion(ctx, sharedDecisionKey, 2)
+			if !isNotFound(err) {
+				t.Fatalf("got %v, want a not-found", err)
 			}
 		})
 	})
@@ -412,21 +428,21 @@ func TestTenantIsolation_WritesDenyOtherTenants(t *testing.T) {
 		}{
 			{
 				name:  "delete another tenant's form",
-				write: func() error { return gorms.NewFormRepository(db).Delete(ctx, f.formB) },
+				write: func() error { return pg.NewFormRepository(testutils.StormConn(db)).Delete(ctx, f.formB) },
 				unchanged: func() bool {
 					return rowExists(t, db, &models.FormModel{}, "forms", f.formB)
 				},
 			},
 			{
 				name:  "delete another tenant's definition",
-				write: func() error { return gorms.NewDefinitionRepository(db).Delete(ctx, f.definitionB) },
+				write: func() error { return pg.NewDefinitionRepository(testutils.StormConn(db)).Delete(ctx, f.definitionB) },
 				unchanged: func() bool {
 					return rowExists(t, db, &models.ProcessDefinitionModel{}, "process_definitions", f.definitionB)
 				},
 			},
 			{
 				name:  "delete another tenant's decision",
-				write: func() error { return gorms.NewDecisionRepository(db).Delete(ctx, f.decisionB) },
+				write: func() error { return pg.NewDecisionRepository(testutils.StormConn(db)).Delete(ctx, f.decisionB) },
 				unchanged: func() bool {
 					return rowExists(t, db, &models.DecisionDefinitionModel{}, "decision_definitions", f.decisionB)
 				},
@@ -434,7 +450,7 @@ func TestTenantIsolation_WritesDenyOtherTenants(t *testing.T) {
 			{
 				name: "rewrite another tenant's decision",
 				write: func() error {
-					return gorms.NewDecisionRepository(db).Update(ctx, f.decisionB,
+					return pg.NewDecisionRepository(testutils.StormConn(db)).Update(ctx, f.decisionB,
 						models.DecisionDefinitionModel{ProjectID: models.FromUUID(f.projectA), Name: "stolen"})
 				},
 				unchanged: func() bool {
@@ -446,8 +462,10 @@ func TestTenantIsolation_WritesDenyOtherTenants(t *testing.T) {
 				},
 			},
 			{
-				name:  "delete another tenant's connector instance",
-				write: func() error { return gorms.NewConnectorInstanceRepository(db).Delete(ctx, f.connInstB) },
+				name: "delete another tenant's connector instance",
+				write: func() error {
+					return pg.NewConnectorInstanceRepository(testutils.StormConn(db)).Delete(ctx, f.connInstB)
+				},
 				unchanged: func() bool {
 					return rowExists(t, db, &models.ConnectorInstance{}, "connector_instances", f.connInstB)
 				},
@@ -455,7 +473,7 @@ func TestTenantIsolation_WritesDenyOtherTenants(t *testing.T) {
 			{
 				name: "repoint another tenant's connector instance",
 				write: func() error {
-					return gorms.NewConnectorInstanceRepository(db).Update(ctx, models.ConnectorInstance{
+					return pg.NewConnectorInstanceRepository(testutils.StormConn(db)).Update(ctx, models.ConnectorInstance{
 						Base:      models.Base{ID: models.FromUUID(f.connInstB)},
 						ProjectID: models.FromUUID(f.projectA),
 						Name:      "stolen",
@@ -471,14 +489,14 @@ func TestTenantIsolation_WritesDenyOtherTenants(t *testing.T) {
 			},
 			{
 				name:  "delete another tenant's notification",
-				write: func() error { return gorms.NewNotificationRepository(db).Delete(ctx, f.notifB) },
+				write: func() error { return pg.NewNotificationRepository(testutils.StormConn(db)).Delete(ctx, f.notifB) },
 				unchanged: func() bool {
 					return rowExists(t, db, &models.NotificationModel{}, "notifications", f.notifB)
 				},
 			},
 			{
 				name:  "mark another tenant's notification read",
-				write: func() error { return gorms.NewNotificationRepository(db).MarkAsRead(ctx, f.notifB) },
+				write: func() error { return pg.NewNotificationRepository(testutils.StormConn(db)).MarkAsRead(ctx, f.notifB) },
 				unchanged: func() bool {
 					var m models.NotificationModel
 					if err := db.First(&m, "id = ?", models.FromUUID(f.notifB)).Error; err != nil {
@@ -489,7 +507,7 @@ func TestTenantIsolation_WritesDenyOtherTenants(t *testing.T) {
 			},
 			{
 				name:  "delete another tenant's subscription",
-				write: func() error { return gorms.NewSubscriptionRepository(db).Delete(ctx, f.subB) },
+				write: func() error { return pg.NewSubscriptionRepository(testutils.StormConn(db)).Delete(ctx, f.subB) },
 				unchanged: func() bool {
 					return rowExists(t, db, &models.Subscription{}, "event_subscriptions", f.subB)
 				},
@@ -497,7 +515,7 @@ func TestTenantIsolation_WritesDenyOtherTenants(t *testing.T) {
 			{
 				name: "redirect another tenant's correlation key",
 				write: func() error {
-					return gorms.NewSubscriptionRepository(db).UpdateCorrelationKey(ctx, f.subB, "hijacked")
+					return pg.NewSubscriptionRepository(testutils.StormConn(db)).UpdateCorrelationKey(ctx, f.subB, "hijacked")
 				},
 				unchanged: func() bool {
 					var m models.Subscription
@@ -510,7 +528,7 @@ func TestTenantIsolation_WritesDenyOtherTenants(t *testing.T) {
 			{
 				name: "resolve another tenant's external task",
 				write: func() error {
-					return gorms.NewExternalTaskRepository(db).Update(ctx, &models.ExternalTaskModel{
+					return pg.NewExternalTaskRepository(testutils.StormConn(db)).Update(ctx, &models.ExternalTaskModel{
 						Base:      models.Base{ID: models.FromUUID(f.extB)},
 						ProjectID: models.FromUUID(f.projectA),
 						Topic:     "stolen",
@@ -526,7 +544,7 @@ func TestTenantIsolation_WritesDenyOtherTenants(t *testing.T) {
 			},
 			{
 				name:  "delete another tenant's external task",
-				write: func() error { return gorms.NewExternalTaskRepository(db).Delete(ctx, f.extB) },
+				write: func() error { return pg.NewExternalTaskRepository(testutils.StormConn(db)).Delete(ctx, f.extB) },
 				unchanged: func() bool {
 					return rowExists(t, db, &models.ExternalTaskModel{}, "external_tasks", f.extB)
 				},
@@ -534,7 +552,7 @@ func TestTenantIsolation_WritesDenyOtherTenants(t *testing.T) {
 			{
 				name: "move another tenant's task status",
 				write: func() error {
-					return gorms.NewTaskRepository(db).UpdateStatus(ctx, f.taskB, models.TaskCompleted)
+					return pg.NewTaskRepository(testutils.StormConn(db)).UpdateStatus(ctx, f.taskB, models.TaskCompleted)
 				},
 				unchanged: func() bool {
 					var m models.TaskModel
@@ -547,7 +565,7 @@ func TestTenantIsolation_WritesDenyOtherTenants(t *testing.T) {
 			{
 				name: "rewrite another tenant's task",
 				write: func() error {
-					return gorms.NewTaskRepository(db).Update(ctx, models.TaskModel{
+					return pg.NewTaskRepository(testutils.StormConn(db)).Update(ctx, models.TaskModel{
 						Base:      models.Base{ID: models.FromUUID(f.taskB)},
 						ProjectID: models.FromUUID(f.projectA),
 						Name:      "stolen",
@@ -564,7 +582,7 @@ func TestTenantIsolation_WritesDenyOtherTenants(t *testing.T) {
 			{
 				name: "rewrite another tenant's process instance",
 				write: func() error {
-					return gorms.NewProcessRepository(db).Update(ctx, models.ProcessInstanceModel{
+					return pg.NewProcessRepository(testutils.StormConn(db)).Update(ctx, models.ProcessInstanceModel{
 						Base:      models.Base{ID: models.FromUUID(f.instanceB)},
 						ProjectID: models.FromUUID(f.projectA),
 						Status:    models.ProcessFailed,
@@ -582,8 +600,8 @@ func TestTenantIsolation_WritesDenyOtherTenants(t *testing.T) {
 
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
-				if err := tc.write(); !errors.Is(err, gorm.ErrRecordNotFound) {
-					t.Errorf("write: got err %v, want %v", err, gorm.ErrRecordNotFound)
+				if err := tc.write(); !isNotFound(err) {
+					t.Errorf("write: got err %v, want a not-found", err)
 				}
 				if !tc.unchanged() {
 					t.Fatal("the write was refused but the row changed anyway")
@@ -605,25 +623,25 @@ func TestTenantIsolation_OwnWritesStillSucceed(t *testing.T) {
 			write func() error
 		}{
 			{"mark own notification read", func() error {
-				return gorms.NewNotificationRepository(db).MarkAsRead(ctx, f.notificationA)
+				return pg.NewNotificationRepository(testutils.StormConn(db)).MarkAsRead(ctx, f.notificationA)
 			}},
 			{"mark a system notification read", func() error {
-				return gorms.NewNotificationRepository(db).MarkAsRead(ctx, f.systemNotification)
+				return pg.NewNotificationRepository(testutils.StormConn(db)).MarkAsRead(ctx, f.systemNotification)
 			}},
 			{"mark whole inbox read", func() error {
-				return gorms.NewNotificationRepository(db).MarkAllAsRead(ctx, sharedUserID)
+				return pg.NewNotificationRepository(testutils.StormConn(db)).MarkAllAsRead(ctx, sharedUserID)
 			}},
 			{"own task status", func() error {
-				return gorms.NewTaskRepository(db).UpdateStatus(ctx, f.taskA, models.TaskClaimed)
+				return pg.NewTaskRepository(testutils.StormConn(db)).UpdateStatus(ctx, f.taskA, models.TaskClaimed)
 			}},
 			{"own correlation key", func() error {
-				return gorms.NewSubscriptionRepository(db).UpdateCorrelationKey(ctx, f.subscriptionA, "resolved")
+				return pg.NewSubscriptionRepository(testutils.StormConn(db)).UpdateCorrelationKey(ctx, f.subscriptionA, "resolved")
 			}},
 			{"own connector instance", func() error {
 				// Load before saving, the way the service layer does. A model
 				// built from scratch has a zero CreatedAt, which MySQL rejects
 				// in strict mode — that is a Save footgun, not a scope failure.
-				repo := gorms.NewConnectorInstanceRepository(db)
+				repo := pg.NewConnectorInstanceRepository(testutils.StormConn(db))
 				m, err := repo.Get(ctx, f.connectorInstA)
 				if err != nil {
 					return err
@@ -632,7 +650,7 @@ func TestTenantIsolation_OwnWritesStillSucceed(t *testing.T) {
 				return repo.Update(ctx, m)
 			}},
 			{"own form deleted", func() error {
-				return gorms.NewFormRepository(db).Delete(ctx, f.formA)
+				return pg.NewFormRepository(testutils.StormConn(db)).Delete(ctx, f.formA)
 			}},
 		}
 
@@ -663,7 +681,9 @@ func TestTenantIsolation_ProjectsAreScoped(t *testing.T) {
 	forEachDialect(t, func(t *testing.T, db *gorm.DB) {
 		f := seedTenantFixture(t, db)
 		ctx := f.ctxAsA(t)
-		repo := gorms.NewProjectRepository(db)
+		// Projects have moved to storm; the scoping property is the same and
+		// is asserted through the same contract.
+		repo := pg.NewProjectRepository(testutils.StormConn(db))
 
 		t.Run("list returns only the caller's projects", func(t *testing.T) {
 			rows, err := repo.List(ctx)
@@ -683,8 +703,8 @@ func TestTenantIsolation_ProjectsAreScoped(t *testing.T) {
 		})
 
 		t.Run("get denies another tenant's project", func(t *testing.T) {
-			if _, err := repo.Get(ctx, f.projectB); !errors.Is(err, gorm.ErrRecordNotFound) {
-				t.Fatalf("got %v, want %v", err, gorm.ErrRecordNotFound)
+			if _, err := repo.Get(ctx, f.projectB); !errors.Is(err, apierr.ErrNotFound) {
+				t.Fatalf("got %v, want %v", err, apierr.ErrNotFound)
 			}
 		})
 
@@ -695,8 +715,8 @@ func TestTenantIsolation_ProjectsAreScoped(t *testing.T) {
 		})
 
 		t.Run("delete denies another tenant's project", func(t *testing.T) {
-			if err := repo.Delete(ctx, f.projectB); !errors.Is(err, gorm.ErrRecordNotFound) {
-				t.Errorf("got %v, want %v", err, gorm.ErrRecordNotFound)
+			if err := repo.Delete(ctx, f.projectB); !errors.Is(err, apierr.ErrNotFound) {
+				t.Errorf("got %v, want %v", err, apierr.ErrNotFound)
 			}
 			if !rowExists(t, db, &models.ProjectModel{}, "projects", f.projectB) {
 				t.Fatal("the delete was refused but the project is gone")
@@ -709,8 +729,8 @@ func TestTenantIsolation_ProjectsAreScoped(t *testing.T) {
 				OrganizationID: models.FromUUID(f.orgB),
 				Name:           "planted",
 			})
-			if !errors.Is(err, gorm.ErrRecordNotFound) {
-				t.Fatalf("got %v, want %v", err, gorm.ErrRecordNotFound)
+			if !errors.Is(err, apierr.ErrNotFound) {
+				t.Fatalf("got %v, want %v", err, apierr.ErrNotFound)
 			}
 		})
 	})
@@ -733,32 +753,32 @@ func TestTenantIsolation_CreateDeniesForeignProject(t *testing.T) {
 			create func() error
 		}{
 			{"definition", func() error {
-				return gorms.NewDefinitionRepository(db).Create(ctx,
+				return pg.NewDefinitionRepository(testutils.StormConn(db)).Create(ctx,
 					models.ProcessDefinitionModel{Base: newID(), ProjectID: foreign, Key: "planted"})
 			}},
 			{"decision", func() error {
-				return gorms.NewDecisionRepository(db).Create(ctx,
+				return pg.NewDecisionRepository(testutils.StormConn(db)).Create(ctx,
 					models.DecisionDefinitionModel{Base: newID(), ProjectID: foreign, Key: "planted"})
 			}},
 			{"form", func() error {
-				return gorms.NewFormRepository(db).Create(ctx,
+				return pg.NewFormRepository(testutils.StormConn(db)).Create(ctx,
 					models.FormModel{Base: newID(), ProjectID: foreign, Key: "planted"})
 			}},
 			{"deployment", func() error {
-				return gorms.NewDeploymentRepository(db).Create(ctx,
+				return pg.NewDeploymentRepository(testutils.StormConn(db)).Create(ctx,
 					models.DeploymentModel{Base: newID(), ProjectID: foreign, Name: "planted"})
 			}},
 			{"task", func() error {
-				return gorms.NewTaskRepository(db).Create(ctx,
+				return pg.NewTaskRepository(testutils.StormConn(db)).Create(ctx,
 					models.TaskModel{Base: newID(), ProjectID: foreign, Name: "planted"})
 			}},
 			{"process instance", func() error {
-				_, err := gorms.NewProcessRepository(db).Create(ctx,
+				_, err := pg.NewProcessRepository(testutils.StormConn(db)).Create(ctx,
 					models.ProcessInstanceModel{Base: newID(), ProjectID: foreign, Status: models.ProcessActive})
 				return err
 			}},
 			{"connector instance", func() error {
-				_, err := gorms.NewConnectorInstanceRepository(db).Create(ctx,
+				_, err := pg.NewConnectorInstanceRepository(testutils.StormConn(db)).Create(ctx,
 					models.ConnectorInstance{Base: newID(), ProjectID: foreign, Name: "planted"})
 				return err
 			}},
@@ -766,8 +786,8 @@ func TestTenantIsolation_CreateDeniesForeignProject(t *testing.T) {
 
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
-				if err := tc.create(); !errors.Is(err, gorm.ErrRecordNotFound) {
-					t.Fatalf("creating into another tenant's project: got %v, want %v", err, gorm.ErrRecordNotFound)
+				if err := tc.create(); !isNotFound(err) {
+					t.Fatalf("creating into another tenant's project: got %v, want a not-found", err)
 				}
 			})
 		}
@@ -782,12 +802,12 @@ func TestTenantIsolation_CreateIntoOwnProjectSucceeds(t *testing.T) {
 		ctx := f.ctxAsA(t)
 
 		own := models.FromUUID(f.projectA)
-		if err := gorms.NewFormRepository(db).Create(ctx, models.FormModel{
+		if err := pg.NewFormRepository(testutils.StormConn(db)).Create(ctx, models.FormModel{
 			Base: models.Base{ID: models.FromUUID(uuid.New())}, ProjectID: own, Key: "mine",
 		}); err != nil {
 			t.Errorf("create into own project: %v", err)
 		}
-		if err := gorms.NewTaskRepository(db).Create(ctx, models.TaskModel{
+		if err := pg.NewTaskRepository(testutils.StormConn(db)).Create(ctx, models.TaskModel{
 			Base: models.Base{ID: models.FromUUID(uuid.New())}, ProjectID: own, Name: "mine",
 		}); err != nil {
 			t.Errorf("create task into own project: %v", err)
@@ -818,26 +838,29 @@ func TestTenantIsolation_OwnRowsStillReadable(t *testing.T) {
 			name string
 			read func() error
 		}{
-			{"form", func() error { _, err := gorms.NewFormRepository(db).Get(ctx, f.formA); return err }},
+			{"form", func() error { _, err := pg.NewFormRepository(testutils.StormConn(db)).Get(ctx, f.formA); return err }},
 			{"form by key", func() error {
-				_, err := gorms.NewFormRepository(db).GetByKey(ctx, f.projectA, sharedFormKey)
+				_, err := pg.NewFormRepository(testutils.StormConn(db)).GetByKey(ctx, f.projectA, sharedFormKey)
 				return err
 			}},
-			{"deployment", func() error { _, err := gorms.NewDeploymentRepository(db).Get(ctx, f.deploymentA); return err }},
+			{"deployment", func() error {
+				_, err := pg.NewDeploymentRepository(testutils.StormConn(db)).Get(ctx, f.deploymentA)
+				return err
+			}},
 			{"deployment resource", func() error {
-				_, err := gorms.NewDeploymentRepository(db).GetResource(ctx, f.resourceA)
+				_, err := pg.NewDeploymentRepository(testutils.StormConn(db)).GetResource(ctx, f.resourceA)
 				return err
 			}},
 			{"external task", func() error {
-				_, err := gorms.NewExternalTaskRepository(db).Get(ctx, f.externalTaskA)
+				_, err := pg.NewExternalTaskRepository(testutils.StormConn(db)).Get(ctx, f.externalTaskA)
 				return err
 			}},
 			{"connector instance", func() error {
-				_, err := gorms.NewConnectorInstanceRepository(db).Get(ctx, f.connectorInstA)
+				_, err := pg.NewConnectorInstanceRepository(testutils.StormConn(db)).Get(ctx, f.connectorInstA)
 				return err
 			}},
 			{"connector instance by project and connector", func() error {
-				_, err := gorms.NewConnectorInstanceRepository(db).GetByProjectAndConnector(ctx, f.projectA, f.connectorID)
+				_, err := pg.NewConnectorInstanceRepository(testutils.StormConn(db)).GetByProjectAndConnector(ctx, f.projectA, f.connectorID)
 				return err
 			}},
 		}
@@ -850,7 +873,7 @@ func TestTenantIsolation_OwnRowsStillReadable(t *testing.T) {
 		}
 
 		t.Run("own deployment resources", func(t *testing.T) {
-			rows, err := gorms.NewDeploymentRepository(db).ListResources(ctx, f.deploymentA)
+			rows, err := pg.NewDeploymentRepository(testutils.StormConn(db)).ListResources(ctx, f.deploymentA)
 			if err != nil {
 				t.Fatalf("list: %v", err)
 			}
@@ -858,7 +881,7 @@ func TestTenantIsolation_OwnRowsStillReadable(t *testing.T) {
 		})
 
 		t.Run("own signals", func(t *testing.T) {
-			rows, err := gorms.NewSubscriptionRepository(db).FindSignals(ctx, f.projectA, sharedSignal)
+			rows, err := pg.NewSubscriptionRepository(testutils.StormConn(db)).FindSignals(ctx, f.projectA, sharedSignal)
 			if err != nil {
 				t.Fatalf("find: %v", err)
 			}
@@ -876,14 +899,14 @@ func TestTenantIsolation_NoTenantContextReadsEverything(t *testing.T) {
 		f := seedTenantFixture(t, db)
 		ctx := t.Context()
 
-		forms, err := gorms.NewFormRepository(db).ListByProject(ctx, uuid.Nil)
+		forms, err := pg.NewFormRepository(testutils.StormConn(db)).ListByProject(ctx, uuid.Nil)
 		if err != nil {
 			t.Fatalf("list forms: %v", err)
 		}
 		assertSameIDs(t, idsOf(forms, func(m models.FormModel) uuid.UUID { return uuid.UUID(m.ID) }),
 			[]uuid.UUID{f.formA, f.formB})
 
-		notifications, err := gorms.NewNotificationRepository(db).ListByUser(ctx, sharedUserID)
+		notifications, err := pg.NewNotificationRepository(testutils.StormConn(db)).ListByUser(ctx, sharedUserID)
 		if err != nil {
 			t.Fatalf("list notifications: %v", err)
 		}
@@ -919,4 +942,15 @@ func assertSameIDs(t *testing.T, got, want []uuid.UUID) {
 			t.Fatalf("missing %v in %v", id, got)
 		}
 	}
+}
+
+// isNotFound accepts either sentinel a repository may answer a denial with.
+//
+// The GORM repositories return gorm.ErrRecordNotFound; the storm ones return
+// apierr.ErrNotFound, which is what every repository will return once the port
+// finishes — a persistence contract that leaks its ORM's sentinel is one of the
+// things the port removes. Accepting both is temporary and deliberate: the
+// property under test is that the row is denied, not which package named it.
+func isNotFound(err error) bool {
+	return errors.Is(err, gorm.ErrRecordNotFound) || errors.Is(err, apierr.ErrNotFound)
 }

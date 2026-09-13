@@ -112,7 +112,7 @@ func validRequestWith(encryptionKey, jwtSecret string) contracts.SetupRequest {
 		AdminFullName:    "Admin",
 		AdminPublicName:  "Admin",
 		OrganizationName: "Org",
-		DatabaseDriver:   "sqlite",
+		DatabaseDriver:   "postgres",
 		EncryptionKey:    encryptionKey,
 		JWTSecret:        jwtSecret,
 	}

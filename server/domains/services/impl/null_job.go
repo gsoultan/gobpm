@@ -24,6 +24,9 @@ func (s *NullJobService) EnqueueBoundaryTimer(_ context.Context, _ entities.Proc
 
 func (s *NullJobService) StartWorkers(_ context.Context) {}
 
+// StopWorkers has nothing in flight: this service never started a worker.
+func (s *NullJobService) StopWorkers(_ context.Context) error { return nil }
+
 // ProcessPendingJobs has nothing to process: this service never enqueues.
 func (s *NullJobService) ProcessPendingJobs(_ context.Context) error { return nil }
 

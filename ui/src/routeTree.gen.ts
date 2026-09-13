@@ -23,6 +23,7 @@ import { Route as AuthenticatedInboxRouteImport } from './routes/_authenticated.
 import { Route as AuthenticatedInstancesRouteImport } from './routes/_authenticated.instances'
 import { Route as AuthenticatedModelsRouteImport } from './routes/_authenticated.models'
 import { Route as AuthenticatedOrganizationsRouteImport } from './routes/_authenticated.organizations'
+import { Route as AuthenticatedPeopleRouteImport } from './routes/_authenticated.people'
 import { Route as AuthenticatedProfileRouteImport } from './routes/_authenticated.profile'
 import { Route as AuthenticatedProjectsRouteImport } from './routes/_authenticated.projects'
 import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated.settings'
@@ -115,6 +116,13 @@ const AuthenticatedOrganizationsRoute =
   } as any).lazy(() =>
     import('./routes/_authenticated.organizations.lazy').then((d) => d.Route),
   )
+const AuthenticatedPeopleRoute = AuthenticatedPeopleRouteImport.update({
+  id: '/people',
+  path: '/people',
+  getParentRoute: () => AuthenticatedRoute,
+} as any).lazy(() =>
+  import('./routes/_authenticated.people.lazy').then((d) => d.Route),
+)
 const AuthenticatedProfileRoute = AuthenticatedProfileRouteImport.update({
   id: '/profile',
   path: '/profile',
@@ -161,6 +169,7 @@ export interface FileRoutesByFullPath {
   '/instances': typeof AuthenticatedInstancesRoute
   '/models': typeof AuthenticatedModelsRoute
   '/organizations': typeof AuthenticatedOrganizationsRoute
+  '/people': typeof AuthenticatedPeopleRoute
   '/profile': typeof AuthenticatedProfileRoute
   '/projects': typeof AuthenticatedProjectsRoute
   '/settings': typeof AuthenticatedSettingsRoute
@@ -180,6 +189,7 @@ export interface FileRoutesByTo {
   '/instances': typeof AuthenticatedInstancesRoute
   '/models': typeof AuthenticatedModelsRoute
   '/organizations': typeof AuthenticatedOrganizationsRoute
+  '/people': typeof AuthenticatedPeopleRoute
   '/profile': typeof AuthenticatedProfileRoute
   '/projects': typeof AuthenticatedProjectsRoute
   '/settings': typeof AuthenticatedSettingsRoute
@@ -202,6 +212,7 @@ export interface FileRoutesById {
   '/_authenticated/instances': typeof AuthenticatedInstancesRoute
   '/_authenticated/models': typeof AuthenticatedModelsRoute
   '/_authenticated/organizations': typeof AuthenticatedOrganizationsRoute
+  '/_authenticated/people': typeof AuthenticatedPeopleRoute
   '/_authenticated/profile': typeof AuthenticatedProfileRoute
   '/_authenticated/projects': typeof AuthenticatedProjectsRoute
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
@@ -225,6 +236,7 @@ export interface FileRouteTypes {
     | '/instances'
     | '/models'
     | '/organizations'
+    | '/people'
     | '/profile'
     | '/projects'
     | '/settings'
@@ -244,6 +256,7 @@ export interface FileRouteTypes {
     | '/instances'
     | '/models'
     | '/organizations'
+    | '/people'
     | '/profile'
     | '/projects'
     | '/settings'
@@ -265,6 +278,7 @@ export interface FileRouteTypes {
     | '/_authenticated/instances'
     | '/_authenticated/models'
     | '/_authenticated/organizations'
+    | '/_authenticated/people'
     | '/_authenticated/profile'
     | '/_authenticated/projects'
     | '/_authenticated/settings'
@@ -379,6 +393,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedOrganizationsRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/people': {
+      id: '/_authenticated/people'
+      path: '/people'
+      fullPath: '/people'
+      preLoaderRoute: typeof AuthenticatedPeopleRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/profile': {
       id: '/_authenticated/profile'
       path: '/profile'
@@ -428,6 +449,7 @@ interface AuthenticatedRouteChildren {
   AuthenticatedInstancesRoute: typeof AuthenticatedInstancesRoute
   AuthenticatedModelsRoute: typeof AuthenticatedModelsRoute
   AuthenticatedOrganizationsRoute: typeof AuthenticatedOrganizationsRoute
+  AuthenticatedPeopleRoute: typeof AuthenticatedPeopleRoute
   AuthenticatedProfileRoute: typeof AuthenticatedProfileRoute
   AuthenticatedProjectsRoute: typeof AuthenticatedProjectsRoute
   AuthenticatedSettingsRoute: typeof AuthenticatedSettingsRoute
@@ -447,6 +469,7 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedInstancesRoute: AuthenticatedInstancesRoute,
   AuthenticatedModelsRoute: AuthenticatedModelsRoute,
   AuthenticatedOrganizationsRoute: AuthenticatedOrganizationsRoute,
+  AuthenticatedPeopleRoute: AuthenticatedPeopleRoute,
   AuthenticatedProfileRoute: AuthenticatedProfileRoute,
   AuthenticatedProjectsRoute: AuthenticatedProjectsRoute,
   AuthenticatedSettingsRoute: AuthenticatedSettingsRoute,

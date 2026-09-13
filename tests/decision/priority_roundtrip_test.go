@@ -19,7 +19,7 @@ import (
 func TestOutputPriorityOrderSurvivesASave(t *testing.T) {
 	db := testutils.SetupTestDB(t)
 	ctx := t.Context()
-	repo := repositories.NewRepository(db)
+	repo := repositories.NewRepository(testutils.StormConn(db))
 	svc := impl.NewDecisionService(repo, impl.NewDecisionTableEvaluator(impl.NewFEELEvaluator()))
 
 	id, err := svc.CreateDecision(ctx, entities.DecisionDefinition{

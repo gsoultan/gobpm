@@ -24,7 +24,7 @@ func newPostgresEngine(t *testing.T, db *gorm.DB) (repositories.Repository, *ser
 	t.Helper()
 	ctx := t.Context()
 
-	repo := repositories.NewRepository(db)
+	repo := repositories.NewRepository(testutils.StormConn(db))
 	dispatcher := observersimpl.NewEventDispatcher()
 	engine := serviceimpl.NewExecutionEngine(repo, dispatcher)
 	connectorSvc := serviceimpl.NewConnectorService(repo)

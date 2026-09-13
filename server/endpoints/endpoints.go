@@ -8,11 +8,15 @@ import (
 	"github.com/gsoultan/metis/server/endpoints/connector"
 	"github.com/gsoultan/metis/server/endpoints/decision"
 	"github.com/gsoultan/metis/server/endpoints/definition"
+	"github.com/gsoultan/metis/server/endpoints/environment"
 	"github.com/gsoultan/metis/server/endpoints/external_task"
 	"github.com/gsoultan/metis/server/endpoints/group"
 	"github.com/gsoultan/metis/server/endpoints/incident"
 	"github.com/gsoultan/metis/server/endpoints/notification"
 	"github.com/gsoultan/metis/server/endpoints/organization"
+	"github.com/gsoultan/metis/server/endpoints/participant"
+	"github.com/gsoultan/metis/server/endpoints/participantsource"
+	"github.com/gsoultan/metis/server/endpoints/platformuser"
 	"github.com/gsoultan/metis/server/endpoints/process"
 	"github.com/gsoultan/metis/server/endpoints/project"
 	"github.com/gsoultan/metis/server/endpoints/setup"
@@ -23,21 +27,25 @@ import (
 )
 
 type Endpoints struct {
-	Collaboration collaboration.Endpoints
-	Connector     connector.Endpoints
-	Decision      decision.Endpoints
-	Webhook       webhook.Endpoints
-	Definition    definition.Endpoints
-	ExternalTask  external_task.Endpoints
-	Incident      incident.Endpoints
-	Organization  organization.Endpoints
-	Process       process.Endpoints
-	Project       project.Endpoints
-	Setup         setup.Endpoints
-	Task          task.Endpoints
-	User          user.Endpoints
-	Group         group.Endpoints
-	Notification  notification.Endpoints
+	Collaboration     collaboration.Endpoints
+	Connector         connector.Endpoints
+	Decision          decision.Endpoints
+	Webhook           webhook.Endpoints
+	Definition        definition.Endpoints
+	Environment       environment.Endpoints
+	Participant       participant.Endpoints
+	ParticipantSource participantsource.Endpoints
+	PlatformUser      platformuser.Endpoints
+	ExternalTask      external_task.Endpoints
+	Incident          incident.Endpoints
+	Organization      organization.Endpoints
+	Process           process.Endpoints
+	Project           project.Endpoints
+	Setup             setup.Endpoints
+	Task              task.Endpoints
+	User              user.Endpoints
+	Group             group.Endpoints
+	Notification      notification.Endpoints
 }
 
 // Failer is an interface that should be implemented by response types that can fail.
@@ -107,6 +115,47 @@ func MakeEndpoints(s services.ServiceFacade) Endpoints {
 	webhookEndpoints.DeleteWebhook = designer("DeleteWebhook")(webhookEndpoints.DeleteWebhook)
 
 	definitionEndpoints := definition.MakeEndpoints(s)
+
+	// An environment names a database and the credentials to reach it, so every
+	// operation on one is administrative — reading the list included, because
+	// the list says where each runtime lives.
+	environmentEndpoints := environment.MakeEndpoints(s)
+	environmentEndpoints.ListEnvironments = adminOnly("ListEnvironments")(environmentEndpoints.ListEnvironments)
+	environmentEndpoints.SaveEnvironment = adminOnly("SaveEnvironment")(environmentEndpoints.SaveEnvironment)
+	environmentEndpoints.DeleteEnvironment = adminOnly("DeleteEnvironment")(environmentEndpoints.DeleteEnvironment)
+	// Takes a host and a port and reports what happened to the attempt, which is
+	// a network probe. The setup wizard's public equivalent closes as soon as the
+	// installation is configured; this is the one that replaces it.
+	environmentEndpoints.TestConnection = adminOnly("TestEnvironmentConnection")(environmentEndpoints.TestConnection)
+
+	// Reading a project's participants is ordinary work — a designer picking an
+	// assignee needs it. Importing is not: it takes an endpoint address or a
+	// database connection and a query, which are a network probe and arbitrary
+	// SQL respectively, so it takes the designer role at least.
+	participantEndpoints := participant.MakeEndpoints(s)
+	participantEndpoints.ListParticipants = protected("ListParticipants")(participantEndpoints.ListParticipants)
+	participantEndpoints.ImportParticipants = designer("ImportParticipants")(participantEndpoints.ImportParticipants)
+	// Removing somebody takes the same role importing does — they are the same
+	// act in opposite directions, and the removal is reversible by an import.
+	participantEndpoints.RemoveParticipant = designer("RemoveParticipant")(participantEndpoints.RemoveParticipant)
+
+	// A directory source holds a connection string or an endpoint token, so
+	// every operation on one is administrative — reading the list included,
+	// because the list says where each directory lives.
+	sourceEndpoints := participantsource.MakeEndpoints(s)
+	sourceEndpoints.ListSources = adminOnly("ListParticipantSources")(sourceEndpoints.ListSources)
+	sourceEndpoints.SaveSource = adminOnly("SaveParticipantSource")(sourceEndpoints.SaveSource)
+	sourceEndpoints.DeleteSource = adminOnly("DeleteParticipantSource")(sourceEndpoints.DeleteSource)
+	sourceEndpoints.SyncSource = adminOnly("SyncParticipantSource")(sourceEndpoints.SyncSource)
+
+	// Platform accounts are administrative in full, listing included: the list
+	// is who can reconfigure this installation, which is the first thing an
+	// attacker with a designer's token would want to read.
+	accountEndpoints := platformuser.MakeEndpoints(s)
+	accountEndpoints.ListAccounts = adminOnly("ListPlatformUsers")(accountEndpoints.ListAccounts)
+	accountEndpoints.SaveAccount = adminOnly("SavePlatformUser")(accountEndpoints.SaveAccount)
+	accountEndpoints.DeleteAccount = adminOnly("DeletePlatformUser")(accountEndpoints.DeleteAccount)
+	accountEndpoints.SetRoles = adminOnly("SetPlatformRoles")(accountEndpoints.SetRoles)
 	definitionEndpoints.ListDefinitions = protected("ListDefinitions")(definitionEndpoints.ListDefinitions)
 	definitionEndpoints.CreateDefinition = designer("CreateDefinition")(definitionEndpoints.CreateDefinition)
 	definitionEndpoints.GetDefinition = protected("GetDefinition")(definitionEndpoints.GetDefinition)
@@ -114,6 +163,21 @@ func MakeEndpoints(s services.ServiceFacade) Endpoints {
 	definitionEndpoints.ExportDefinition = protected("ExportDefinition")(definitionEndpoints.ExportDefinition)
 	definitionEndpoints.ImportDefinition = designer("ImportDefinition")(definitionEndpoints.ImportDefinition)
 	definitionEndpoints.ListJavaScriptConditions = protected("ListJavaScriptConditions")(definitionEndpoints.ListJavaScriptConditions)
+	// Promoting is a write that changes which model every future instance runs,
+	// so it takes the designer role rather than the read role — the same bar as
+	// deploying the version in the first place.
+	definitionEndpoints.PromoteDefinition = designer("PromoteDefinition")(definitionEndpoints.PromoteDefinition)
+	definitionEndpoints.ListDefinitionVersions = protected("ListDefinitionVersions")(definitionEndpoints.ListDefinitionVersions)
+	definitionEndpoints.ListLiveVersions = protected("ListLiveVersions")(definitionEndpoints.ListLiveVersions)
+	// Scheduling and cancelling change which model future instances run, so they
+	// take the designer role — the same bar as promoting now.
+	definitionEndpoints.ScheduleDefinition = designer("ScheduleDefinition")(definitionEndpoints.ScheduleDefinition)
+	definitionEndpoints.CancelScheduledDefinition = designer("CancelScheduledDefinition")(definitionEndpoints.CancelScheduledDefinition)
+	// Administrative rather than designer: this rewrites instances that have
+	// already been started — somebody's purchase order, somebody's leave
+	// request — where every other action on this page only decides what future
+	// instances will run.
+	definitionEndpoints.MigrateInstances = adminOnly("MigrateInstances")(definitionEndpoints.MigrateInstances)
 
 	externalTaskEndpoints := external_task.MakeEndpoints(s)
 	externalTaskEndpoints.FetchAndLockExternal = protected("FetchAndLockExternal")(externalTaskEndpoints.FetchAndLockExternal)
@@ -202,20 +266,24 @@ func MakeEndpoints(s services.ServiceFacade) Endpoints {
 	notificationEndpoints.DeleteNotification = protected("DeleteNotification")(notificationEndpoints.DeleteNotification)
 
 	return Endpoints{
-		Collaboration: collaborationEndpoints,
-		Connector:     connectorEndpoints,
-		Decision:      decisionEndpoints,
-		Webhook:       webhookEndpoints,
-		Definition:    definitionEndpoints,
-		ExternalTask:  externalTaskEndpoints,
-		Incident:      incidentEndpoints,
-		Organization:  organizationEndpoints,
-		Process:       processEndpoints,
-		Project:       projectEndpoints,
-		Setup:         setupEndpoints,
-		Task:          taskEndpoints,
-		User:          userEndpoints,
-		Group:         groupEndpoints,
-		Notification:  notificationEndpoints,
+		Collaboration:     collaborationEndpoints,
+		Connector:         connectorEndpoints,
+		Decision:          decisionEndpoints,
+		Webhook:           webhookEndpoints,
+		Definition:        definitionEndpoints,
+		Environment:       environmentEndpoints,
+		Participant:       participantEndpoints,
+		ParticipantSource: sourceEndpoints,
+		PlatformUser:      accountEndpoints,
+		ExternalTask:      externalTaskEndpoints,
+		Incident:          incidentEndpoints,
+		Organization:      organizationEndpoints,
+		Process:           processEndpoints,
+		Project:           projectEndpoints,
+		Setup:             setupEndpoints,
+		Task:              taskEndpoints,
+		User:              userEndpoints,
+		Group:             groupEndpoints,
+		Notification:      notificationEndpoints,
 	}
 }

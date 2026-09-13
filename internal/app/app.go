@@ -16,8 +16,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/gsoultan/metis/internal/pkg/envvar"
 	"github.com/gsoultan/metis/internal/pkg/features"
@@ -32,6 +35,7 @@ import (
 	"github.com/gsoultan/metis/internal/pkg/auth"
 	"github.com/gsoultan/metis/internal/pkg/config"
 	"github.com/gsoultan/metis/internal/pkg/crypto"
+	"github.com/gsoultan/metis/internal/pkg/dbpool"
 	"github.com/gsoultan/metis/internal/pkg/health"
 	"github.com/gsoultan/metis/internal/pkg/logger"
 	"github.com/gsoultan/metis/internal/pkg/metrics"
@@ -39,6 +43,7 @@ import (
 	"github.com/gsoultan/metis/server/domains/entities"
 	"github.com/gsoultan/metis/server/domains/observers/impl"
 	"github.com/gsoultan/metis/server/domains/services"
+	servicecontracts "github.com/gsoultan/metis/server/domains/services/contracts"
 	serviceimpl "github.com/gsoultan/metis/server/domains/services/impl"
 	"github.com/gsoultan/metis/server/endpoints"
 	"github.com/gsoultan/metis/server/interceptors"
@@ -47,19 +52,16 @@ import (
 	"github.com/gsoultan/metis/server/interceptors/security"
 	"github.com/gsoultan/metis/server/interceptors/tenant"
 	"github.com/gsoultan/metis/server/repositories"
+	stormdb "github.com/gsoultan/metis/server/repositories/db"
 	gorms "github.com/gsoultan/metis/server/repositories/gorms"
 	"github.com/gsoultan/metis/server/repositories/migrations"
 	models "github.com/gsoultan/metis/server/repositories/models"
 	"github.com/gsoultan/metis/server/transports/grpcs"
 	https "github.com/gsoultan/metis/server/transports/https"
 
-	"github.com/glebarez/sqlite"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
-	"gorm.io/driver/mysql"
-	"gorm.io/driver/postgres"
-	"gorm.io/driver/sqlserver"
 	"gorm.io/gorm"
 )
 
@@ -76,12 +78,25 @@ import (
 var version = "dev"
 
 type App struct {
-	db         *gorm.DB
+	db *gorm.DB
+	// storm is the PostgreSQL connection the ported repositories use. Nil on any
+	// other engine, and on an installation that has not been set up yet.
+	storm *stormdb.Conn
+	// participants is memoised so the import path and the syncer share one
+	// service. Two would be two answers to what an import means.
+	participants servicecontracts.WorkflowUserService
+	// accounts is memoised for the same reason: the boot-time role seeding and
+	// the API must be the same service, not two views of the same table.
+	accounts   servicecontracts.PlatformUserService
 	repo       repositories.Repository
 	svc        services.ServiceFacade
 	sse        *impl.SSEObserver
 	validator  *auth.TokenValidator
 	initDBOnce func()
+	// schemaDrift is how many model changes are missing a migration, published
+	// as a metric so a shipped-but-broken feature pages somebody. Read at scrape
+	// time, written once at startup, so it is atomic.
+	schemaDrift atomic.Int64
 }
 
 const (
@@ -96,6 +111,7 @@ const (
 	defaultHTTPMaxHeaderBytes            = 1 << 20
 	defaultPprofAddress                  = "127.0.0.1:6060"
 	envPprofEnabled                      = "METIS_PPROF_ENABLED"
+	envRefuseSchemaDrift                 = "METIS_REFUSE_SCHEMA_DRIFT"
 	envPprofAddress                      = "METIS_PPROF_ADDRESS"
 
 	// Metrics listen on their own address, away from the public API, so a
@@ -191,43 +207,6 @@ func newPprofHandler() http.Handler {
 	return mux
 }
 
-// sqliteDSNWithBusyTimeout gives a SQLite DSN a lock-wait budget.
-//
-// Without one, SQLite answers a locked database with SQLITE_BUSY immediately,
-// and the very first install hits it: the job worker polls every two seconds,
-// so an API write racing one poll returned "database is locked (5)" to the
-// user. Five seconds of patience is the difference between a working install
-// and one that fails on its second request.
-func sqliteDSNWithBusyTimeout(dsn string) string {
-	if strings.Contains(dsn, "_pragma=busy_timeout") {
-		return dsn
-	}
-	separator := "?"
-	if strings.Contains(dsn, "?") {
-		separator = "&"
-	}
-	return dsn + separator + "_pragma=busy_timeout(5000)"
-}
-
-// serializeSQLitePool caps a SQLite connection pool at one connection.
-//
-// SQLite is a single-writer file database, and a pool pretends otherwise. Two
-// pooled connections inside transactions deadlock the classic way: one holds a
-// read lock and asks to write while the other holds the write lock — and for
-// that upgrade SQLite returns SQLITE_BUSY immediately, busy_timeout ignored by
-// design. The very first install hit it: the job worker polls in transactions
-// every two seconds, so the second API write raced one and failed with
-// "database is locked". One connection makes the pool tell the truth. The
-// server databases — Postgres, MySQL, SQL Server — keep their real pools.
-func serializeSQLitePool(db *gorm.DB) {
-	if db.Name() != "sqlite" {
-		return
-	}
-	if sqlDB, err := db.DB(); err == nil {
-		sqlDB.SetMaxOpenConns(1)
-	}
-}
-
 func newHTTPServer(address string, handler http.Handler) *http.Server {
 	return &http.Server{
 		Addr:              address,
@@ -286,13 +265,42 @@ func (a *App) Run() error {
 		return err
 	}
 
-	// 2. Initialize DB with GORM
+	// 2. Open the database with GORM, which owns the schema.
 	if err := a.setupDatabase(); err != nil {
+		return err
+	}
+
+	// 2a. Open the storm connection *before* the migrations run.
+	//
+	//     Two of the migrations are backfills that read and write application
+	//     data, and every repository is on storm — so a migration list built
+	//     before this point hands them a nil connection and the first backfill
+	//     panics on a fresh install. It is only the connection here; the schema
+	//     work it used to do with it now happens after the migrations, because
+	//     it reconciles columns those migrations create.
+	if err := a.openStorm(ctx); err != nil {
+		return err
+	}
+
+	// 2b. Bring the schema up to date, then reconcile what storm writes against.
+	if err := a.migrate(); err != nil {
+		return err
+	}
+	if err := a.ensureStormSchema(ctx); err != nil {
 		return err
 	}
 
 	// 3. Initialize Domain
 	if err := a.setupService(ctx); err != nil {
+		return err
+	}
+
+	// 3a. Connect to each environment's own database.
+	//
+	// After the domain, because the list of environments is read through the
+	// repository, and before the transports, because a listener is bound per
+	// environment. One environment that will not open does not stop the others.
+	if err := a.openEnvironments(ctx); err != nil {
 		return err
 	}
 
@@ -504,10 +512,12 @@ func (a *App) setupDatabase() error {
 	if err != nil {
 		return fmt.Errorf("failed to open db: %w", err)
 	}
-	serializeSQLitePool(db)
+	dbpool.Apply(db)
 	a.db = db
-
-	return a.migrate()
+	// Migrating is a separate step now: the backfills among the migrations read
+	// and write through repositories, which need the storm connection that is
+	// opened between this and a.migrate().
+	return nil
 }
 
 func (a *App) migrate() error {
@@ -556,7 +566,7 @@ func (a *App) migrationList() []migrations.Migration {
 			// inbound correlation value can match. Until they are repaired every
 			// instance waiting on a message event hangs.
 			Run: func(ctx context.Context, tx *gorm.DB) error {
-				_, err := serviceimpl.BackfillMessageCorrelationKeys(ctx, repositories.NewRepository(tx))
+				_, err := serviceimpl.BackfillMessageCorrelationKeys(ctx, repositories.NewRepository(a.storm))
 				return err
 			},
 		},
@@ -570,7 +580,7 @@ func (a *App) migrationList() []migrations.Migration {
 			// recorded: restarting its iterations from zero, or forgetting the
 			// branches that had already reached a waiting gateway.
 			Run: func(ctx context.Context, tx *gorm.DB) error {
-				_, err := serviceimpl.BackfillEngineBookkeeping(ctx, repositories.NewRepository(tx))
+				_, err := serviceimpl.BackfillEngineBookkeeping(ctx, repositories.NewRepository(a.storm))
 				return err
 			},
 		},
@@ -590,13 +600,30 @@ func (a *App) reportSchemaDrift() {
 		log.Warn().Err(err).Msg("Could not check the schema against the models")
 		return
 	}
+	a.schemaDrift.Store(int64(len(drift)))
 	for _, item := range drift {
 		log.Warn().Str("drift", item).Msg("Schema drift: a model change is missing its migration")
 	}
+
+	// Refusing is opt-in. The default stays a warning because an operator
+	// restarting a service at 3am should not be blocked by a column the running
+	// code may never read — but an installation that would rather fail loudly at
+	// deploy time than serve a broken feature can say so.
+	if len(drift) > 0 && refuseSchemaDrift() {
+		log.Fatal().
+			Int("items", len(drift)).
+			Msg("Refusing to start: the schema is missing migrations and METIS_REFUSE_SCHEMA_DRIFT is set")
+	}
+}
+
+// refuseSchemaDrift reports whether drift should stop the server starting.
+func refuseSchemaDrift() bool {
+	enabled, err := strconv.ParseBool(envvar.Get(envRefuseSchemaDrift))
+	return err == nil && enabled
 }
 
 func (a *App) setupService(ctx context.Context) error {
-	a.repo = repositories.NewRepository(a.db)
+	a.repo = repositories.NewRepository(a.storm)
 
 	dispatcher := impl.NewEventDispatcher()
 	dispatcher.Register(impl.NewAuditLogObserver(a.repo.Audit()))
@@ -615,7 +642,7 @@ func (a *App) setupService(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	a.svc = services.NewServiceFacade(a.repo, dispatcher, a.sse, jwtSecret, func(targetDB *gorm.DB) {
+	a.svc = services.NewServiceFacade(a.repo, dispatcher, a.sse, jwtSecret, a.participantService(), a.participantSyncService(serviceimpl.NewNoOpLocker()), a.platformUserService(), func(targetDB *gorm.DB) {
 		log.Info().Msg("Setup complete: hot-swapping database connection to target database")
 		gorms.SetDBOverride(targetDB)
 
@@ -631,8 +658,22 @@ func (a *App) setupService(ctx context.Context) error {
 
 	dispatcher.Register(impl.NewNotificationObserver(a.svc))
 
+	// How the event stream works out who a background event is for. The job
+	// worker and the timer sweep run under a system context with no tenant on
+	// it, so the organization has to come from the project the event names —
+	// and an event whose audience cannot be resolved is not delivered at all.
+	if a.sse != nil {
+		a.sse.ResolveProjectsWith(a.organizationOfProject)
+	}
+
 	a.svc.StartWorkers(ctx)
+	// Directory syncs, for the sources that carry a schedule. A no-op when
+	// there is no storm connection: there are no sources to run.
+	a.svc.StartScheduledSyncs(ctx)
 	a.startSSEFanout(ctx)
+	// The same work again, once per environment, against that environment's
+	// database. Without it a process started on a staging port never advances.
+	a.startEnvironmentWorkers(ctx)
 	a.startSharedLimits(ctx)
 	return nil
 }
@@ -777,7 +818,10 @@ func BuildAPIHandler(
 	sse *impl.SSEObserver,
 	validator *auth.TokenValidator,
 	readiness map[string]health.Checker,
-	db *gorm.DB,
+	// conn is what idempotency records are kept in, so every replica gives the
+	// same answer to "has this already been done?". Nil falls back to the
+	// in-process store, which is correct for one replica and nothing else.
+	conn *stormdb.Conn,
 ) (http.Handler, *metrics.Collector) {
 	httpHandler := https.NewHTTPHandler(svc, endpts, sse)
 
@@ -810,7 +854,7 @@ func BuildAPIHandler(
 						// a second execution of the write. Before setup has run
 						// there is no database yet, and the factory falls back
 						// to the in-process store for that window.
-						f.NewIdempotencyOver(db, defaultHTTPIdempotencyTTL).Wrap(httpHandler),
+						f.NewIdempotencyOver(conn, defaultHTTPIdempotencyTTL).Wrap(httpHandler),
 					),
 				),
 			),
@@ -847,13 +891,26 @@ func BuildAPIHandler(
 
 func (a *App) runServers(ctx context.Context) error {
 	endpts := endpoints.MakeEndpoints(a.svc)
-	httpHandler, metricsCollector := BuildAPIHandler(a.svc, endpts, a.sse, a.validator, a.readinessCheckers(), a.db)
+	httpHandler, metricsCollector := BuildAPIHandler(a.svc, endpts, a.sse, a.validator, a.readinessCheckers(), a.storm)
 
 	grpcServer := grpcs.NewGRPCServer(endpts)
 
 	g, ctx := errgroup.WithContext(ctx)
 
 	if metricsEnabled() {
+		// Published as a gauge, not only a log line. Drift means a shipped
+		// feature answers every request with a 500 while /readyz stays green,
+		// because readiness only pings the database — so nothing paged. The
+		// value is read at scrape time, which is why the ordering between this
+		// and the startup check does not matter.
+		metricsCollector.Registry().MustRegister(prometheus.NewGaugeFunc(
+			prometheus.GaugeOpts{
+				Name: "metis_schema_drift_items",
+				Help: "Model changes with no migration. Anything above zero is a feature that will fail at runtime.",
+			},
+			func() float64 { return float64(a.schemaDrift.Load()) },
+		))
+
 		metricsAddress := resolveAddress(envMetricsAddress, defaultMetricsAddress)
 		g.Go(func() error {
 			log.Info().Str("addr", metricsAddress).Msg("metrics server listening")
@@ -937,6 +994,11 @@ func (a *App) runServers(ctx context.Context) error {
 		return server.ListenAndServe()
 	})
 
+	// One listener per environment, each bound to its own database. Started
+	// after the main port so a failure to bind a staging port is reported
+	// beside a server that is already up, rather than instead of one.
+	a.serveEnvironments(ctx, g, httpHandler)
+
 	// gRPC Server
 	grpcAddress := resolveAddress(envGRPCAddress, defaultGRPCAddress)
 	g.Go(func() error {
@@ -960,10 +1022,33 @@ func (a *App) runServers(ctx context.Context) error {
 	})
 
 	err := g.Wait()
+
+	// Drain after the servers have stopped accepting, so nothing new arrives
+	// while in-flight jobs finish. Without this the worker's context was simply
+	// cancelled: anything running was abandoned, its final status write failed
+	// on the cancelled context, and the row kept this worker's lock until the
+	// lease expired — so every deploy froze claimed work for minutes.
+	//
+	// A fresh context: `ctx` is what being cancelled started this, and
+	// inheriting it would end the drain before it began.
+	drainCtx, cancelDrain := context.WithTimeout(context.Background(), ShutdownDrainBudget())
+	defer cancelDrain()
+	//nolint:contextcheck // Not inheriting the cancelled ctx is the whole point; see above.
+	if stopErr := a.svc.StopWorkers(drainCtx); stopErr != nil {
+		log.Error().Err(stopErr).Msg("Draining the job worker failed")
+	}
+
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("server crashed: %w", err)
 	}
 	return nil
+}
+
+// ShutdownDrainBudget is the ceiling on the whole drain, a little above the
+// worker's own so its warning is the one that gets logged rather than this
+// timeout pre-empting it.
+func ShutdownDrainBudget() time.Duration {
+	return serviceimpl.ShutdownDrain() + 5*time.Second
 }
 
 func (a *App) registerGRPCServices(baseServer *grpc.Server, grpcServer *grpcs.Server) {
@@ -1016,27 +1101,46 @@ func (a *App) resolveJWTSecret() (string, error) {
 
 // resolveDialector determines the GORM dialector based on config.yaml or environment variables.
 func (a *App) resolveDialector() (gorm.Dialector, error) {
-	// Priority 1: Load from config.yaml if it exists
+	// Priority 1: the config file, when there is one.
+	//
+	// An unreadable one is a refusal, not a warning. It used to log and fall
+	// through — and with no DATABASE_URL set, "fall through" meant creating a
+	// *fresh, empty SQLite file* and serving from it. The process then passed
+	// its own readiness probe while every list in the product was empty and
+	// every write went somewhere nobody would look for it. An installation
+	// that has been set up has a database; failing to read which one is not a
+	// reason to invent a different answer.
 	if config.Exists(config.DefaultConfigPath) {
 		cfg, err := config.Load(config.DefaultConfigPath)
 		if err != nil {
-			log.Warn().Err(err).Msg("Failed to load config.yaml, falling back to environment")
-		} else {
-			return a.dialectorFromConfig(cfg)
+			return nil, fmt.Errorf(
+				"could not read %s, and this installation has been set up, so its database is the one "+
+					"named there. Fix the file or move it aside to run setup again: %w",
+				config.DefaultConfigPath, err)
 		}
+		return a.dialectorFromConfig(cfg)
 	}
 
-	// Priority 2: Fall back to environment variables
+	// Priority 2: DATABASE_URL.
 	dsn := envvar.Get("DATABASE_URL")
 	if dsn != "" {
 		log.Info().Msg("Using PostgreSQL database from DATABASE_URL...")
-		return postgres.Open(dsn), nil
+		return gorms.Dialector(config.DriverPostgres, dsn)
 	}
 
-	// Priority 3: Default to SQLite
-	path := config.DefaultSQLitePath()
-	log.Info().Str("file", path).Msg("Using SQLite database...")
-	return sqlite.Open(sqliteDSNWithBusyTimeout(path)), nil
+	// There is no priority 3 any more.
+	//
+	// It used to be a local SQLite file, reached when there was no config and no
+	// DATABASE_URL — a first run before setup, and also a server deployment that
+	// meant to set DATABASE_URL and did not. The second case came up healthy and
+	// empty, which is the worst way to be misconfigured: nothing to read, no
+	// error, and a readiness probe that passes.
+	//
+	// A setup wizard that has not been run needs no database, and says so; a
+	// deployment that has been configured and cannot be read needs to stop.
+	return nil, fmt.Errorf(
+		"no database is configured. Set DATABASE_URL to a PostgreSQL connection string, "+
+			"or run the setup wizard, which writes %s", config.DefaultConfigPath)
 }
 
 func (a *App) dialectorFromConfig(cfg *config.Config) (gorm.Dialector, error) {
@@ -1055,20 +1159,18 @@ func (a *App) dialectorFromConfig(cfg *config.Config) (gorm.Dialector, error) {
 			config.DefaultConfigPath, err)
 	}
 
-	switch cfg.Database.Driver {
-	case config.DriverPostgres:
-		log.Info().Msg("Using PostgreSQL database from config...")
-		return postgres.Open(dsn), nil
-	case config.DriverMySQL:
-		log.Info().Msg("Using MySQL database from config...")
-		return mysql.Open(dsn), nil
-	case config.DriverSQLServer:
-		log.Info().Msg("Using SQL Server database from config...")
-		return sqlserver.Open(dsn), nil
-	default:
-		log.Info().Str("path", redaction.RedactText(dsn)).Msg("Using SQLite database from config...")
-		return sqlite.Open(sqliteDSNWithBusyTimeout(dsn)), nil
+	// Refused rather than defaulted. This used to fall through to SQLite for
+	// anything it did not recognise, so an installation whose config named MySQL
+	// would come up on a fresh empty file beside its real data — every process,
+	// task and definition apparently gone, with a successful startup log.
+	dialector, err := gorms.Dialector(cfg.Database.Driver, dsn)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"%w. Migrate the data to PostgreSQL and point %s at it; see docs/upgrading.md",
+			err, config.DefaultConfigPath)
 	}
+	log.Info().Msg("Using PostgreSQL database from config...")
+	return dialector, nil
 }
 
 // sharedRateLimit pools a limiter's count across replicas when there is a

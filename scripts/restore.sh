@@ -92,12 +92,6 @@ case "$engine" in
       explain_failure "${SOURCE}/restore.log" "$restore_status"
     fi
     ;;
-  mysql)
-    command -v mysql >/dev/null || die "mysql client not found"
-    [ -f "${SOURCE}/database.sql" ] || die "no database.sql in $SOURCE"
-    note "restoring MySQL"
-    mysql "${MYSQL_DATABASE:?MYSQL_DATABASE is required for a MySQL restore}" < "${SOURCE}/database.sql"
-    ;;
   *)
     die "manifest names an unsupported engine: '$engine'"
     ;;

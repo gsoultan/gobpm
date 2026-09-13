@@ -2,6 +2,7 @@ import { Tooltip } from '@mantine/core';
 import { Link } from '@tanstack/react-router';
 import {
   Building2,
+  Contact,
   ChevronsLeft,
   ChevronsRight,
   ClipboardList,
@@ -17,6 +18,7 @@ import {
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import classes from './Sidebar.module.css';
+import { useTranslation } from '../../i18n/context';
 
 /**
  * Primary navigation.
@@ -41,6 +43,7 @@ import classes from './Sidebar.module.css';
 
 interface NavItem {
   icon: LucideIcon;
+  /** A message key, not a sentence — see src/i18n. */
   label: string;
   to: string;
   /** Shown in the collapsed tooltip to explain a non-obvious destination. */
@@ -48,45 +51,53 @@ interface NavItem {
 }
 
 interface NavSection {
+  /** A message key. */
   label: string;
   items: NavItem[];
 }
 
 const sections: NavSection[] = [
   {
-    label: 'Work',
+    label: 'nav.sectionWork',
     items: [
-      { icon: LayoutGrid, label: 'Dashboard', to: '/', hint: 'Overview of this project' },
-      { icon: ClipboardList, label: 'My Inbox', to: '/inbox', hint: 'Tasks assigned to you' },
-      { icon: Users, label: 'All Tasks', to: '/tasks', hint: 'Every task in this project' },
+      { icon: LayoutGrid, label: 'nav.dashboard', to: '/', hint: 'Overview of this project' },
+      { icon: ClipboardList, label: 'nav.inbox', to: '/inbox', hint: 'Tasks assigned to you' },
+      { icon: Users, label: 'nav.allTasks', to: '/tasks', hint: 'Every task in this project' },
+      // The people processes assign work to. Under Work rather than Administer
+      // on purpose: they are a different population from the accounts that run
+      // the platform, and putting the two side by side is how they came to be
+      // one list in the first place.
+      { icon: Contact, label: 'nav.people', to: '/people', hint: 'Who this project can assign work to' },
     ],
   },
   {
-    label: 'Build',
+    label: 'nav.sectionBuild',
     items: [
-      { icon: Network, label: 'Processes', to: '/models', hint: 'Design and deploy process models' },
-      { icon: Table2, label: 'Decisions', to: '/decisions', hint: 'Business rules as decision tables' },
-      { icon: Zap, label: 'Connectors', to: '/connectors', hint: 'Connect to other systems' },
+      { icon: Network, label: 'nav.processes', to: '/models', hint: 'Design and deploy process models' },
+      { icon: Table2, label: 'nav.decisions', to: '/decisions', hint: 'Business rules as decision tables' },
+      { icon: Zap, label: 'nav.connectors', to: '/connectors', hint: 'Connect to other systems' },
     ],
   },
   {
-    label: 'Operate',
+    label: 'nav.sectionOperate',
     items: [
-      { icon: Play, label: 'Instances', to: '/instances', hint: 'Running and completed processes' },
+      { icon: Play, label: 'nav.instances', to: '/instances', hint: 'Running and completed processes' },
     ],
   },
   {
-    label: 'Administer',
+    label: 'nav.sectionAdminister',
     items: [
-      { icon: FolderGit2, label: 'Projects', to: '/projects' },
-      { icon: Building2, label: 'Organizations', to: '/organizations' },
-      { icon: ShieldCheck, label: 'Groups', to: '/groups' },
-      { icon: Users, label: 'People', to: '/users' },
+      { icon: FolderGit2, label: 'nav.projects', to: '/projects' },
+      { icon: Building2, label: 'nav.organizations', to: '/organizations' },
+      { icon: ShieldCheck, label: 'nav.groups', to: '/groups' },
+      { icon: Users, label: 'nav.platformAccess', to: '/users', hint: 'Accounts that administer Metis' },
     ],
   },
 ];
 
 function NavLink({ item, collapsed }: { item: NavItem; collapsed: boolean }) {
+  const { t } = useTranslation();
+  const label = t(item.label);
   const link = (
     <Link
       to={item.to}
@@ -94,10 +105,10 @@ function NavLink({ item, collapsed }: { item: NavItem; collapsed: boolean }) {
       activeProps={{ 'data-active': true, 'aria-current': 'page' }}
       // Collapsed, the label is not rendered, so the icon alone would announce
       // as an unlabelled link. The accessible name comes from aria-label.
-      aria-label={collapsed ? item.label : undefined}
+      aria-label={collapsed ? label : undefined}
     >
       <item.icon className={classes.linkIcon} size={19} strokeWidth={1.75} aria-hidden />
-      {!collapsed && <span className={classes.linkLabel}>{item.label}</span>}
+      {!collapsed && <span className={classes.linkLabel}>{label}</span>}
     </Link>
   );
 
@@ -106,7 +117,7 @@ function NavLink({ item, collapsed }: { item: NavItem; collapsed: boolean }) {
   // fully explain them.
   if (collapsed) {
     return (
-      <Tooltip label={item.hint ? `${item.label} — ${item.hint}` : item.label} position="right" withArrow openDelay={200}>
+      <Tooltip label={item.hint ? `${label} — ${item.hint}` : label} position="right" withArrow openDelay={200}>
         {link}
       </Tooltip>
     );
@@ -123,13 +134,14 @@ function NavLink({ item, collapsed }: { item: NavItem; collapsed: boolean }) {
 
 export function Sidebar() {
   const { sidebarExpanded, toggleSidebar } = useAppStore();
+  const { t } = useTranslation();
   const collapsed = !sidebarExpanded;
 
   return (
-    <nav
-      className={`${classes.navbar} ${collapsed ? classes.collapsed : ''}`}
-      aria-label="Main navigation"
-    >
+    // Not <nav>: AppShell.Navbar is already the navigation landmark, and a
+    // nested one left two with the same name, which a screen reader offers as
+    // two indistinguishable choices. The name lives on the outer element.
+    <div className={`${classes.navbar} ${collapsed ? classes.collapsed : ''}`}>
       <Link to="/" className={classes.brand} aria-label="Metis BPM home">
         <span className={classes.brandMark} aria-hidden>
           <Network size={17} strokeWidth={2} />
@@ -143,7 +155,7 @@ export function Sidebar() {
             {collapsed ? (
               <div className={classes.sectionRule} aria-hidden />
             ) : (
-              <div className={classes.sectionLabel}>{section.label}</div>
+              <div className={classes.sectionLabel}>{t(section.label)}</div>
             )}
             {section.items.map((item) => (
               <NavLink key={item.to} item={item} collapsed={collapsed} />
@@ -166,9 +178,9 @@ export function Sidebar() {
           aria-expanded={sidebarExpanded}
         >
           {collapsed ? <ChevronsRight size={16} /> : <ChevronsLeft size={16} />}
-          {!collapsed && <span>Collapse</span>}
+          {!collapsed && <span>{t('nav.collapse')}</span>}
         </button>
       </div>
-    </nav>
+    </div>
   );
 }

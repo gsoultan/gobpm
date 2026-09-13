@@ -114,6 +114,16 @@ spec:
               containerPort: 9464
 
           env:
+            # A soft memory target below the 1Gi hard limit, so the Go runtime
+            # runs the garbage collector harder as it approaches the ceiling
+            # rather than being OOM-killed at it. Left ~15% of headroom for
+            # non-heap memory (stacks, the binary, off-heap buffers). Without
+            # it the runtime does not know the container's limit and a burst of
+            # large outbound replies or concurrent scripts trips the cgroup
+            # killer mid-transaction.
+            - name: GOMEMLIMIT
+              value: "850MiB"
+
             # Metrics default to 127.0.0.1:9464, which nothing outside the pod
             # can reach. Bind them to the pod IP so Prometheus can scrape.
             - name: METIS_METRICS_ADDRESS

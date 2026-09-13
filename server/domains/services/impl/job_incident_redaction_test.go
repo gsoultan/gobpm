@@ -25,7 +25,7 @@ func TestCreateIncidentRedactsTheStoredError(t *testing.T) {
 	secret := "sk-live-" + strings.Repeat("a1b2c3d4", 3)
 
 	db := testutils.SetupTestDB(t)
-	repo := repositories.NewRepository(db)
+	repo := repositories.NewRepository(testutils.StormConn(db))
 	service := &jobService{repo: repo}
 
 	instanceID, definitionID := uuid.New(), uuid.New()

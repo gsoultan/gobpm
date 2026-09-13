@@ -2,7 +2,6 @@ package https
 
 import (
 	"fmt"
-	"io/fs"
 	"net/http"
 
 	"github.com/gsoultan/metis/internal/pkg/envvar"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/gsoultan/metis/server/interceptors/tenant"
 
+	"github.com/gsoultan/metis/server/domains/entities"
 	"github.com/gsoultan/metis/server/domains/observers/impl"
 	"github.com/gsoultan/metis/server/domains/services"
 	"github.com/gsoultan/metis/server/endpoints"
@@ -23,11 +23,15 @@ import (
 	"github.com/gsoultan/metis/server/transports/https/connectors"
 	"github.com/gsoultan/metis/server/transports/https/decisions"
 	"github.com/gsoultan/metis/server/transports/https/definitions"
+	"github.com/gsoultan/metis/server/transports/https/environments"
 	"github.com/gsoultan/metis/server/transports/https/external_tasks"
 	"github.com/gsoultan/metis/server/transports/https/group"
 	"github.com/gsoultan/metis/server/transports/https/incidents"
 	"github.com/gsoultan/metis/server/transports/https/notification"
 	"github.com/gsoultan/metis/server/transports/https/organizations"
+	"github.com/gsoultan/metis/server/transports/https/participants"
+	"github.com/gsoultan/metis/server/transports/https/participantsources"
+	"github.com/gsoultan/metis/server/transports/https/platformusers"
 	"github.com/gsoultan/metis/server/transports/https/processes"
 	"github.com/gsoultan/metis/server/transports/https/projects"
 	"github.com/gsoultan/metis/server/transports/https/setup"
@@ -62,8 +66,34 @@ func NewHTTPHandler(svc services.ServiceFacade, eps endpoints.Endpoints, sseObse
 				w.Header().Set("Vary", "Origin")
 			}
 
-			ch := sseObserver.AddClient()
+			// The scope is taken from the request, never from what the client
+			// asked for: the organization comes from the token the auth
+			// middleware validated, and the environment from the listener this
+			// connection arrived on. A client that could name its own audience
+			// would name somebody else's.
+			// The tenant is resolved here rather than read off the context:
+			// the endpoint chain that normally resolves it does not run for
+			// this handler, which is mounted straight on the mux so the
+			// connection can stay open.
+			streamCtx := r.Context()
+			if tc, ok := tenant.ResolveFromContext(streamCtx); ok {
+				streamCtx = entities.WithTenantContext(streamCtx, tc)
+			}
+			ch := sseObserver.AddClient(entities.SSEScopeFrom(streamCtx))
 			defer sseObserver.RemoveClient(ch)
+
+			// Send the headers now rather than with the first event.
+			//
+			// Without this the response is buffered until something happens, so
+			// EventSource stays in CONNECTING on a quiet installation: the
+			// browser cannot tell a working stream from a broken one, onopen
+			// never fires, and any proxy with a header-read timeout closes the
+			// connection before the first event ever arrives.
+			flusher, canFlush := w.(http.Flusher)
+			if canFlush {
+				w.WriteHeader(http.StatusOK)
+				flusher.Flush()
+			}
 
 			ctx := r.Context()
 			for {
@@ -78,7 +108,7 @@ func NewHTTPHandler(svc services.ServiceFacade, eps endpoints.Endpoints, sseObse
 						log.Debug().Err(err).Msg("An event stream client went away mid-write")
 						return
 					}
-					if flusher, ok := w.(http.Flusher); ok {
+					if canFlush {
 						flusher.Flush()
 					}
 				}
@@ -95,6 +125,10 @@ func NewHTTPHandler(svc services.ServiceFacade, eps endpoints.Endpoints, sseObse
 	organizations.RegisterHandlers(m, eps.Organization, options)
 	projects.RegisterHandlers(m, eps.Project, options)
 	definitions.RegisterHandlers(m, eps.Definition, options)
+	environments.RegisterHandlers(m, eps.Environment, options)
+	participants.RegisterHandlers(m, eps.Participant, options)
+	participantsources.RegisterHandlers(m, eps.ParticipantSource, options)
+	platformusers.RegisterHandlers(m, eps.PlatformUser, options)
 	processes.RegisterHandlers(m, eps.Process, options)
 	tasks.RegisterHandlers(m, eps.Task, options)
 	external_tasks.RegisterHandlers(m, eps.ExternalTask, options)
@@ -112,34 +146,18 @@ func NewHTTPHandler(svc services.ServiceFacade, eps endpoints.Endpoints, sseObse
 	// the body must not be decoded and re-encoded on the way to the verifier.
 	webhooks.RegisterRoutes(m, svc)
 
-	// Serve UI
-	distFS := ui.Dist()
-	fileServer := http.FileServerFS(distFS)
-
-	m.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		// If it's the root, serve index.html
-		if r.URL.Path == "/" {
-			fileServer.ServeHTTP(w, r)
-			return
-		}
-
-		// Try to see if the file exists in the embedded FS
-		_, err := fs.Stat(distFS, r.URL.Path[1:])
-		if err != nil {
-			// Fallback to index.html for SPA routing if it's not an asset request
-			if !strings.HasPrefix(r.URL.Path, "/assets/") {
-				r.URL.Path = "/"
-			}
-		}
-		fileServer.ServeHTTP(w, r)
-	})
+	// Serve UI. The static handler compresses the embedded assets once and
+	// serves them with cache headers a bare file server never set; see static.go.
+	static, err := newStaticHandler(ui.Dist())
+	if err != nil {
+		// The dist is embedded at build time, so this can only fail if the build
+		// shipped a corrupt bundle — fail loudly rather than serve a blank app.
+		log.Fatal().Err(err).Msg("Could not prepare the embedded UI for serving")
+	}
+	m.Handle("/", static)
 
 	authenticatedHandler := authMiddleware.Wrap(m)
-	return withCORS(authenticatedHandler)
+	return securityHeaders(withCORS(authenticatedHandler))
 }
 
 // envCORSOrigins configures cross-origin access as a comma-separated list of

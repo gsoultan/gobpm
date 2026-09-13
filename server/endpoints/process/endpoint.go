@@ -9,6 +9,7 @@ import (
 	"github.com/go-kit/kit/endpoint"
 	"github.com/google/uuid"
 	"github.com/gsoultan/metis/internal/pkg/apierr"
+	"github.com/gsoultan/metis/server/domains/entities"
 	"github.com/gsoultan/metis/server/domains/services"
 )
 
@@ -18,6 +19,7 @@ type Endpoints struct {
 	ListInstances        endpoint.Endpoint
 	GetExecutionPath     endpoint.Endpoint
 	GetAuditLogs         endpoint.Endpoint
+	ExportOCEL           endpoint.Endpoint
 	GetProcessStatistics endpoint.Endpoint
 	ActivateAdHocTask    endpoint.Endpoint
 	BroadcastSignal      endpoint.Endpoint
@@ -33,6 +35,7 @@ func MakeEndpoints(s services.ServiceFacade) Endpoints {
 		ListInstances:        MakeListInstancesEndpoint(s),
 		GetExecutionPath:     MakeGetExecutionPathEndpoint(s),
 		GetAuditLogs:         MakeGetAuditLogsEndpoint(s),
+		ExportOCEL:           MakeExportOCELEndpoint(s),
 		GetProcessStatistics: MakeGetProcessStatisticsEndpoint(s),
 		ActivateAdHocTask:    MakeActivateAdHocTaskEndpoint(s),
 		BroadcastSignal:      MakeBroadcastSignalEndpoint(s),
@@ -52,7 +55,9 @@ func MakeStartProcessEndpoint(s services.ServiceFacade) endpoint.Endpoint {
 		if err != nil {
 			return StartProcessResponse{Err: apierr.Invalidf("project_id %q is not a valid identifier: %v", req.ProjectID, err)}, nil
 		}
-		id, err := s.StartProcess(ctx, projectID, req.DefinitionKey, req.Variables)
+		// StartSubProcess with no parent is what StartProcess does; it is the
+		// form that also carries a version. A zero version means the live one.
+		id, err := s.StartSubProcess(ctx, projectID, req.DefinitionKey, req.Version, req.Variables, uuid.Nil, "")
 		return StartProcessResponse{InstanceID: id, Err: err}, nil
 	}
 }
@@ -127,6 +132,21 @@ func MakeGetAuditLogsEndpoint(s services.ServiceFacade) endpoint.Endpoint {
 		}
 		entries, err := s.GetAuditLogs(ctx, id)
 		return GetAuditLogsResponse{Entries: entries, Err: err}, nil
+	}
+}
+
+func MakeExportOCELEndpoint(s services.ServiceFacade) endpoint.Endpoint {
+	return func(ctx context.Context, request any) (any, error) {
+		req, ok := request.(ExportOCELRequest)
+		if !ok {
+			return nil, fmt.Errorf("process: expected an ExportOCELRequest, got %T", request)
+		}
+		id, err := uuid.Parse(req.ProjectID)
+		if err != nil {
+			return ExportOCELResponse{Err: apierr.Invalidf("project_id %q is not a valid identifier: %v", req.ProjectID, err)}, nil
+		}
+		log, err := s.ExportOCEL(ctx, id, entities.OCELOptions{IncludeVariables: req.IncludeVariables})
+		return ExportOCELResponse{Log: log, Err: err}, nil
 	}
 }
 

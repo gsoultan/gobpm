@@ -1,4 +1,5 @@
 import { processClient } from "../shared/connect";
+import { raiseIfRefused } from "../raise";
 import { requestJSON } from "../shared/rest";
 import type { ApiAuditEntry, ApiSubProcess, ProcessVariables } from "../types";
 
@@ -13,9 +14,22 @@ type ListSubProcessesResponse = {
 };
 
 export const processRuntimeService = {
-  async startProcess(projectId: string, definitionKey: string, variables: ProcessVariables = {}, signal?: AbortSignal) {
-    const response = await processClient.startProcess({ projectId, definitionKey, variables }, { signal });
-    return { instance_id: response.instanceId, err: response.error };
+  /**
+   * Starts an instance.
+   *
+   * `version` names one deliberately; omitted, the live version runs. Naming one
+   * is how a staged version gets tried before it is promoted — the alternative
+   * was to make it live for everybody and find out.
+   */
+  async startProcess(
+    projectId: string,
+    definitionKey: string,
+    variables: ProcessVariables = {},
+    version = 0,
+    signal?: AbortSignal,
+  ) {
+    const response = await processClient.startProcess({ projectId, definitionKey, variables, version }, { signal });
+    return { instance_id: raiseIfRefused(response).instanceId };
   },
 
   /**
@@ -65,5 +79,45 @@ export const processRuntimeService = {
   async listSubProcesses(parentInstanceId: string, signal?: AbortSignal) {
     const data = await requestJSON<ListSubProcessesResponse>(`/instances/${parentInstanceId}/subprocesses`, { signal });
     return { instances: data.instances ?? [], err: data.err };
+  },
+
+  /**
+   * Starts one step inside an ad-hoc sub-process.
+   *
+   * Deliberately repeatable: BPMN lets a step inside an ad-hoc sub-process run
+   * any number of times, so asking twice starts it twice rather than being
+   * quietly ignored. raiseIfRefused is what makes a refusal visible — this
+   * endpoint reports one in the body, so without it a rejected activation
+   * shows a green success toast and nothing happens.
+   */
+  async activateAdHocTask(
+    instanceId: string,
+    subProcessNodeId: string,
+    taskNodeId: string,
+    signal?: AbortSignal,
+  ) {
+    const data = await requestJSON<{ err?: string }>(`/processes/adhoc/activate`, {
+      method: "POST",
+      body: { instance_id: instanceId, sub_process_node_id: subProcessNodeId, task_node_id: taskNodeId },
+      signal,
+    });
+    return raiseIfRefused(data);
+  },
+
+  /**
+   * A project's history as an OCEL 2.0 object-centric event log.
+   *
+   * `includeVariables` is off unless asked for, and asking for it means asking
+   * for every business fact the project has recorded — an amount, an
+   * applicant's name, an approval decision. Mining a model needs the activity,
+   * the case and the time, and none of those are in there.
+   */
+  async exportOCEL(projectId: string, includeVariables = false, signal?: AbortSignal) {
+    const query = includeVariables ? "?include_variables=true" : "";
+    const data = await requestJSON<{ log?: unknown; err?: string }>(
+      `/projects/${projectId}/ocel${query}`,
+      { signal },
+    );
+    return raiseIfRefused(data).log;
   },
 };

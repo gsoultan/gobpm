@@ -66,7 +66,7 @@ func TestNamedNode(t *testing.T) {
 // claimed task "unknown"` about a task named "Approve the refund".
 func TestClaimNarrativeNamesTheTask(t *testing.T) {
 	db := testutils.SetupTestDB(t)
-	repo := repositories.NewRepository(db)
+	repo := repositories.NewRepository(testutils.StormConn(db))
 	engine := NewExecutionEngine(repo, observersimpl.NewEventDispatcher())
 	svc := NewTaskService(repo, engine, NewAuditWriter(repo.Audit()))
 

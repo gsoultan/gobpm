@@ -81,10 +81,16 @@ func (a TaskEntityAdapter) ToEntity() entities.Task {
 	}
 
 	return entities.Task{
-		ID:              uuid.UUID(a.Model.ID),
-		Project:         &entities.Project{ID: uuid.UUID(a.Model.ProjectID)},
-		Instance:        &entities.ProcessInstance{ID: uuid.UUID(a.Model.InstanceID)},
-		Node:            &entities.Node{ID: a.Model.NodeID},
+		ID:       uuid.UUID(a.Model.ID),
+		Project:  &entities.Project{ID: uuid.UUID(a.Model.ProjectID)},
+		Instance: &entities.ProcessInstance{ID: uuid.UUID(a.Model.InstanceID)},
+		// The node's Type is carried on the task row, so a response can say what
+		// kind of step this is without a join. Name is deliberately not filled
+		// in from Model.Name: UpdateTask lets a task be renamed, after which the
+		// task's name is no longer the diagram's label for the node, and a
+		// caller reading Node.Name would get the newer of the two without any
+		// way to tell. Task.Name is the label to display.
+		Node:            &entities.Node{ID: a.Model.NodeID, Type: entities.NodeType(a.Model.Type)},
 		Name:            a.Model.Name,
 		Description:     a.Model.Description,
 		Type:            entities.NodeType(a.Model.Type),

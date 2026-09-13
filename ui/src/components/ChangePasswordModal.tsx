@@ -1,5 +1,6 @@
 import { Modal, Stack, PasswordInput, Button, Group, Text, Alert } from '@mantine/core';
 import { ShieldAlert } from 'lucide-react';
+import { useNavigate } from '@tanstack/react-router';
 import { z } from 'zod';
 import { useForm, fieldProps, zodField } from './form/AppForm';
 import { useChangeOwnPassword } from '../hooks/useUser';
@@ -26,6 +27,7 @@ interface ChangePasswordModalProps {
 export function ChangePasswordModal({ opened, onClose }: ChangePasswordModalProps) {
   const changePassword = useChangeOwnPassword();
   const clearAuth = useAppStore((state) => state.clearAuth);
+  const navigate = useNavigate();
 
   const form = useForm({
     defaultValues: { currentPassword: '', newPassword: '', confirmPassword: '' },
@@ -43,10 +45,11 @@ export function ChangePasswordModal({ opened, onClose }: ChangePasswordModalProp
         form.reset();
         onClose();
         // The token in hand was issued before the change, so the server will
-        // refuse it from here on. Clearing it sends the user to the login
-        // screen deliberately, rather than letting them meet a wall of 401s
-        // and conclude the change broke something.
+        // refuse it from here on. Clearing it and going to the login screen
+        // deliberately beats letting them meet a wall of 401s on whatever page
+        // they were on and conclude the change broke something.
         clearAuth();
+        await navigate({ to: '/login' });
       } catch (error) {
         // The server refuses a wrong current password without saying which
         // field was wrong, so the message is shown as-is rather than pinned to
@@ -113,27 +116,29 @@ export function ChangePasswordModal({ opened, onClose }: ChangePasswordModalProp
             )}
           </form.Field>
 
-          <form.Subscribe selector={(state) => state.values.newPassword}>
-            {(newPassword) => (
-              <form.Field
-                name="confirmPassword"
-                validators={{
-                  onChange: zodField(
-                    z.string().refine((value) => value === newPassword, 'The two passwords do not match'),
-                  ),
-                }}
-              >
-                {(field) => (
-                  <PasswordInput
-                    {...fieldProps(field)}
-                    label="Confirm new password"
-                    placeholder="Type it again"
-                    autoComplete="new-password"
-                  />
-                )}
-              </form.Field>
+          {/*
+            The match is re-checked when either password changes. It used to
+            run only when the confirmation was typed, so editing the new
+            password afterwards left a stale "they match" verdict standing and
+            the form submittable with two different passwords in it.
+          */}
+          <form.Field
+            name="confirmPassword"
+            validators={{
+              onChangeListenTo: ['newPassword'],
+              onChange: ({ value, fieldApi }) =>
+                value === fieldApi.form.getFieldValue('newPassword') ? undefined : 'The two passwords do not match',
+            }}
+          >
+            {(field) => (
+              <PasswordInput
+                {...fieldProps(field)}
+                label="Confirm new password"
+                placeholder="Type it again"
+                autoComplete="new-password"
+              />
             )}
-          </form.Subscribe>
+          </form.Field>
 
           <Group justify="flex-end" mt="sm">
             <Button variant="subtle" onClick={handleClose} disabled={changePassword.isPending}>

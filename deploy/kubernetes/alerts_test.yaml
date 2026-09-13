@@ -212,3 +212,37 @@ tests:
       - eval_time: 15m
         alertname: MetisMetricsMissing
         exp_alerts: []
+
+  # ------------------------------------------------------------- schema drift
+  - interval: 1m
+    name: a missing migration fires MetisSchemaDrift
+    input_series:
+      # Two model changes with no migration: the shape a release that forgot one
+      # actually produces. This failure is otherwise silent — the features
+      # behind those tables return 500 while /readyz stays green.
+      - series: 'metis_schema_drift_items'
+        values: '2+0x15'
+    alert_rule_test:
+      # Inside `for: 5m`, so nothing yet.
+      - eval_time: 4m
+        alertname: MetisSchemaDrift
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: MetisSchemaDrift
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Metis is missing a database migration
+              description: >-
+                2 model change(s) have no migration, so the tables or columns behind them do not exist and the features that use them return 500. Startup logs each one: `kubectl -n metis logs deploy/metis | grep "Schema drift"`. The fix is a numbered migration, not a restart — see docs/runbooks.md.
+
+  - interval: 1m
+    name: a schema that matches its models stays quiet
+    input_series:
+      - series: 'metis_schema_drift_items'
+        values: '0+0x15'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MetisSchemaDrift
+        exp_alerts: []

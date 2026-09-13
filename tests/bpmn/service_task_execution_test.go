@@ -187,7 +187,7 @@ func newServiceTaskHarness(t *testing.T) *serviceTaskHarness {
 	// being relaxed anywhere it matters. It is read per dial, so setting it here
 	// takes effect.
 	t.Setenv("GOBPM_HTTP_ALLOW_PRIVATE_NETWORKS", "true")
-	repo := repositories.NewRepository(testutils.SetupTestDB(t))
+	repo := repositories.NewRepository(testutils.SetupTestConn(t))
 
 	engine := serviceimpl.NewExecutionEngine(repo, observerimpl.NewEventDispatcher())
 	connectorSvc := serviceimpl.NewConnectorService(repo)

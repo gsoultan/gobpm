@@ -6,10 +6,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/gsoultan/metis/server/domains/entities"
 	observers "github.com/gsoultan/metis/server/domains/observers/impl"
 	"github.com/gsoultan/metis/server/repositories"
+	"github.com/gsoultan/metis/tests/testutils"
 	"gorm.io/gorm"
 )
+
+// replicaScope is the audience both replicas' browsers are in. Events carry it
+// across the bus now, so a test that broadcast without one would be asserting
+// delivery of something that is deliberately delivered to nobody.
+var replicaScope = entities.SSEScope{Organization: uuid.MustParse("00000000-0000-0000-0000-00000000beef")}
 
 // A browser connected to one replica must see events produced on another.
 //
@@ -21,17 +29,17 @@ import (
 // fail, because it looks like nothing happened rather than like a bug.
 func TestAnEventOnOneReplicaReachesABrowserOnAnother(t *testing.T) {
 	forEachDialect(t, func(t *testing.T, db *gorm.DB) {
-		repo := repositories.NewRepository(db)
+		repo := repositories.NewRepository(testutils.StormConn(db))
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 
 		producer := newFanoutReplica(t, ctx, repo, "replica-a")
 		consumer := newFanoutReplica(t, ctx, repo, "replica-b")
 
-		browser := consumer.observer.AddClient()
+		browser := consumer.observer.AddClient(replicaScope)
 		defer consumer.observer.RemoveClient(browser)
 
-		producer.observer.Broadcast(map[string]string{"type": "TaskCreated", "id": "task-1"})
+		producer.observer.BroadcastTo(replicaScope, map[string]string{"type": "TaskCreated", "id": "task-1"})
 
 		select {
 		case msg := <-browser:
@@ -49,15 +57,15 @@ func TestAnEventOnOneReplicaReachesABrowserOnAnother(t *testing.T) {
 // each one into a refetch.
 func TestAReplicaDoesNotRedeliverItsOwnEvents(t *testing.T) {
 	forEachDialect(t, func(t *testing.T, db *gorm.DB) {
-		repo := repositories.NewRepository(db)
+		repo := repositories.NewRepository(testutils.StormConn(db))
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 
 		only := newFanoutReplica(t, ctx, repo, "replica-solo")
-		browser := only.observer.AddClient()
+		browser := only.observer.AddClient(replicaScope)
 		defer only.observer.RemoveClient(browser)
 
-		only.observer.Broadcast(map[string]string{"type": "TaskCreated", "id": "task-1"})
+		only.observer.BroadcastTo(replicaScope, map[string]string{"type": "TaskCreated", "id": "task-1"})
 
 		// The first is the direct local delivery.
 		select {
@@ -80,17 +88,17 @@ func TestAReplicaDoesNotRedeliverItsOwnEvents(t *testing.T) {
 // before it arrived — a thundering herd of refetches triggered by a deploy.
 func TestAReplicaStartingUpDoesNotReplayHistory(t *testing.T) {
 	forEachDialect(t, func(t *testing.T, db *gorm.DB) {
-		repo := repositories.NewRepository(db)
+		repo := repositories.NewRepository(testutils.StormConn(db))
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 
 		// Something happened before this replica existed.
-		if err := repo.Broadcast().Publish(ctx, "replica-long-gone", `{"type":"TaskCreated","id":"ancient"}`); err != nil {
+		if err := repo.Broadcast().Publish(ctx, "replica-long-gone", replicaScope, `{"type":"TaskCreated","id":"ancient"}`); err != nil {
 			t.Fatalf("seed the bus: %v", err)
 		}
 
 		latecomer := newFanoutReplica(t, ctx, repo, "replica-new")
-		browser := latecomer.observer.AddClient()
+		browser := latecomer.observer.AddClient(replicaScope)
 		defer latecomer.observer.RemoveClient(browser)
 
 		select {
@@ -105,10 +113,10 @@ func TestAReplicaStartingUpDoesNotReplayHistory(t *testing.T) {
 // — so a row that every live replica has moved past has no readers left.
 func TestThePruneSweepsDeliveredEvents(t *testing.T) {
 	forEachDialect(t, func(t *testing.T, db *gorm.DB) {
-		repo := repositories.NewRepository(db)
+		repo := repositories.NewRepository(testutils.StormConn(db))
 		ctx := t.Context()
 
-		if err := repo.Broadcast().Publish(ctx, "replica-a", `{"type":"TaskCreated"}`); err != nil {
+		if err := repo.Broadcast().Publish(ctx, "replica-a", replicaScope, `{"type":"TaskCreated"}`); err != nil {
 			t.Fatalf("publish: %v", err)
 		}
 

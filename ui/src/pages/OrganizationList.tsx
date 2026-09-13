@@ -1,130 +1,102 @@
-import { 
-  Table, 
-  Card, 
-  Text, 
-  Button, 
-  Group, 
-  Stack, 
-  ThemeIcon, 
-  TextInput, 
-  ActionIcon, 
-  Modal, 
-  Box,
+import {
+  ActionIcon,
+  Button,
+  Card,
+  Group,
+  Modal,
+  Stack,
+  Table,
+  Text,
+  Textarea,
+  TextInput,
+  ThemeIcon,
   Tooltip,
-  Textarea
 } from '@mantine/core';
-import { 
-  Search, 
-  Plus, 
-  Building2, 
-  Edit2, 
-  Trash2, 
-  Filter
-} from 'lucide-react';
-import { useOrganizations, useCreateOrganization, useUpdateOrganization, useDeleteOrganization } from '../hooks/useOrganization';
-import { PageHeader } from '../components/PageHeader';
-import { useState } from 'react';
 import { notifications } from '@mantine/notifications';
-import { failureMessage } from '../services/shared/errors';
-import { TableLoadingState, ErrorState, EmptyState } from '../components/state';
+import { Building2, Edit2, Plus, Trash2 } from 'lucide-react';
+import { useState } from 'react';
+
+import { PageHeader } from '../components/PageHeader';
+import { EmptyState, ErrorState, TableLoadingState } from '../components/state';
 import type { Organization } from '../gen/entities/organization_pb';
+import { useCreateOrganization, useDeleteOrganization, useOrganizations, useUpdateOrganization } from '../hooks/useOrganization';
+import { failureMessage } from '../services/shared/errors';
+import { useAppStore } from '../store/useAppStore';
+
+const COLUMNS = 3;
 
 export function OrganizationList() {
   const { data, isLoading, error, refetch } = useOrganizations();
+  const { expertMode } = useAppStore();
   const createOrg = useCreateOrganization();
   const updateOrg = useUpdateOrganization();
   const deleteOrg = useDeleteOrganization();
-  
+
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingOrg, setEditingOrg] = useState<Organization | null>(null);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
 
-
   const organizations = data?.organizations || [];
 
   const handleOpenModal = (org?: Organization) => {
-    if (org) {
-      setEditingOrg(org);
-      setName(org.name);
-      setDescription(org.description);
-    } else {
-      setEditingOrg(null);
-      setName('');
-      setDescription('');
-    }
+    setEditingOrg(org ?? null);
+    setName(org?.name ?? '');
+    setDescription(org?.description ?? '');
     setIsModalOpen(true);
   };
 
   const handleSubmit = async () => {
+    if (!name.trim()) return;
     try {
       if (editingOrg) {
         await updateOrg.mutateAsync({ id: editingOrg.id, name, description });
-        notifications.show({ title: 'Success', message: 'Organization updated successfully', color: 'green' });
+        notifications.show({ title: 'Saved', message: `${name} was updated.`, color: 'green' });
       } else {
         await createOrg.mutateAsync({ name, description });
-        notifications.show({ title: 'Success', message: 'Organization created successfully', color: 'green' });
+        notifications.show({ title: 'Created', message: `${name} is ready.`, color: 'green' });
       }
       setIsModalOpen(false);
     } catch (error) {
       // Surface the actual reason rather than a generic string — the user
       // cannot tell a validation problem from an outage otherwise.
-      notifications.show({ title: 'Error', message: failureMessage('Failed to save organization', error), color: 'red' });
+      notifications.show({ title: 'Could not save it', message: failureMessage('Failed to save organization', error), color: 'red' });
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (window.confirm('Are you sure you want to delete this organization? All projects under this organization will be affected.')) {
-      try {
-        await deleteOrg.mutateAsync(id);
-        notifications.show({ title: 'Success', message: 'Organization deleted successfully', color: 'green' });
-      } catch {
-        notifications.show({ title: 'Error', message: 'Failed to delete organization', color: 'red' });
-      }
+  const handleDelete = async (org: Organization) => {
+    const consequence =
+      `Delete ${org.name}? Every project in it — with their process models, decisions, running instances and open ` +
+      'tasks — is lost, and its people lose their memberships. This cannot be undone.';
+    if (!window.confirm(consequence)) return;
+    try {
+      await deleteOrg.mutateAsync(org.id);
+      notifications.show({ title: 'Deleted', message: `${org.name} is gone.`, color: 'green' });
+    } catch (error) {
+      notifications.show({ title: 'Could not delete it', message: failureMessage('Failed to delete organization', error), color: 'red' });
     }
   };
 
   return (
     <Stack gap="xl">
-      <PageHeader 
-        title="Organizations" 
+      <PageHeader
+        title="Organizations"
         description="Manage your organizations and their projects."
         actions={
-          <Button 
-            variant="filled" 
-            color="indigo" 
-            leftSection={<Plus size={16} />}
-            onClick={() => handleOpenModal()}
-          >
+          <Button variant="filled" color="indigo" leftSection={<Plus size={16} />} onClick={() => handleOpenModal()}>
             New Organization
           </Button>
         }
       />
 
       <Card shadow="sm" radius="lg" withBorder p={0}>
-        <Box p="md">
-          <Group justify="space-between">
-            <Group flex={1}>
-              <TextInput 
-                placeholder="Search organizations..." 
-                leftSection={<Search size={16} />} 
-                style={{ flex: 1, maxWidth: 400 }}
-                variant="filled"
-                radius="md"
-              />
-              <Button variant="light" leftSection={<Filter size={16} />} radius="md">Filter</Button>
-            </Group>
-          </Group>
-        </Box>
-
         {/*
-          Loading and error render inside the page rather than replacing it.
-          The previous early return swapped the whole page — title, filters,
-          actions — for one line of text, so the layout jumped when data
-          arrived and a failed request looked identical to an empty list.
+          Loading and error render inside the page rather than replacing it, so
+          the layout does not jump when data arrives and a failed request is
+          not mistaken for an empty list.
         */}
         {isLoading ? (
-          <TableLoadingState rows={5} columns={4} />
+          <TableLoadingState rows={5} columns={COLUMNS} />
         ) : error ? (
           <ErrorState error={error} action="load your organizations" onRetry={() => refetch()} />
         ) : (
@@ -132,7 +104,7 @@ export function OrganizationList() {
           <Table verticalSpacing="md" horizontalSpacing="xl" highlightOnHover>
             <Table.Thead bg="gray.0">
               <Table.Tr>
-                <Table.Th>Organization Name</Table.Th>
+                <Table.Th>Organization</Table.Th>
                 <Table.Th>Description</Table.Th>
                 <Table.Th ta="right">Actions</Table.Th>
               </Table.Tr>
@@ -140,8 +112,13 @@ export function OrganizationList() {
             <Table.Tbody>
               {organizations.length === 0 ? (
                 <Table.Tr>
-                  <Table.Td colSpan={4}>
-                    <EmptyState icon={Building2} title="No organizations yet" description="An organization is the top-level container for your projects and people." />
+                  <Table.Td colSpan={COLUMNS}>
+                    <EmptyState
+                      icon={Building2}
+                      title="No organizations yet"
+                      description="An organization is the top-level container for your projects and people."
+                      action={<Button onClick={() => handleOpenModal()} leftSection={<Plus size={16} />}>Create an organization</Button>}
+                    />
                   </Table.Td>
                 </Table.Tr>
               ) : (
@@ -154,7 +131,7 @@ export function OrganizationList() {
                         </ThemeIcon>
                         <Stack gap={0}>
                           <Text fw={700} size="sm">{org.name}</Text>
-                          <Text size="xs" c="dimmed">ID: {org.id}</Text>
+                          {expertMode && <Text size="xs" c="dimmed" ff="monospace">{org.id}</Text>}
                         </Stack>
                       </Group>
                     </Table.Td>
@@ -163,21 +140,13 @@ export function OrganizationList() {
                     </Table.Td>
                     <Table.Td>
                       <Group gap="xs" justify="flex-end">
-                        <Tooltip label="Edit Organization">
-                          <ActionIcon aria-label="Edit organization" 
-                            variant="light" 
-                            color="indigo" 
-                            onClick={() => handleOpenModal(org)}
-                          >
+                        <Tooltip label="Edit organization">
+                          <ActionIcon aria-label={`Edit ${org.name}`} variant="light" color="indigo" onClick={() => handleOpenModal(org)}>
                             <Edit2 size={16} />
                           </ActionIcon>
                         </Tooltip>
-                        <Tooltip label="Delete Organization">
-                          <ActionIcon aria-label="Delete organization" 
-                            variant="light" 
-                            color="red"
-                            onClick={() => handleDelete(org.id)}
-                          >
+                        <Tooltip label="Delete organization">
+                          <ActionIcon aria-label={`Delete ${org.name}`} variant="light" color="red" onClick={() => handleDelete(org)}>
                             <Trash2 size={16} />
                           </ActionIcon>
                         </Tooltip>
@@ -192,9 +161,9 @@ export function OrganizationList() {
         )}
       </Card>
 
-      <Modal 
-        opened={isModalOpen} 
-        onClose={() => setIsModalOpen(false)} 
+      <Modal
+        opened={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
         title={<Text fw={700}>{editingOrg ? 'Edit Organization' : 'New Organization'}</Text>}
         radius="lg"
       >
@@ -215,7 +184,7 @@ export function OrganizationList() {
           />
           <Group justify="flex-end" mt="md">
             <Button variant="light" onClick={() => setIsModalOpen(false)}>Cancel</Button>
-            <Button onClick={handleSubmit} loading={createOrg.isPending || updateOrg.isPending}>
+            <Button onClick={handleSubmit} loading={createOrg.isPending || updateOrg.isPending} disabled={!name.trim()}>
               {editingOrg ? 'Update' : 'Create'}
             </Button>
           </Group>

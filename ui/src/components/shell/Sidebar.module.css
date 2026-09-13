@@ -37,7 +37,8 @@
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  background-color: var(--mantine-color-blue-6);
+  /* blue-8: the mark carries white text, and white on blue-6 is 3.55:1. */
+  background-color: var(--mantine-color-blue-8);
   color: var(--mantine-color-white);
 }
 
@@ -101,7 +102,9 @@
 
 .link[data-active] {
   background-color: light-dark(var(--mantine-color-blue-0), rgba(34, 139, 230, 0.12));
-  color: light-dark(var(--mantine-color-blue-7), var(--mantine-color-blue-3));
+  /* blue-9, not blue-7: on the blue-0 tint behind it, blue-7 measures
+     3.77:1 against the 4.5:1 AA asks for. */
+  color: light-dark(var(--mantine-color-blue-9), var(--mantine-color-blue-3));
   font-weight: 500;
 }
 

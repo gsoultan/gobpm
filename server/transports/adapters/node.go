@@ -75,8 +75,11 @@ func NodeToProto(n *entities.Node) *pbentities.Node {
 		ElementVariable:     n.ElementVariable,
 		CompletionCondition: n.CompletionCondition,
 
-		X: int32(n.X),
-		Y: int32(n.Y),
+		X:          int32(n.X),
+		Y:          int32(n.Y),
+		Width:      int32(n.Width),
+		Height:     int32(n.Height),
+		IsExpanded: n.IsExpanded,
 
 		Nodes: NodesToProto(n.Nodes),
 		Flows: FlowsToProto(n.Flows),
@@ -137,8 +140,11 @@ func NodeFromProto(n *pbentities.Node) *entities.Node {
 		ElementVariable:     n.GetElementVariable(),
 		CompletionCondition: n.GetCompletionCondition(),
 
-		X: int(n.GetX()),
-		Y: int(n.GetY()),
+		X:          int(n.GetX()),
+		Y:          int(n.GetY()),
+		Width:      int(n.GetWidth()),
+		Height:     int(n.GetHeight()),
+		IsExpanded: n.GetIsExpanded(),
 
 		Nodes: NodesFromProto(n.GetNodes()),
 		Flows: FlowsFromProto(n.GetFlows()),
@@ -180,6 +186,7 @@ func FlowToProto(f *entities.SequenceFlow) *pbentities.Flow {
 		TargetRef:     f.TargetRef,
 		Condition:     f.Condition,
 		Documentation: f.Documentation,
+		Waypoints:     waypointsToProto(f.Waypoints),
 	}
 }
 
@@ -194,6 +201,7 @@ func FlowFromProto(f *pbentities.Flow) *entities.SequenceFlow {
 		TargetRef:     f.GetTargetRef(),
 		Condition:     f.GetCondition(),
 		Documentation: f.GetDocumentation(),
+		Waypoints:     waypointsFromProto(f.GetWaypoints()),
 	}
 }
 
@@ -253,4 +261,36 @@ func propertiesFromProto(s *structpb.Struct) map[string]any {
 		return nil
 	}
 	return s.AsMap()
+}
+
+// waypointsToProto and waypointsFromProto carry a sequence flow's drawn route
+// across the wire.
+//
+// Without them the designer's save request omits the route entirely, and the
+// server reads the omission as "this flow has no waypoints" — so an imported
+// diagram loses its edge routing the first time it is saved, which is the one
+// moment a user is certain they have not changed it.
+func waypointsToProto(in []entities.Waypoint) []*pbentities.Waypoint {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]*pbentities.Waypoint, len(in))
+	for i, wp := range in {
+		out[i] = &pbentities.Waypoint{X: int32(wp.X), Y: int32(wp.Y)}
+	}
+	return out
+}
+
+func waypointsFromProto(in []*pbentities.Waypoint) []entities.Waypoint {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]entities.Waypoint, 0, len(in))
+	for _, wp := range in {
+		if wp == nil {
+			continue
+		}
+		out = append(out, entities.Waypoint{X: int(wp.GetX()), Y: int(wp.GetY())})
+	}
+	return out
 }

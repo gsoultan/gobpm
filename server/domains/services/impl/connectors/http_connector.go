@@ -101,7 +101,7 @@ func applyHeaders(req *http.Request, config map[string]any) {
 }
 
 func parseJSONResponse(resp *http.Response) (map[string]any, error) {
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := httpclient.ReadResponseBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("http connector: read response: %w", err)
 	}

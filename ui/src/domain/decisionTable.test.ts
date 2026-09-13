@@ -231,7 +231,15 @@ describe('applyPastedGrid', () => {
 
 describe('validateCell', () => {
   it('accepts the notations a table is written in', () => {
-    for (const cell of ['', '-', '> 10', '[1..10]', ']1..10[', '"A", "B"', 'not("A")', 'GOLD']) {
+    // Every range notation the cell menu offers, including the two that open
+    // with `]` or close with `[`. The server's own parser accepts them — its
+    // comment names this editor as the reason — so flagging one as "a bracket
+    // is left open" told the author their own template was broken.
+    for (const cell of [
+      '', '-', '> 10',
+      '[1..10]', ']1..10[', ']1..10]', '[1..10[',
+      '"A", "B"', 'not("A")', 'GOLD',
+    ]) {
       expect(validateCell(cell)).toBeUndefined();
     }
   });

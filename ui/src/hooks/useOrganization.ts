@@ -4,7 +4,7 @@ import { processService } from '../services/api';
 import { useAppStore } from '../store/useAppStore';
 
 export const useOrganizations = () => {
-  const { token } = useAppStore();
+  const token = useAppStore((state) => state.token);
 
   return useQuery({
     staleTime: DIRECTORY_STALE_TIME,

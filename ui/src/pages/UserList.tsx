@@ -1,45 +1,40 @@
 import {
-  Table,
-  Card,
-  Text,
-  Button,
-  Group,
-  Stack,
-  ThemeIcon,
-  TextInput,
   ActionIcon,
-  Modal,
-  Box,
-  Tooltip,
   Badge,
+  Box,
+  Button,
+  Card,
+  Group,
+  Modal,
   MultiSelect,
   PasswordInput,
+  Stack,
+  Table,
+  Text,
+  TextInput,
+  ThemeIcon,
+  Tooltip,
 } from '@mantine/core';
-import {
-  Search,
-  Plus,
-  UserCircle,
-  Edit2,
-  Trash2,
-  Filter, User
-} from 'lucide-react';
-import { useUsers, useCreateUser, useUpdateUser, useDeleteUser } from '../hooks/useUser';
-import { PageHeader } from '../components/PageHeader';
-import { useState, useTransition } from 'react';
 import { notifications } from '@mantine/notifications';
-import { useAppStore } from '../store/useAppStore';
-import { TableLoadingState, ErrorState, EmptyState } from '../components/state';
+import { Edit2, Plus, Search, Trash2, User, UserCircle } from 'lucide-react';
+import { useState, useTransition } from 'react';
+
+import { PageHeader } from '../components/PageHeader';
+import { EmptyState, ErrorState, TableLoadingState } from '../components/state';
+import { MIN_PASSWORD_LENGTH } from '../domain/password';
+import { isPrivilegedRole, ROLE_OPTIONS, roleLabel } from '../domain/roles';
+import { matchesQuery } from '../domain/textSearch';
+import { useOrganizations } from '../hooks/useOrganization';
+import { useCreateUser, useDeleteUser, useUpdateUser, useUsers } from '../hooks/useUser';
+import { errorMessage } from '../services/shared/errors';
 import type { ApiOrganizationUser } from '../services/types';
+import { useAppStore } from '../store/useAppStore';
 
-/** A caught value is `unknown`; take its message when it has one. */
-function errorMessage(err: unknown, fallback: string): string {
-  return err instanceof Error && err.message ? err.message : fallback;
-}
-
-const AVAILABLE_ROLES = ['admin', 'user', 'manager', 'developer'];
+const COLUMNS = 4;
 
 export function UserList() {
   const { data, isLoading, error, refetch } = useUsers();
+  const { data: orgData } = useOrganizations();
   const createUser = useCreateUser();
   const updateUser = useUpdateUser();
   const deleteUser = useDeleteUser();
@@ -51,143 +46,122 @@ export function UserList() {
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
   const [displayName, setDisplayName] = useState('');
-  const [organization, setOrganization] = useState('');
   const [email, setEmail] = useState('');
   const [roles, setRoles] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [, startTransition] = useTransition();
 
-
   const allUsers = data?.users || [];
-  const users = searchQuery
-    ? allUsers.filter((u) =>
-        u.username?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        u.full_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        u.email?.toLowerCase().includes(searchQuery.toLowerCase())
-      )
-    : allUsers;
+  const users = allUsers.filter((u) => matchesQuery(searchQuery, u.username, u.full_name, u.email));
+
+  // New people join the organization being worked in. The form used to offer a
+  // free-text "Organization" box, which named nothing the server could join.
+  const currentOrganization = (orgData?.organizations ?? []).find((org) => org.id === currentOrganizationId);
+  const organizationName = editingUser
+    ? editingUser.organization?.name ?? currentOrganization?.name ?? ''
+    : currentOrganization?.name ?? '';
+
+  const passwordTooShort = password.length > 0 && password.length < MIN_PASSWORD_LENGTH;
+  const canSubmit = editingUser
+    ? fullName.trim().length > 0
+    : username.trim().length > 0 && fullName.trim().length > 0 && password.length >= MIN_PASSWORD_LENGTH;
 
   const handleOpenModal = (user?: ApiOrganizationUser) => {
-    if (user) {
-      setEditingUser(user);
-      setUsername(user.username || '');
-      setFullName(user.full_name || '');
-      setDisplayName(user.display_name || '');
-      setOrganization(user.organization?.name || '');
-      setEmail(user.email || '');
-      setRoles(user.roles || []);
-      setPassword('');
-    } else {
-      setEditingUser(null);
-      setUsername('');
-      setFullName('');
-      setDisplayName('');
-      setOrganization('');
-      setEmail('');
-      setRoles([]);
-      setPassword('');
-    }
+    setEditingUser(user ?? null);
+    setUsername(user?.username ?? '');
+    setFullName(user?.full_name ?? '');
+    setDisplayName(user?.display_name ?? '');
+    setEmail(user?.email ?? '');
+    setRoles(user?.roles ?? []);
+    setPassword('');
     setIsModalOpen(true);
   };
 
   const handleSubmit = async () => {
+    if (!canSubmit) return;
     try {
       if (editingUser) {
         await updateUser.mutateAsync({
           id: editingUser.id,
           full_name: fullName,
           display_name: displayName,
-          organization,
+          organization: organizationName,
           email,
           roles,
         });
-        notifications.show({ title: 'Success', message: 'User updated successfully', color: 'green' });
+        notifications.show({ title: 'Saved', message: `${fullName} was updated.`, color: 'green' });
       } else {
         await createUser.mutateAsync({
-          organization_id: currentOrganizationId || '',
+          organization_id: currentOrganizationId ?? '',
           username,
           password,
           full_name: fullName,
           display_name: displayName,
-          organization,
+          organization: organizationName,
           email,
           roles,
         });
-        notifications.show({ title: 'Success', message: 'User created successfully', color: 'green' });
+        notifications.show({ title: 'Added', message: `${fullName} can sign in now.`, color: 'green' });
       }
       setIsModalOpen(false);
     } catch (error: unknown) {
-      notifications.show({ title: 'Error', message: errorMessage(error, 'Failed to save user'), color: 'red' });
+      notifications.show({ title: 'Could not save it', message: errorMessage(error, 'Failed to save the account'), color: 'red' });
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (window.confirm('Are you sure you want to delete this user? This action cannot be undone.')) {
-      try {
-        await deleteUser.mutateAsync(id);
-        notifications.show({ title: 'Success', message: 'User deleted successfully', color: 'green' });
-      } catch (error: unknown) {
-        notifications.show({ title: 'Error', message: errorMessage(error, 'Failed to delete user'), color: 'red' });
-      }
+  const handleDelete = async (user: ApiOrganizationUser) => {
+    const who = user.full_name || user.username;
+    const consequence =
+      `Delete ${who}? Any tasks assigned to them stay open with nobody to do them — reassign those first. ` +
+      'Their account cannot be recovered.';
+    if (!window.confirm(consequence)) return;
+    try {
+      await deleteUser.mutateAsync(user.id);
+      notifications.show({ title: 'Deleted', message: `${who} no longer has an account.`, color: 'green' });
+    } catch (error: unknown) {
+      notifications.show({ title: 'Could not delete them', message: errorMessage(error, 'Failed to delete the account'), color: 'red' });
     }
   };
 
   const handleSearchChange = (value: string) => {
-    startTransition(() => {
-      setSearchQuery(value);
-    });
+    startTransition(() => setSearchQuery(value));
   };
 
   return (
     <Stack gap="xl">
       <PageHeader
-        title="Users"
-        description="Manage users in your organization."
+        title="Platform access"
+        description="Accounts that administer Metis: they sign in, configure the installation and author models. The people processes assign work to are Participants, on the People page."
         actions={
-          <Button
-            variant="filled"
-            color="indigo"
-            leftSection={<Plus size={16} />}
-            onClick={() => handleOpenModal()}
-          >
-            New User
+          <Button variant="filled" color="indigo" leftSection={<Plus size={16} />} onClick={() => handleOpenModal()}>
+            New account
           </Button>
         }
       />
 
       <Card shadow="sm" radius="lg" withBorder p={0}>
         <Box p="md">
-          <Group justify="space-between">
-            <Group flex={1}>
-              <TextInput
-                placeholder="Search users..."
-                leftSection={<Search size={16} />}
-                style={{ flex: 1, maxWidth: 400 }}
-                variant="filled"
-                radius="md"
-                onChange={(e) => handleSearchChange(e.currentTarget.value)}
-              />
-              <Button variant="light" leftSection={<Filter size={16} />} radius="md">Filter</Button>
-            </Group>
-          </Group>
+          <TextInput
+            aria-label="Search people"
+            placeholder="Search by name, username or email…"
+            leftSection={<Search size={16} />}
+            style={{ maxWidth: 400 }}
+            variant="filled"
+            radius="md"
+            onChange={(e) => handleSearchChange(e.currentTarget.value)}
+          />
         </Box>
 
-        {/*
-          Loading and error render inside the page rather than replacing it.
-          The previous early return swapped the whole page — title, filters,
-          actions — for one line of text, so the layout jumped when data
-          arrived and a failed request looked identical to an empty list.
-        */}
         {isLoading ? (
-          <TableLoadingState rows={5} columns={4} />
+          <TableLoadingState rows={5} columns={COLUMNS} />
         ) : error ? (
-          <ErrorState error={error} action="load your users" onRetry={() => refetch()} />
+          <ErrorState error={error} action="load the platform accounts" onRetry={() => refetch()} />
         ) : (
         <Table.ScrollContainer minWidth={800}>
           <Table verticalSpacing="md" horizontalSpacing="xl" highlightOnHover>
             <Table.Thead bg="gray.0">
               <Table.Tr>
-                <Table.Th>User</Table.Th>
+                <Table.Th>Account</Table.Th>
                 <Table.Th>Email</Table.Th>
                 <Table.Th>Roles</Table.Th>
                 <Table.Th ta="right">Actions</Table.Th>
@@ -196,8 +170,12 @@ export function UserList() {
             <Table.Tbody>
               {users.length === 0 ? (
                 <Table.Tr>
-                  <Table.Td colSpan={4}>
-                    <EmptyState icon={User} title="No people yet" description="Invite people so they can be assigned tasks and manage processes." />
+                  <Table.Td colSpan={COLUMNS}>
+                    {searchQuery ? (
+                      <Text ta="center" c="dimmed" py="xl">Nobody matches “{searchQuery}”.</Text>
+                    ) : (
+                      <EmptyState icon={User} title="No accounts yet" description="Add the people who administer this installation. Process participants are managed separately, on the People page." />
+                    )}
                   </Table.Td>
                 </Table.Tr>
               ) : (
@@ -219,30 +197,22 @@ export function UserList() {
                     </Table.Td>
                     <Table.Td>
                       <Group gap={4}>
-                        {(u.roles || []).map((role: string) => (
-                          <Badge key={role} variant="light" size="sm" color={role === 'admin' ? 'red' : 'blue'}>
-                            {role}
+                        {(u.roles || []).map((role) => (
+                          <Badge key={role} variant="light" size="sm" color={isPrivilegedRole(role) ? 'red' : 'blue'}>
+                            {roleLabel(role)}
                           </Badge>
                         ))}
                       </Group>
                     </Table.Td>
                     <Table.Td>
                       <Group gap="xs" justify="flex-end">
-                        <Tooltip label="Edit User">
-                          <ActionIcon aria-label="Edit user"
-                            variant="light"
-                            color="indigo"
-                            onClick={() => handleOpenModal(u)}
-                          >
+                        <Tooltip label="Edit account">
+                          <ActionIcon aria-label={`Edit ${u.full_name || u.username}`} variant="light" color="indigo" onClick={() => handleOpenModal(u)}>
                             <Edit2 size={16} />
                           </ActionIcon>
                         </Tooltip>
-                        <Tooltip label="Delete User">
-                          <ActionIcon aria-label="Delete user"
-                            variant="light"
-                            color="red"
-                            onClick={() => handleDelete(u.id)}
-                          >
+                        <Tooltip label="Delete account">
+                          <ActionIcon aria-label={`Delete ${u.full_name || u.username}`} variant="light" color="red" onClick={() => handleDelete(u)}>
                             <Trash2 size={16} />
                           </ActionIcon>
                         </Tooltip>
@@ -255,12 +225,19 @@ export function UserList() {
           </Table>
         </Table.ScrollContainer>
         )}
+        {/* The directory arrives whole; this says how much of it is on screen
+            until it is paged. */}
+        {!isLoading && !error && allUsers.length > 0 && (
+          <Text size="xs" c="dimmed" px="md" py="sm">
+            {searchQuery ? `${users.length} of ${allUsers.length} accounts match` : `Showing all ${allUsers.length} accounts`}
+          </Text>
+        )}
       </Card>
 
       <Modal
         opened={isModalOpen}
         onClose={() => setIsModalOpen(false)}
-        title={<Text fw={700}>{editingUser ? 'Edit User' : 'New User'}</Text>}
+        title={<Text fw={700}>{editingUser ? 'Edit account' : 'New account'}</Text>}
         radius="lg"
       >
         <Stack gap="md">
@@ -275,10 +252,12 @@ export function UserList() {
           {!editingUser && (
             <PasswordInput
               label="Password"
+              description={`At least ${MIN_PASSWORD_LENGTH} characters`}
               placeholder="Enter password"
               required
               value={password}
               onChange={(e) => setPassword(e.currentTarget.value)}
+              error={passwordTooShort ? `Needs at least ${MIN_PASSWORD_LENGTH} characters` : undefined}
             />
           )}
           <TextInput
@@ -296,9 +275,9 @@ export function UserList() {
           />
           <TextInput
             label="Organization"
-            placeholder="Enter organization"
-            value={organization}
-            onChange={(e) => setOrganization(e.currentTarget.value)}
+            description={editingUser ? undefined : 'New people join the organization you are working in'}
+            value={organizationName}
+            disabled
           />
           <TextInput
             label="Email"
@@ -309,13 +288,16 @@ export function UserList() {
           <MultiSelect
             label="Roles"
             placeholder="Select roles"
-            data={AVAILABLE_ROLES}
+            data={ROLE_OPTIONS.map(({ value, label, description }) => ({
+              value,
+              label: `${label} — ${description}`,
+            }))}
             value={roles}
             onChange={setRoles}
           />
           <Group justify="flex-end" mt="md">
             <Button variant="light" onClick={() => setIsModalOpen(false)}>Cancel</Button>
-            <Button onClick={handleSubmit} loading={createUser.isPending || updateUser.isPending}>
+            <Button onClick={handleSubmit} loading={createUser.isPending || updateUser.isPending} disabled={!canSubmit}>
               {editingUser ? 'Update' : 'Create'}
             </Button>
           </Group>

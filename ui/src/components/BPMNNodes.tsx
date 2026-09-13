@@ -434,8 +434,11 @@ export const GatewayNode = ({ data, selected }: NodeProps) => {
           {gatewayCaption}
         </Text>
         {!!data.defaultFlow && (
+          // Says *that* there is a fallback, not which identifier it is. It
+          // used to print eight characters of the flow's id, which names
+          // nothing to anybody: the flows on a canvas are drawn, not listed.
           <Badge size="xs" color="orange" variant="outline" p={2} style={{ fontSize: '8px', height: '14px' }}>
-             Default: {String(data.defaultFlow).slice(0, 8)}
+            has a fallback path
           </Badge>
         )}
       </Stack>

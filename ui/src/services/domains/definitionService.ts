@@ -9,6 +9,12 @@ import type {
   CreateNodePayload,
   ExportDefinitionResponse,
   ImportDefinitionResponse,
+  CancelScheduledDefinitionResponse,
+  ListDefinitionVersionsResponse,
+  ListLiveVersionsResponse,
+  MigrateInstancesResponse,
+  PromoteDefinitionResponse,
+  ScheduleDefinitionResponse,
 } from "../types";
 import { raiseIfRefused } from "../raise";
 
@@ -157,16 +163,139 @@ export const definitionService = {
     };
   },
 
-  async createDefinition(projectId: string, definition: CreateDefinitionPayload, signal?: AbortSignal) {
+  /**
+   * Deploys a version.
+   *
+   * `stage` decides whether it goes live. Staged, the version is saved and
+   * numbered but new instances keep starting on whichever version is live now —
+   * so a model can be reviewed before it starts taking real work. Either way,
+   * instances already running are untouched: they finish on their own version.
+   */
+  async createDefinition(
+    projectId: string,
+    definition: CreateDefinitionPayload,
+    options?: { stage?: boolean },
+    signal?: AbortSignal,
+  ) {
     const response = await definitionClient.createDefinition({
       projectId,
       key: definition?.key ?? "",
       name: definition?.name ?? "",
       nodes: (definition?.nodes ?? []).map(toNodeMessage),
       flows: (definition?.flows ?? []).map(toFlowMessage),
+      stage: options?.stage ?? false,
     }, { signal });
 
-    return { id: response.id, err: response.error };
+    const accepted = raiseIfRefused(response);
+    return { id: accepted.id, version: accepted.version, live: accepted.live };
+  },
+
+  /**
+   * Every version deployed under one process key, newest first, with which one
+   * is live and how much work each still holds.
+   */
+  async listDefinitionVersions(projectId: string, key: string, signal?: AbortSignal) {
+    const response = await requestJSON<ListDefinitionVersionsResponse>(
+      `/definitions/versions?project_id=${encodeURIComponent(projectId)}&key=${encodeURIComponent(key)}`,
+      { method: "GET", signal },
+    );
+    return { versions: response.versions ?? [], err: response.err };
+  },
+
+  /**
+   * Arranges for a version to take over at a given time.
+   *
+   * `activateAt` must be in the future; the server refuses a time already gone
+   * rather than treating it as "now", because those are different acts.
+   */
+  async scheduleDefinitionVersion(
+    projectId: string,
+    key: string,
+    version: number,
+    activateAt: Date,
+    signal?: AbortSignal,
+  ) {
+    const response = await requestJSON<ScheduleDefinitionResponse>(
+      `/definitions/versions/schedule`,
+      {
+        method: "POST",
+        // RFC 3339 in UTC. Sending the browser's local time would make the
+        // cutover depend on where the person arranging it happened to be.
+        body: { project_id: projectId, key, version, activate_at: activateAt.toISOString() },
+        signal,
+      },
+    );
+    return { err: raiseIfRefused(response).err };
+  },
+
+  /** Drops a cutover that has not happened yet. */
+  async cancelScheduledVersion(projectId: string, releaseId: string, signal?: AbortSignal) {
+    const response = await requestJSON<CancelScheduledDefinitionResponse>(
+      `/definitions/versions/schedule/cancel`,
+      { method: "POST", body: { project_id: projectId, release_id: releaseId }, signal },
+    );
+    return { err: raiseIfRefused(response).err };
+  },
+
+  /**
+   * Which version of each process key in a project is live.
+   *
+   * One call for a page that lists many processes; the per-key endpoint above
+   * would be a request per row.
+   */
+  async listLiveVersions(projectId: string, signal?: AbortSignal) {
+    const response = await requestJSON<ListLiveVersionsResponse>(
+      `/definitions/live-versions?project_id=${encodeURIComponent(projectId)}`,
+      { method: "GET", signal },
+    );
+    return { live: response.live ?? {}, err: response.err };
+  },
+
+  /**
+   * Makes one deployed version the one new instances start on.
+   *
+   * Running instances are deliberately not moved. There is no safe general way
+   * to relocate a token from one graph onto another, so a version change is a
+   * cutover for new work only.
+   */
+  async promoteDefinitionVersion(projectId: string, key: string, version: number, signal?: AbortSignal) {
+    const response = await requestJSON<PromoteDefinitionResponse>(
+      `/definitions/versions/promote`,
+      { method: "POST", body: { project_id: projectId, key, version }, signal },
+    );
+    return { err: raiseIfRefused(response).err };
+  },
+
+  /**
+   * Moves running instances onto another version, or says what that would do.
+   *
+   * `dryRun` is the default at the call site for a reason: this rewrites
+   * instances that have already been started — somebody's purchase order,
+   * somebody's leave request — so the plan is what you get unless you ask to
+   * commit. The reply carries the plan either way, so a refused apply explains
+   * itself with the same numbers the preview showed.
+   */
+  async migrateInstances(
+    sourceDefinitionId: string,
+    targetDefinitionId: string,
+    nodeMapping: Record<string, string>,
+    dryRun = true,
+    signal?: AbortSignal,
+  ) {
+    const response = await requestJSON<MigrateInstancesResponse>(`/definitions/versions/migrate`, {
+      method: "POST",
+      body: {
+        source_definition_id: sourceDefinitionId,
+        target_definition_id: targetDefinitionId,
+        node_mapping: nodeMapping,
+        dry_run: dryRun,
+      },
+      signal,
+    });
+    // Not raiseIfRefused: a refusal here is the answer, not a failure. The plan
+    // lists what would strand, and throwing it away would leave the person
+    // fixing the mapping with a toast and no detail.
+    return { plan: response.plan, applied: response.applied ?? false, err: response.err };
   },
 
   async getDefinition(_projectId: string, id: string, signal?: AbortSignal) {

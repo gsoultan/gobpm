@@ -1,0 +1,48 @@
+package model
+
+import (
+	"time"
+
+	"github.com/gsoultan/storm"
+)
+
+// ExternalTask is work an outside worker fetches and completes, rather than
+// something the engine executes itself.
+//
+// The worker holds it under a lock with an expiry, so a worker that dies
+// releases its work rather than stranding it.
+type ExternalTask struct {
+	storm.Model
+
+	Project    Project
+	Instance   ProcessInstance
+	Definition ProcessDefinition
+
+	NodeID string
+	// Topic is what a worker subscribes to.
+	Topic          string
+	WorkerID       *string
+	LockExpiration *time.Time
+
+	Retries      int
+	RetryTimeout int64
+	ErrorMessage *string
+	ErrorDetails *string
+
+	Variables storm.JSON
+
+	DeletedAt *time.Time
+}
+
+func (e *ExternalTask) Schema(t *storm.Table) {
+	t.Col(&e.NodeID).Size(255)
+	t.Col(&e.Topic).Size(255)
+	t.Col(&e.Topic).Index()
+	t.Col(&e.WorkerID).Size(255)
+	t.Col(&e.WorkerID).Index()
+	t.Col(&e.LockExpiration).Index()
+	t.Col(&e.DeletedAt).Index()
+	// Declared, so the predicate is compiled into every read of this table
+	// rather than written out at each call site. See the note in doc.go.
+	t.SoftDelete(&e.DeletedAt)
+}

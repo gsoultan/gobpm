@@ -7,4 +7,28 @@ import "entities/flow.proto";
 
 option go_package = "github.com/gsoultan/metis/api/proto/endpoints;endpoints";
 
-message CreateDefinitionRequest { string project_id = 1; string key = 2; string name = 3; repeated Node nodes = 4; repeated Flow flows = 5; } message CreateDefinitionResponse { string id = 1; string error = 2; }
+message CreateDefinitionRequest {
+  string project_id = 1;
+  string key = 2;
+  string name = 3;
+  repeated Node nodes = 4;
+  repeated Flow flows = 5;
+
+  // Deploy the version without making it live: new instances keep starting on
+  // whichever version is live now, and this one waits to be promoted.
+  //
+  // Negative ("stage") rather than positive ("promote") so a client that
+  // predates staging — which is every client written before this field — keeps
+  // getting a deploy that goes live.
+  bool stage = 6;
+}
+
+message CreateDefinitionResponse {
+  string id = 1;
+  string error = 2;
+
+  // What the deploy actually did, so a caller can say "v4 deployed and live" or
+  // "v4 staged, v3 still live" without a second round trip.
+  int32 version = 3;
+  bool live = 4;
+}

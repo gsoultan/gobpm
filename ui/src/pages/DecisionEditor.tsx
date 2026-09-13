@@ -88,6 +88,8 @@ import {
   parseOutputValue,
   validateCell,
   type DecisionInputColumn,
+  slugVariable,
+  variableFollowsLabel,
   type DecisionOutputColumn,
   type DecisionRuleRow,
 } from '../domain/decisionTable';
@@ -374,14 +376,18 @@ export function DecisionEditor({ definitionId }: { definitionId?: string }) {
   const summary = describeTable(hitPolicy, aggregation, inputs, outputs, rules.length);
 
   const addInput = () => {
-    const expression = `input${inputs.length + 1}`;
-    setInputs([...inputs, { id: uuidv4(), label: `Condition ${inputs.length + 1}`, expression, type: 'string' }]);
+    const label = `Condition ${inputs.length + 1}`;
+    const expression = slugVariable(label);
+    setInputs([...inputs, { id: uuidv4(), label, expression, type: 'string' }]);
     setRules(rules.map((rule) => ({ ...rule, input_entries: [...rule.input_entries, ANY_VALUE] })));
     setTestInputs({ ...testInputs, [expression]: '' });
   };
 
   const addOutput = () => {
-    setOutputs([...outputs, { id: uuidv4(), label: `Result ${outputs.length + 1}`, name: '', type: 'string' }]);
+    // Born with a name derived from its heading. It used to be created empty,
+    // which is an error that disables Save, fixable only in Expert mode.
+    const label = `Result ${outputs.length + 1}`;
+    setOutputs([...outputs, { id: uuidv4(), label, name: slugVariable(label), type: 'string' }]);
     setRules(rules.map((rule) => ({ ...rule, output_entries: [...rule.output_entries, ''] })));
   };
 
@@ -544,12 +550,23 @@ export function DecisionEditor({ definitionId }: { definitionId?: string }) {
     try {
       if (definitionId) {
         await updateDecision.mutateAsync({ id: definitionId, ...payload });
-        notifications.show({ title: 'Saved', message: `${name} updated`, color: 'green' });
+        notifications.show({ title: 'Saved', message: `${name} updated. Try it below.`, color: 'green' });
       } else {
-        await createDecision.mutateAsync(payload);
-        notifications.show({ title: 'Saved', message: `${name} created`, color: 'green' });
+        const created = await createDecision.mutateAsync(payload);
+        notifications.show({ title: 'Saved', message: `${name} created. Try it below.`, color: 'green' });
+        /*
+         * Stay in the editor, now editing the table that was just created.
+         *
+         * Saving used to navigate back to the list. "Try it" only runs the
+         * *saved* table, so the loop everybody actually wants — type a rule, try
+         * it, fix it, try again — was impossible: you saved, lost your place,
+         * and had to find the table and reopen it. Adopting the new id keeps
+         * the page and makes the next save an update.
+         */
+        if (created?.id) {
+          navigate({ to: '/decision-editor', search: { id: created.id }, replace: true });
+        }
       }
-      navigate({ to: '/models', search: { tab: 'decisions' } });
     } catch (err: unknown) {
       notifications.show({
         title: 'Could not save',
@@ -673,7 +690,13 @@ export function DecisionEditor({ definitionId }: { definitionId?: string }) {
                         variable={input.expression}
                         type={input.type}
                         expert={expertMode}
-                        onLabel={(next) => setInputs(inputs.map((c, i) => (i === index ? { ...c, label: next } : c)))}
+                        onLabel={(next) =>
+                          setInputs(inputs.map((c, i) =>
+                            i === index
+                              ? { ...c, label: next, expression: variableFollowsLabel(c.expression, c.label) ? slugVariable(next) : c.expression }
+                              : c,
+                          ))
+                        }
                         onVariable={(next) =>
                           setInputs(inputs.map((c, i) => (i === index ? { ...c, expression: next } : c)))
                         }
@@ -690,7 +713,13 @@ export function DecisionEditor({ definitionId }: { definitionId?: string }) {
                         variable={output.name}
                         type={output.type}
                         expert={expertMode}
-                        onLabel={(next) => setOutputs(outputs.map((c, i) => (i === index ? { ...c, label: next } : c)))}
+                        onLabel={(next) =>
+                          setOutputs(outputs.map((c, i) =>
+                            i === index
+                              ? { ...c, label: next, name: variableFollowsLabel(c.name, c.label) ? slugVariable(next) : c.name }
+                              : c,
+                          ))
+                        }
                         onVariable={(next) => setOutputs(outputs.map((c, i) => (i === index ? { ...c, name: next } : c)))}
                         onType={(next) => setOutputs(outputs.map((c, i) => (i === index ? { ...c, type: next } : c)))}
                         onRemove={outputs.length > 1 ? () => removeOutput(index) : undefined}
@@ -995,19 +1024,51 @@ export function DecisionEditor({ definitionId }: { definitionId?: string }) {
               )}
 
               {testResult && (
-                <Card withBorder radius="sm" p="xs" bg="var(--mantine-color-gray-0)">
+                <Card
+                  withBorder
+                  radius="sm"
+                  p="xs"
+                  bg={matchedRules.length === 0 ? 'var(--mantine-color-yellow-0)' : 'var(--mantine-color-gray-0)'}
+                >
                   <Stack gap={6}>
+                    {/*
+                      Nothing matching is not a success. It used to be reported
+                      under a green tick beside an empty result, so a table that
+                      quietly decides nothing looked like a table that worked —
+                      and the process carries on with the variable unset.
+                    */}
                     <Group gap={6}>
-                      <CircleCheck size={14} color="var(--mantine-color-green-6)" />
+                      {matchedRules.length === 0 ? (
+                        <AlertCircle size={14} color="var(--mantine-color-yellow-7)" />
+                      ) : (
+                        <CircleCheck size={14} color="var(--mantine-color-green-6)" />
+                      )}
                       <Text size="xs" fw={600}>
                         {matchedRules.length === 0
                           ? 'No line matched'
                           : `Line ${matchedRules.map((index) => index + 1).join(', ')} matched`}
                       </Text>
                     </Group>
-                    <Code block fz={11}>
-                      {JSON.stringify(testResult, null, 2)}
-                    </Code>
+
+                    {matchedRules.length === 0 ? (
+                      <Text size="xs" c="dimmed">
+                        The process would get no value for{' '}
+                        {outputs.map((output) => output.label).filter(Boolean).join(', ') || 'this table'}
+                        . Add a line that catches this case, or a catch-all line at the bottom.
+                      </Text>
+                    ) : (
+                      /* Results named the way the columns are, rather than raw JSON. */
+                      <Stack gap={2}>
+                        {outputs.map((output) => (
+                          <Group key={output.id} gap={6} wrap="nowrap">
+                            <Text size="xs" c="dimmed">{output.label || output.name}:</Text>
+                            <Text size="xs" fw={600}>
+                              {formatOutputValue(testResult[output.name])}
+                            </Text>
+                          </Group>
+                        ))}
+                      </Stack>
+                    )}
                   </Stack>
                 </Card>
               )}
@@ -1132,29 +1193,35 @@ function ColumnHeader({
           onChange={(event) => onLabel(event.currentTarget.value)}
         />
 
-        {expert ? (
-          <Stack gap={2}>
-            <TextInput
-              size="xs"
-              aria-label="Variable"
-              placeholder="variable"
-              value={variable}
-              onChange={(event) => onVariable(event.currentTarget.value)}
-            />
-            <Select
-              size="xs"
-              aria-label="Type"
-              value={type}
-              onChange={(next) => onType(next ?? 'string')}
-              data={COLUMN_TYPES}
-              allowDeselect={false}
-            />
-          </Stack>
-        ) : (
-          <Badge size="xs" variant="light" color={accent} styles={{ label: { textTransform: 'none' } }}>
-            {variable || 'unnamed'}
-          </Badge>
-        )}
+        {/*
+          The process variable is never hidden.
+          
+          It used to appear only in Expert mode, as a badge reading "unnamed"
+          otherwise. But an unnamed result column is an *error* that disables
+          Save, and the only control that fixed it was behind Advanced → Expert:
+          a novice adding their first result column reached a dead end with no
+          way out of it. It fills itself in from the column name, so most people
+          never have to think about it.
+        */}
+        <Stack gap={2}>
+          <TextInput
+            size="xs"
+            aria-label={`Process variable for the ${label || 'new'} column`}
+            placeholder="named_automatically"
+            description={expert ? undefined : 'The name the process uses'}
+            value={variable}
+            onChange={(event) => onVariable(event.currentTarget.value)}
+            error={variable.trim() === '' ? 'Needed' : undefined}
+          />
+          <Select
+            size="xs"
+            aria-label={`Type of the ${label || 'new'} column`}
+            value={type}
+            onChange={(next) => onType(next ?? 'string')}
+            data={COLUMN_TYPES}
+            allowDeselect={false}
+          />
+        </Stack>
       </Stack>
     </Table.Th>
   );

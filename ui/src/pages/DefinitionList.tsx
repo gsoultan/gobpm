@@ -1,69 +1,108 @@
 import {
-  Table,
-  Card,
-  Text,
-  Button,
-  Group,
-  Stack,
-  ThemeIcon,
-  TextInput,
   ActionIcon,
   Badge,
-  Modal,
-  Box,
-  Tooltip,
-  Skeleton,
+  Button,
+  Card,
   Center,
+  Group,
   Loader,
+  Modal,
+  Pagination,
+  Select,
+  Skeleton,
+  Stack,
+  Table,
+  Text,
+  ThemeIcon,
+  Tooltip,
 } from '@mantine/core';
-import { 
-  Search, 
-  Plus, 
-  Play, 
-  Eye, 
-  Filter, 
-  Network, 
-  GitBranch, 
-  History,
-  RotateCcw,
-} from 'lucide-react';
-import { useDefinitions, useStartProcess, useDefinition } from '../hooks/useProcess';
-import { PageHeader } from '../components/PageHeader';
-import { BPMNGraph } from '../components/BPMNGraph';
-import { CreationWizard } from '../components/CreationWizard';
-import { useMemo, useState } from 'react';
+import { notifications } from '@mantine/notifications';
 import { useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
+import relativeTime from 'dayjs/plugin/relativeTime';
+import { Eye, GitBranch, History, Network, Play, Plus } from 'lucide-react';
+import { lazy, Suspense, useState } from 'react';
+
+import { BPMNGraph } from '../components/BPMNGraph';
+import { CreationWizard } from '../components/CreationWizard';
+import { PageHeader } from '../components/PageHeader';
+/**
+ * Loaded on demand, not with the page.
+ *
+ * The modal pulls in Mantine's date-time picker for scheduling a cutover, which
+ * is about 10 kB of the critical path for a dialog that opens on a button
+ * press — enough on its own to push first paint over its ceiling.
+ */
+const VersionHistoryModal = lazy(() =>
+  import('../components/VersionHistoryModal').then((m) => ({ default: m.VersionHistoryModal })),
+);
 import { ErrorState } from '../components/state';
-import type { ProcessDefinition } from '../gen/entities/definition_pb';
+import { versionsByKey } from '../domain/definitionVersions';
+import { rowVersions } from '../domain/versionRollout';
+// The two dialogs need only enough to name a definition and start it; keeping
+// the state to this shape avoids coupling to either the list's or the detail
+// endpoint's fuller (and differently-cased) type.
+type DefinitionRef = { id: string; key: string; name: string; version: number };
+import { useDefinition, useDefinitions, useStartProcess } from '../hooks/useProcess';
+import { useLiveVersions } from '../hooks/useDefinitions';
+import { errorMessage } from '../services/shared/errors';
+
+dayjs.extend(relativeTime);
+
+const PAGE_SIZES = ['25', '50', '100'];
+const COLUMNS = 5;
 
 export function DefinitionList({ onEditModel, hideHeader }: { onEditModel?: (id: string) => void, hideHeader?: boolean }) {
   const navigate = useNavigate();
-  const { data, isLoading, error, refetch } = useDefinitions();
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const { data, isLoading, error, refetch } = useDefinitions(page, pageSize);
   const startProcess = useStartProcess();
-  const [selectedDef, setSelectedDef] = useState<ProcessDefinition | null>(null);
+  const { data: liveData } = useLiveVersions();
+  const liveVersions = liveData?.live ?? {};
+  const [selectedDef, setSelectedDef] = useState<DefinitionRef | null>(null);
   const [historyKey, setHistoryKey] = useState<string | null>(null);
   const [wizardOpened, setWizardOpened] = useState(false);
-  
+  // The process waiting for "yes, start it", and the one being started.
+  const [pendingRun, setPendingRun] = useState<DefinitionRef | null>(null);
+  const [startingKey, setStartingKey] = useState<string | null>(null);
+
   const { data: fullDefData, isLoading: isFullLoading } = useDefinition(selectedDef?.id || null);
 
-  const definitions = useMemo(() => data?.definitions ?? [], [data]);
+  const [appliedPageSize, setAppliedPageSize] = useState(pageSize);
+  if (pageSize !== appliedPageSize) {
+    setAppliedPageSize(pageSize);
+    setPage(1);
+  }
 
-  const groupedDefinitions = useMemo(() => {
-    const groups: Record<string, ProcessDefinition[]> = {};
-    definitions.forEach((def) => {
-      if (!groups[def.key]) groups[def.key] = [];
-      groups[def.key].push(def);
-    });
-    Object.keys(groups).forEach(key => {
-      groups[key].sort((a, b) => b.version - a.version);
-    });
-    return groups;
-  }, [definitions]);
+  const definitions = data?.definitions ?? [];
+  const pageInfo = data?.pageInfo;
+  // One row per key, showing the version that is actually live rather than the
+  // highest one deployed. Those are the same thing until somebody stages a
+  // version, and different in the way that matters after — the newest version
+  // may be one no instance will ever start on.
+  const rows = Object.values(versionsByKey(definitions))
+    .map((group) => rowVersions(group, liveVersions))
+    .filter((row) => row !== null);
+  const latestDefinitions = rows.map((row) => row.live);
 
-  const latestDefinitions = useMemo(() => 
-    Object.values(groupedDefinitions).map(versions => versions[0]),
-  [groupedDefinitions]);
+  /** The version waiting behind the live one for this key, if any. */
+  const stagedFor = (key: string) =>
+    rows.find((row) => row.live.key === key)?.staged?.version ?? null;
+
+  const startNow = async (def: DefinitionRef) => {
+    setPendingRun(null);
+    setStartingKey(def.key);
+    try {
+      // startProcess raises on a refusal, so the catch below is the one path.
+      await startProcess.mutateAsync({ definitionKey: def.key });
+      notifications.show({ title: `Started ${def.name}`, message: 'Follow it under Instances.', color: 'green' });
+    } catch (err: unknown) {
+      notifications.show({ title: `Could not start ${def.name}`, message: errorMessage(err, 'It did not start.'), color: 'red' });
+    } finally {
+      setStartingKey(null);
+    }
+  };
 
   if (isLoading) {
     return (
@@ -72,15 +111,7 @@ export function DefinitionList({ onEditModel, hideHeader }: { onEditModel?: (id:
         <Card shadow="sm" radius="lg" withBorder p={0}>
           <Table.ScrollContainer minWidth={800}>
             <Table verticalSpacing="md" horizontalSpacing="xl">
-              <Table.Thead bg="gray.0">
-                <Table.Tr>
-                  <Table.Th>Process Name</Table.Th>
-                  <Table.Th>Key</Table.Th>
-                  <Table.Th>Version</Table.Th>
-                  <Table.Th>Deployment</Table.Th>
-                  <Table.Th ta="right">Actions</Table.Th>
-                </Table.Tr>
-              </Table.Thead>
+              <Table.Thead bg="gray.0"><HeaderRow /></Table.Thead>
               <Table.Tbody>
                 {Array.from({ length: 4 }).map((_, i) => (
                   <Table.Tr key={i}>
@@ -105,21 +136,15 @@ export function DefinitionList({ onEditModel, hideHeader }: { onEditModel?: (id:
     return <ErrorState error={error} action="load your process models" onRetry={() => refetch()} />;
   }
 
-  const historyVersions = historyKey ? groupedDefinitions[historyKey] || [] : [];
 
   return (
     <Stack gap="xl">
       {!hideHeader && (
-        <PageHeader 
-          title="Processes" 
+        <PageHeader
+          title="Processes"
           description="Design, deploy and manage your business process models."
           actions={
-            <Button 
-              variant="filled" 
-              color="indigo" 
-              leftSection={<Plus size={16} />}
-              onClick={() => setWizardOpened(true)}
-            >
+            <Button variant="filled" color="indigo" leftSection={<Plus size={16} />} onClick={() => setWizardOpened(true)}>
               Create New
             </Button>
           }
@@ -127,36 +152,13 @@ export function DefinitionList({ onEditModel, hideHeader }: { onEditModel?: (id:
       )}
 
       <Card shadow="sm" radius="lg" withBorder p={0}>
-        <Box p="md">
-          <Group justify="space-between">
-            <Group flex={1}>
-              <TextInput 
-                placeholder="Search models..." 
-                leftSection={<Search size={16} />} 
-                style={{ flex: 1, maxWidth: 400 }}
-                variant="filled"
-                radius="md"
-              />
-              <Button variant="light" leftSection={<Filter size={16} />} radius="md">Filter</Button>
-            </Group>
-          </Group>
-        </Box>
-
         <Table.ScrollContainer minWidth={800}>
           <Table verticalSpacing="md" horizontalSpacing="xl" highlightOnHover>
-            <Table.Thead bg="gray.0">
-              <Table.Tr>
-                <Table.Th>Process Name</Table.Th>
-                <Table.Th>Key</Table.Th>
-                <Table.Th>Version</Table.Th>
-                <Table.Th>Deployment</Table.Th>
-                <Table.Th ta="right">Actions</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
+            <Table.Thead bg="gray.0"><HeaderRow /></Table.Thead>
             <Table.Tbody>
               {latestDefinitions.length === 0 ? (
                 <Table.Tr>
-                  <Table.Td colSpan={5}>
+                  <Table.Td colSpan={COLUMNS}>
                     <Stack align="center" py={60} gap="sm">
                       <ThemeIcon size={60} radius="xl" variant="light" color="gray">
                         <GitBranch size={32} />
@@ -179,57 +181,52 @@ export function DefinitionList({ onEditModel, hideHeader }: { onEditModel?: (id:
                         </ThemeIcon>
                         <Stack gap={0}>
                           <Text fw={700} size="sm">{def.name}</Text>
-                          <Text size="xs" c="dimmed">BPMN 2.0</Text>
+                          {def.documentation && <Text size="xs" c="dimmed" lineClamp={1}>{def.documentation}</Text>}
                         </Stack>
                       </Group>
                     </Table.Td>
                     <Table.Td>
-                      <Badge variant="outline" color="gray" radius="sm">{def.key}</Badge>
+                      <Badge variant="outline" color="gray" radius="sm" styles={{ label: { textTransform: 'none' } }}>{def.key}</Badge>
                     </Table.Td>
                     <Table.Td>
-                      <Badge variant="light" color="blue">v{def.version}</Badge>
-                    </Table.Td>
-                    <Table.Td>
-                      <Group gap={4}>
-                        <Text size="xs" c="dimmed">{dayjs(def.createdAt).fromNow()}</Text>
+                      <Group gap={6} wrap="nowrap">
+                        <Tooltip label="New instances start on this version">
+                          <Badge variant="light" color="blue">v{def.version} live</Badge>
+                        </Tooltip>
+                        {stagedFor(def.key) !== null && (
+                          <Tooltip label={`v${stagedFor(def.key)} is deployed but takes no work yet. Promote it from Version history.`}>
+                            <Badge variant="outline" color="orange" size="sm">v{stagedFor(def.key)} staged</Badge>
+                          </Tooltip>
+                        )}
                       </Group>
                     </Table.Td>
                     <Table.Td>
+                      <Text size="xs" c="dimmed">{dayjs(def.createdAt).fromNow()}</Text>
+                    </Table.Td>
+                    <Table.Td>
                       <Group gap="xs" justify="flex-end">
-                        <Button 
-                          size="xs" 
+                        <Button
+                          size="xs"
                           variant="light"
                           color="green"
                           leftSection={<Play size={14} />}
-                          onClick={() => startProcess.mutate({ definitionKey: def.key })}
-                          loading={startProcess.isPending}
+                          onClick={() => setPendingRun(def)}
+                          loading={startingKey === def.key}
                         >
                           Run
                         </Button>
-                        <Tooltip label="Version History">
-                          <ActionIcon aria-label="History process model" 
-                            variant="light" 
-                            color="orange" 
-                            onClick={() => setHistoryKey(def.key)}
-                          >
+                        <Tooltip label="Version history">
+                          <ActionIcon aria-label={`Version history of ${def.name}`} variant="light" color="orange" onClick={() => setHistoryKey(def.key)}>
                             <History size={16} />
                           </ActionIcon>
                         </Tooltip>
-                        <Tooltip label="Edit Flow">
-                          <ActionIcon aria-label="View process versions" 
-                            variant="light" 
-                            color="blue" 
-                            onClick={() => onEditModel?.(def.id)}
-                          >
+                        <Tooltip label="Edit flow">
+                          <ActionIcon aria-label={`Edit ${def.name}`} variant="light" color="blue" onClick={() => onEditModel?.(def.id)}>
                             <GitBranch size={16} />
                           </ActionIcon>
                         </Tooltip>
-                        <Tooltip label="View Graph">
-                          <ActionIcon aria-label="View process model" 
-                            variant="light" 
-                            color="indigo" 
-                            onClick={() => setSelectedDef(def)}
-                          >
+                        <Tooltip label="View diagram">
+                          <ActionIcon aria-label={`View ${def.name}`} variant="light" color="indigo" onClick={() => setSelectedDef(def)}>
                             <Eye size={16} />
                           </ActionIcon>
                         </Tooltip>
@@ -241,88 +238,137 @@ export function DefinitionList({ onEditModel, hideHeader }: { onEditModel?: (id:
             </Table.Tbody>
           </Table>
         </Table.ScrollContainer>
+
+        {/* Only the first page used to exist: the hook was paged, the page
+            never read pageInfo, and a project's 26th process was unreachable. */}
+        {pageInfo && pageInfo.total > pageInfo.pageSize && (
+          <Group justify="space-between" px="md" py="sm" wrap="wrap" gap="sm">
+            <Text size="sm" c="dimmed">
+              {`${(pageInfo.page - 1) * pageInfo.pageSize + 1}–` +
+                `${Math.min(pageInfo.page * pageInfo.pageSize, pageInfo.total)}` +
+                ` of ${pageInfo.total.toLocaleString()} versions`}
+            </Text>
+            <Group gap="sm" wrap="nowrap">
+              <Select
+                aria-label="Versions per page"
+                data={PAGE_SIZES}
+                value={String(pageSize)}
+                onChange={(value) => value && setPageSize(Number(value))}
+                size="xs"
+                w={92}
+                allowDeselect={false}
+                comboboxProps={{ withinPortal: true }}
+              />
+              <Pagination
+                value={pageInfo.page}
+                onChange={setPage}
+                total={Math.max(1, Math.ceil(pageInfo.total / pageInfo.pageSize))}
+                size="sm"
+                withEdges
+                getControlProps={(control) => ({
+                  'aria-label': {
+                    first: 'First page',
+                    last: 'Last page',
+                    next: 'Next page',
+                    previous: 'Previous page',
+                  }[control] ?? undefined,
+                })}
+              />
+            </Group>
+          </Group>
+        )}
       </Card>
 
-      {/* Version History Modal */}
       <Modal
-        opened={!!historyKey}
-        onClose={() => setHistoryKey(null)}
-        title={<Group gap="xs"><History size={20} color="orange" /><Text fw={800}>Version History: {historyKey}</Text></Group>}
-        size="lg"
+        opened={pendingRun !== null}
+        onClose={() => setPendingRun(null)}
+        title={<Text fw={700}>Start {pendingRun?.name}?</Text>}
         radius="lg"
       >
         <Stack gap="md">
-          <Table verticalSpacing="sm">
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>Version</Table.Th>
-                <Table.Th>Deployed At</Table.Th>
-                <Table.Th ta="right">Actions</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {historyVersions.map((v) => (
-                <Table.Tr key={v.id}>
-                  <Table.Td><Badge color={v.version === historyVersions[0].version ? "blue" : "gray"}>v{v.version}</Badge></Table.Td>
-                  <Table.Td><Text size="sm">{dayjs(v.createdAt).format('YYYY-MM-DD HH:mm')}</Text></Table.Td>
-                  <Table.Td>
-                    <Group justify="flex-end" gap="xs">
-                      <Button size="compact-xs" variant="light" leftSection={<Eye size={12} />} onClick={() => { setSelectedDef(v); setHistoryKey(null); }}>View</Button>
-                      <Button size="compact-xs" variant="light" color="indigo" leftSection={<RotateCcw size={12} />}>Rollback</Button>
-                    </Group>
-                  </Table.Td>
-                </Table.Tr>
-              ))}
-            </Table.Tbody>
-          </Table>
+          <Text size="sm">
+            A new instance of version {pendingRun?.version} starts now. Its first steps run immediately, and anyone
+            given a task in it is notified.
+          </Text>
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setPendingRun(null)}>Cancel</Button>
+            <Button color="green" leftSection={<Play size={14} />} onClick={() => pendingRun && startNow(pendingRun)}>
+              Start
+            </Button>
+          </Group>
         </Stack>
       </Modal>
 
-      <Modal 
-        opened={!!selectedDef} 
-        onClose={() => setSelectedDef(null)} 
-        title={<Text fw={700}>Process Visualization: {selectedDef?.name} (v{selectedDef?.version})</Text>}
+      {/*
+        The history is fetched rather than derived from the list page: which
+        version is live, and how many instances each one is still finishing, are
+        facts only the server has. Grouping the list client-side could show the
+        version numbers but never the state that matters.
+      */}
+      {historyKey !== null && (
+        <Suspense fallback={null}>
+          <VersionHistoryModal
+            processKey={historyKey}
+            onClose={() => setHistoryKey(null)}
+            onView={(version) => { setSelectedDef(version); setHistoryKey(null); }}
+          />
+        </Suspense>
+      )}
+
+      <Modal
+        opened={!!selectedDef}
+        onClose={() => setSelectedDef(null)}
+        title={<Text fw={700}>{selectedDef?.name} (v{selectedDef?.version})</Text>}
         size="xl"
         radius="lg"
       >
         {isFullLoading ? (
-          <Center py="xl">
-            <Loader />
-          </Center>
+          <Center py="xl"><Loader /></Center>
         ) : !!fullDefData?.definition && (
           <Stack gap="md">
-            <BPMNGraph nodes={(fullDefData.definition as unknown as { nodes?: React.ComponentProps<typeof BPMNGraph>['nodes'] })?.nodes} flows={(fullDefData.definition as unknown as { flows?: React.ComponentProps<typeof BPMNGraph>['flows'] })?.flows} />
+            <BPMNGraph nodes={fullDefData.definition.nodes} flows={fullDefData.definition.flows} />
             <Group justify="flex-end">
               <Button onClick={() => setSelectedDef(null)}>Close</Button>
-              <Button 
-                variant="filled" 
-                color="green" 
+              <Button
+                variant="filled"
+                color="green"
                 leftSection={<Play size={16} />}
                 onClick={() => {
-                  startProcess.mutate({ definitionKey: fullDefData.definition!.key });
+                  const d = fullDefData.definition;
+                  setPendingRun(d ? { id: d.id, key: d.key, name: d.name, version: d.version } : null);
                   setSelectedDef(null);
                 }}
               >
-                Start Instance
+                Run
               </Button>
             </Group>
           </Stack>
         )}
       </Modal>
 
-      <CreationWizard 
+      <CreationWizard
         opened={wizardOpened}
         onClose={() => setWizardOpened(false)}
         initialType="process"
-        onCreateProcess={(data) => {
-          // Pass new process data to designer (could be via search params or state)
-          navigate({ to: '/designer', search: { name: data.name, key: data.key } });
-        }}
-        onCreateDecision={(data) => {
-          // In the future, we could navigate to Decision Editor with pre-filled name/key
-          navigate({ to: '/decision-editor', search: { name: data.name, key: data.key } });
-        }}
+        onCreateProcess={(data) => navigate({ to: '/designer', search: { name: data.name, key: data.key } })}
+        onCreateDecision={(data) => navigate({ to: '/decision-editor', search: { name: data.name, key: data.key } })}
       />
     </Stack>
+  );
+}
+
+function HeaderRow() {
+  return (
+    <Table.Tr>
+      <Table.Th>Process</Table.Th>
+      <Table.Th>
+        <Tooltip label="What other processes and the API call it by">
+          <span>Reference</span>
+        </Tooltip>
+      </Table.Th>
+      <Table.Th>Version</Table.Th>
+      <Table.Th>Deployed</Table.Th>
+      <Table.Th ta="right">Actions</Table.Th>
+    </Table.Tr>
   );
 }

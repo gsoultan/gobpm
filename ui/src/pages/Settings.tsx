@@ -6,7 +6,6 @@ import {
   Group, 
   Switch, 
   Divider, 
-  Button,
   Box,
   SimpleGrid,
   ActionIcon
@@ -14,17 +13,23 @@ import {
 import { 
   Moon, 
   Sun, 
-  Trash2, 
-  Key,
   ShieldCheck,
   ShieldOff
 } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
+import { EnvironmentSettings } from '../components/EnvironmentSettings';
 import { PageHeader } from '../components/PageHeader';
 import { ComingSoonButton } from '../components/state/ComingSoon';
 
 export function Settings() {
-  const { theme, toggleTheme, expertMode, setExpertMode } = useAppStore();
+  // Environments are administrative: the list alone says where every runtime's
+  // database lives. The server refuses a non-admin either way; hiding it here
+  // is so nobody is shown a control that will only ever say no.
+  const isAdmin = useAppStore((state) => state.user?.role === 'ADMIN');
+  const theme = useAppStore((state) => state.theme);
+  const toggleTheme = useAppStore((state) => state.toggleTheme);
+  const expertMode = useAppStore((state) => state.expertMode);
+  const setExpertMode = useAppStore((state) => state.setExpertMode);
 
   return (
     <Stack gap="xl">
@@ -33,10 +38,17 @@ export function Settings() {
         description="Configure your workspace and preferences."
       />
 
+      {/*
+        Full width, above the preference grid: an environment names a database
+        and a port, which is infrastructure rather than a preference, and it is
+        the thing an administrator opens this page to change.
+      */}
+      {isAdmin && <EnvironmentSettings />}
+
       <SimpleGrid cols={{ base: 1, md: 2 }} spacing="xl">
         <Stack gap="lg">
           <Paper p="xl" radius="lg" withBorder shadow="sm">
-            <Title order={5} mb="lg">Appearance</Title>
+            <Title order={2} size="h5" mb="lg">Appearance</Title>
             <Stack gap="md">
               <Group justify="space-between">
                 <Box>
@@ -74,6 +86,7 @@ export function Settings() {
                 <Group gap="xs">
                   {expertMode ? <ShieldCheck size={16} color="green" /> : <ShieldOff size={16} color="gray" />}
                   <Switch 
+                    aria-label="Expert mode"
                     checked={expertMode} 
                     onChange={(event) => setExpertMode(event.currentTarget.checked)} 
                     size="md" 
@@ -82,32 +95,18 @@ export function Settings() {
               </Group>
             </Stack>
           </Paper>
-
-          <Paper p="xl" radius="lg" withBorder shadow="sm">
-            <Title order={5} mb="lg">Notifications</Title>
-            <Stack gap="md">
-              <Group justify="space-between">
-                <Box>
-                  <Text fw={600} size="sm">Email Notifications</Text>
-                  <Text size="xs" c="dimmed">Receive task assignments and status updates</Text>
-                </Box>
-                <Switch defaultChecked size="md" />
-              </Group>
-              <Divider />
-              <Group justify="space-between">
-                <Box>
-                  <Text fw={600} size="sm">Push Notifications</Text>
-                  <Text size="xs" c="dimmed">Receive alerts in your browser</Text>
-                </Box>
-                <Switch size="md" />
-              </Group>
-            </Stack>
-          </Paper>
+          {/*
+            A "Notifications" panel with email and push switches stood here.
+            Neither was wired to anything — one even rendered as already on —
+            so a user could turn on email notifications, get none, and not know
+            whether the feature or their mail was broken. Notifications arrive
+            in the bell in the header; there is nothing to configure yet.
+          */}
         </Stack>
 
         <Stack gap="lg">
           <Paper p="xl" radius="lg" withBorder shadow="sm">
-            <Title order={5} mb="lg">Security & API</Title>
+            <Title order={2} size="h5" mb="lg">Security &amp; API</Title>
             <Stack gap="md">
               <Group justify="space-between">
                 <Box>
@@ -122,13 +121,13 @@ export function Settings() {
                   <Text fw={600} size="sm">API Keys</Text>
                   <Text size="xs" c="dimmed">Manage tokens for external API access</Text>
                 </Box>
-                <Button variant="outline" color="gray" size="xs" leftSection={<Key size={14} />}>Manage</Button>
+                <ComingSoonButton variant="outline" color="gray" size="xs" label="API keys are not available yet">Manage</ComingSoonButton>
               </Group>
             </Stack>
           </Paper>
 
           <Paper p="xl" radius="lg" withBorder shadow="sm" style={{ borderColor: 'var(--mantine-color-red-2)' }}>
-            <Title order={5} mb="lg" c="red">Danger Zone</Title>
+            <Title order={2} size="h5" mb="lg" c="red">Danger Zone</Title>
             <Stack gap="md">
               <Group justify="space-between">
                 <Box>
@@ -137,14 +136,10 @@ export function Settings() {
                 </Box>
                 <ComingSoonButton variant="light" color="red" size="xs" label="Clearing local application data is not implemented yet">Clear</ComingSoonButton>
               </Group>
-              <Divider />
-              <Group justify="space-between">
-                <Box>
-                  <Text fw={600} size="sm" c="red">Delete Account</Text>
-                  <Text size="xs" c="dimmed">Permanently delete your account and all data</Text>
-                </Box>
-                <Button variant="filled" color="red" size="xs" leftSection={<Trash2 size={14} />}>Delete</Button>
-              </Group>
+              {/*
+                A red "Delete Account" button stood here with no handler. There
+                is no self-service deletion; an administrator removes accounts.
+              */}
             </Stack>
           </Paper>
         </Stack>

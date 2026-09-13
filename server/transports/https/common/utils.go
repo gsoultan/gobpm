@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -55,6 +57,8 @@ func CodeFrom(err error) int {
 		return http.StatusBadRequest
 	case errors.Is(err, apierr.ErrNotFound):
 		return http.StatusNotFound
+	case errors.Is(err, apierr.ErrForbidden):
+		return http.StatusForbidden
 	default:
 		return http.StatusInternalServerError
 	}
@@ -79,4 +83,20 @@ func atoiOrZero(s string) int {
 		return 0
 	}
 	return n
+}
+
+// ReadLimited reads at most limit bytes, refusing anything longer.
+//
+// A separate bound from whatever the caller already applied: ParseMultipartForm
+// spills past its own limit to a temporary file rather than refusing, so that
+// limit bounds memory but not what a subsequent read pulls back into it.
+func ReadLimited(r io.Reader, limit int64) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("could not read the upload: %w", err)
+	}
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("the upload is larger than %d bytes", limit)
+	}
+	return body, nil
 }

@@ -3,6 +3,45 @@ import { requestJSON } from "../shared/rest";
 import type { ApiOrganizationUser, ApiGroup, CreateUserPayload } from "../types";
 import { raiseIfRefused } from "../raise";
 
+/**
+ * What the server reads when a user is written. It mirrors entities.User: an
+ * organization is a membership, `organizations: [{ id }]`, never a name.
+ *
+ * The body used to carry `organization_id`, which nothing on the server
+ * reads, and a free-text `organization`, which the server decodes into a
+ * struct — so any string, even "", failed the whole request with a 400. A
+ * user created without a membership then got "no organization membership"
+ * on every request they made.
+ */
+interface UserWriteBody {
+  id?: string;
+  username?: string;
+  full_name: string;
+  display_name: string;
+  email: string;
+  roles?: string[];
+  organizations?: Array<{ id: string }>;
+}
+
+/**
+ * A self-update omits `roles`: the server keeps the stored ones when the
+ * field is absent, and a person editing their own name must not be able to
+ * hand themselves a different role on the way past.
+ */
+export interface UserUpdate {
+  full_name: string;
+  display_name: string;
+  email: string;
+  roles?: string[];
+}
+
+/** A group's roles are what its members inherit, so they travel with it. */
+export interface GroupWrite {
+  name: string;
+  description: string;
+  roles?: string[];
+}
+
 export const identityService = {
   async getUser(id: string, signal?: AbortSignal) {
     const response = await userClient.getUser({ id }, { signal });
@@ -19,24 +58,24 @@ export const identityService = {
   },
 
   async createUser(user: CreateUserPayload, signal?: AbortSignal) {
+    const body: { user: UserWriteBody; password: string } = {
+      user: {
+        username: user.username,
+        full_name: user.full_name,
+        display_name: user.display_name,
+        email: user.email,
+        roles: user.roles,
+        organizations: [{ id: user.organization_id }],
+      },
+      password: user.password,
+    };
     const data = await requestJSON<{ user?: ApiOrganizationUser; err?: string }>("/users", {
       method: "POST",
-      body: {
-        user: {
-          organization_id: user.organization_id,
-          username: user.username,
-          full_name: user.full_name,
-          display_name: user.display_name,
-          organization: user.organization,
-          email: user.email,
-          roles: user.roles,
-        },
-        password: user.password,
-      },
+      body,
       signal,
     });
 
-    return { user: data.user, err: data.err };
+    return { user: raiseIfRefused(data).user };
   },
 
   // The caller is not named: the server takes the account from the session.
@@ -52,19 +91,19 @@ export const identityService = {
     return { err: raiseIfRefused(data).err };
   },
 
-  async updateUser(id: string, user: { full_name: string; display_name: string; organization: string; email: string; roles: string[] }, signal?: AbortSignal) {
+  async updateUser(id: string, user: UserUpdate, signal?: AbortSignal) {
+    const body: { user: UserWriteBody } = {
+      user: {
+        id,
+        full_name: user.full_name,
+        display_name: user.display_name,
+        email: user.email,
+        roles: user.roles,
+      },
+    };
     const data = await requestJSON<{ err?: string }>(`/users/${id}`, {
       method: "PUT",
-      body: {
-        user: {
-          id: id,
-          full_name: user.full_name,
-          display_name: user.display_name,
-          organization: user.organization,
-          email: user.email,
-          roles: user.roles,
-        },
-      },
+      body,
       signal,
     });
 
@@ -97,20 +136,20 @@ export const identityService = {
     }
   },
 
-  async createGroup(group: { organization_id: string; name: string; description: string }, signal?: AbortSignal) {
+  async createGroup(group: GroupWrite & { organization_id: string }, signal?: AbortSignal) {
     const data = await requestJSON<{ group?: ApiGroup; err?: string }>(`/organizations/${group.organization_id}/groups`, {
       method: "POST",
-      body: { group: { name: group.name, description: group.description } },
+      body: { group: { name: group.name, description: group.description, roles: group.roles } },
       signal,
     });
 
-    return { group: data.group, err: data.err };
+    return { group: raiseIfRefused(data).group };
   },
 
-  async updateGroup(id: string, group: { name: string; description: string }, signal?: AbortSignal) {
+  async updateGroup(id: string, group: GroupWrite, signal?: AbortSignal) {
     const data = await requestJSON<{ err?: string }>(`/groups/${id}`, {
       method: "PUT",
-      body: { group: { name: group.name, description: group.description } },
+      body: { group: { name: group.name, description: group.description, roles: group.roles } },
       signal,
     });
 

@@ -64,5 +64,16 @@ func MigrationModels() []any {
 		// rather than in the process, so a retry landing on another replica
 		// gets the original answer instead of executing the write again.
 		new(IdempotencyRecordModel),
+
+		// Which version of each process key new instances start on. Absent, the
+		// answer is "whichever sorts highest", which is what every installation
+		// did before migration 14 — so an install with no rows here behaves
+		// exactly as it did.
+		new(ProcessDefinitionReleaseModel),
+
+		// The runtimes a project deploys into, and the database each one owns.
+		// This row lives in the main database; what its database holds is the
+		// runtime, and nothing about who may sign in.
+		new(EnvironmentModel),
 	}
 }

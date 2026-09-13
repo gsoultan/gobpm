@@ -40,7 +40,7 @@ func seedTasks(t *testing.T, repo repositories.Repository, projectID uuid.UUID, 
 
 func TestPagination_LimitsTheWindowAndCountsTheWhole(t *testing.T) {
 	db := testutils.SetupTestDB(t)
-	repo := repositories.NewRepository(db)
+	repo := repositories.NewRepository(testutils.StormConn(db))
 	projectID := uuid.Must(uuid.NewV7())
 
 	seedTasks(t, repo, projectID, "alice", 137)
@@ -70,7 +70,7 @@ func TestPagination_LimitsTheWindowAndCountsTheWhole(t *testing.T) {
 
 func TestPagination_LastPageIsPartialAndReportsNoMore(t *testing.T) {
 	db := testutils.SetupTestDB(t)
-	repo := repositories.NewRepository(db)
+	repo := repositories.NewRepository(testutils.StormConn(db))
 	projectID := uuid.Must(uuid.NewV7())
 
 	seedTasks(t, repo, projectID, "alice", 137)
@@ -89,7 +89,7 @@ func TestPagination_LastPageIsPartialAndReportsNoMore(t *testing.T) {
 
 func TestPagination_PagesDoNotOverlap(t *testing.T) {
 	db := testutils.SetupTestDB(t)
-	repo := repositories.NewRepository(db)
+	repo := repositories.NewRepository(testutils.StormConn(db))
 	projectID := uuid.Must(uuid.NewV7())
 
 	seedTasks(t, repo, projectID, "alice", 30)
@@ -141,7 +141,7 @@ func TestPagination_ClampsHostileInput(t *testing.T) {
 
 func TestPagination_EmptyResultIsAnEmptyPageNotNil(t *testing.T) {
 	db := testutils.SetupTestDB(t)
-	repo := repositories.NewRepository(db)
+	repo := repositories.NewRepository(testutils.StormConn(db))
 
 	page, err := repo.Task().ListByAssigneePaged(t.Context(), "nobody", contracts.Pagination{Page: 1, PageSize: 10})
 	if err != nil {
@@ -171,7 +171,7 @@ func TestPagination_EmptyResultIsAnEmptyPageNotNil(t *testing.T) {
 // "SQL logic error: ambiguous column name: created_at".
 func TestPagination_WorksUnderTenantScoping(t *testing.T) {
 	db := testutils.SetupTestDB(t)
-	repo := repositories.NewRepository(db)
+	repo := repositories.NewRepository(testutils.StormConn(db))
 	ctx := t.Context()
 
 	orgID := uuid.Must(uuid.NewV7())

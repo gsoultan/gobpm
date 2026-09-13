@@ -29,10 +29,6 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
-// maxConcurrentJobs caps the number of goroutines spawned per polling tick.
-// Raising this above the number of DB connections is counter-productive.
-const maxConcurrentJobs = 5
-
 type jobService struct {
 	repo repositories.Repository
 	// breakers stop the job pool filling with calls to a downstream that is
@@ -47,8 +43,13 @@ type jobService struct {
 	errorMatcher contracts2.ErrorBoundaryMatcher
 	workerID     string
 	httpRunner   *HTTPServiceTaskRunner
-	// sem limits the number of concurrent job goroutines to maxConcurrentJobs.
+	// sem limits the number of concurrent job goroutines to settings.Workers.
 	sem *semaphore.Weighted
+	// lifecycle lets a stopping process wait for the jobs it already claimed
+	// rather than abandoning them — see job_lifecycle.go.
+	lifecycle *workerLifecycle
+	// settings is the resolved worker sizing — see job_config.go.
+	settings JobWorkerSettings
 }
 
 func NewJobService(
@@ -58,6 +59,7 @@ func NewJobService(
 	locker contracts2.DistributedLocker,
 	errorMatcher contracts2.ErrorBoundaryMatcher,
 ) contracts2.JobService {
+	settings := ResolveJobWorkerSettings()
 	// A worker with no id cannot hold a lock that anybody can attribute, so a
 	// failure here is worth knowing about even though the engine can carry on
 	// with the zero value.
@@ -75,7 +77,9 @@ func NewJobService(
 		errorMatcher: errorMatcher,
 		workerID:     workerID.String(),
 		httpRunner:   NewHTTPServiceTaskRunner(nil), // uses the shared guarded client
-		sem:          semaphore.NewWeighted(maxConcurrentJobs),
+		sem:          semaphore.NewWeighted(int64(settings.Workers)),
+		lifecycle:    &workerLifecycle{},
+		settings:     settings,
 	}
 }
 
@@ -138,7 +142,13 @@ func (s *jobService) StartWorkers(ctx context.Context) {
 	// mistake rather than as background work.
 	ctx = entities.WithSystemContext(ctx)
 
-	ticker := time.NewTicker(2 * time.Second)
+	log.Info().
+		Int("workers", s.settings.Workers).
+		Dur("poll", s.settings.PollInterval).
+		Dur("lease", s.settings.Lease).
+		Msg("Job worker started")
+
+	ticker := time.NewTicker(s.settings.PollInterval)
 	go func() {
 		defer ticker.Stop()
 		for {
@@ -152,15 +162,34 @@ func (s *jobService) StartWorkers(ctx context.Context) {
 	}()
 }
 
-// processPendingJobs claims up to maxConcurrentJobs jobs and executes each in a
+// processPendingJobs claims up to settings.Workers jobs and executes each in a
 // goroutine.  A semaphore prevents unbounded goroutine growth when jobs arrive
 // faster than they complete.
 func (s *jobService) processPendingJobs(ctx context.Context) {
-	// The ticker cannot return anything, so a failed round is logged here.
-	// Dropping it left a worker that had stopped claiming jobs looking exactly
-	// like one with nothing to do.
-	if err := s.dispatchPendingJobs(ctx, false); err != nil {
-		log.Error().Err(err).Msg("A round of pending jobs could not be dispatched")
+	// Keep claiming while each round comes back full.
+	//
+	// One claim per tick meant a burst of a thousand timers drained at
+	// workers-per-interval — about 2.5 a second on the old fixed sizing — with
+	// the pool idle in between. The bound below stops a permanently full queue
+	// from turning this into a tight loop that never yields to the ticker.
+	const maxRoundsPerTick = 20
+	for range maxRoundsPerTick {
+		claimed, err := s.dispatchPendingJobs(ctx, false)
+		if err != nil {
+			// The ticker cannot return anything, so a failed round is logged
+			// here. Dropping it left a worker that had stopped claiming jobs
+			// looking exactly like one with nothing to do.
+			log.Error().Err(err).Msg("A round of pending jobs could not be dispatched")
+			return
+		}
+		// A round that did not fill its slots means the queue is drained; wait
+		// for the next tick rather than asking again immediately.
+		if claimed < s.settings.Workers {
+			return
+		}
+		if ctx.Err() != nil {
+			return
+		}
 	}
 }
 
@@ -173,16 +202,20 @@ func (s *jobService) processPendingJobs(ctx context.Context) {
 // coverage at all: the tests substituted a stub for this service rather than
 // wait on it.
 func (s *jobService) ProcessPendingJobs(ctx context.Context) error {
-	return s.dispatchPendingJobs(ctx, true)
+	_, err := s.dispatchPendingJobs(ctx, true)
+	return err
 }
 
-func (s *jobService) dispatchPendingJobs(ctx context.Context, wait bool) error {
-	ms, err := s.repo.Job().GetPending(ctx, maxConcurrentJobs)
+// dispatchPendingJobs claims up to one full set of jobs and runs them,
+// returning how many it started.
+func (s *jobService) dispatchPendingJobs(ctx context.Context, wait bool) (int, error) {
+	ms, err := s.repo.Job().GetPending(ctx, s.settings.Workers)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to get pending jobs")
-		return err
+		return 0, err
 	}
 
+	started := 0
 	var running sync.WaitGroup
 	for _, m := range ms {
 		if !s.tryAcquireJobLock(ctx, uuid.UUID(m.ID)) {
@@ -193,9 +226,18 @@ func (s *jobService) dispatchPendingJobs(ctx context.Context, wait bool) error {
 			break // context cancelled
 		}
 		job := adapters.JobEntityAdapter{Model: m}.ToEntity()
+		if !s.lifecycle.begin() {
+			// Shutdown started between claiming and spawning. Release the slot
+			// and leave the row to its lease rather than starting work this
+			// process is about to stop waiting for.
+			s.sem.Release(1)
+			break
+		}
 		running.Add(1)
+		started++
 		go func(j entities.Job) {
 			defer running.Done()
+			defer s.lifecycle.done()
 			defer s.sem.Release(1)
 			s.runJob(ctx, j)
 		}(job)
@@ -203,7 +245,7 @@ func (s *jobService) dispatchPendingJobs(ctx context.Context, wait bool) error {
 	if wait {
 		running.Wait()
 	}
-	return nil
+	return started, nil
 }
 
 // tryAcquireJobLock claims a job for this worker, and only this worker.
@@ -223,7 +265,7 @@ func (s *jobService) dispatchPendingJobs(ctx context.Context, wait bool) error {
 func (s *jobService) tryAcquireJobLock(ctx context.Context, jobID uuid.UUID) bool {
 	lockKey := "job:" + jobID.String()
 
-	distLocked, err := s.locker.TryAcquire(ctx, lockKey, 5*time.Minute)
+	distLocked, err := s.locker.TryAcquire(ctx, lockKey, s.settings.Lease)
 	if err != nil {
 		log.Error().Err(err).Str("jobId", jobID.String()).Msg("failed to acquire distributed job lock")
 		return false
@@ -232,7 +274,7 @@ func (s *jobService) tryAcquireJobLock(ctx context.Context, jobID uuid.UUID) boo
 		return false
 	}
 
-	locked, err := s.repo.Job().Lock(ctx, jobID, 5*time.Minute, s.workerID)
+	locked, err := s.repo.Job().Lock(ctx, jobID, s.settings.Lease, s.workerID)
 	if err != nil || !locked {
 		// Another replica claimed the row, or the claim failed. Either way this
 		// worker is not running the job, so it must not keep the lock — holding
@@ -295,20 +337,29 @@ func (s *jobService) runJob(ctx context.Context, job entities.Job) {
 	}
 
 	job.UpdatedAt = time.Now()
-	if err := s.repo.Job().Update(ctx, adapters.JobModelAdapter{Job: job}.ToModel()); err != nil {
-		log.Error().Err(err).Msg("failed to update job status")
+	// Detached: if the process is shutting down, `ctx` is already cancelled and
+	// this write would fail — leaving the row marked running under this
+	// worker's lock until the lease expires, which is how a deploy used to
+	// freeze in-flight work for five minutes.
+	writeCtx, cancel := detach(ctx, statusWriteBudget)
+	defer cancel()
+	if err := s.repo.Job().Update(writeCtx, adapters.JobModelAdapter{Job: job}.ToModel()); err != nil {
+		log.Error().Err(err).Str("jobId", job.ID.String()).Msg("failed to update job status")
 	}
 }
+
+// statusWriteBudget bounds the detached write above. Short: it is one UPDATE by
+// primary key, and a process that is shutting down should not hang on it.
+const statusWriteBudget = 5 * time.Second
 
 // tryErrorBoundaryRoute checks if a matching error boundary event exists for the
 // failed job's node and, if found, routes the process through it.
 // Returns true if the error was successfully handled by a boundary event.
 func (s *jobService) tryErrorBoundaryRoute(ctx context.Context, job entities.Job, jobErr error) bool {
-	md, err := s.repo.Definition().Get(ctx, job.Definition.ID)
+	def, err := s.engine.GetProcessDefinition(ctx, job.Definition.ID)
 	if err != nil {
 		return false
 	}
-	def := adapters.DefinitionEntityAdapter{Model: md}.ToEntity()
 
 	for _, boundary := range def.GetBoundaryEvents(job.Node.ID) {
 		if !s.errorMatcher.Matches(jobErr, *boundary) {
@@ -441,13 +492,14 @@ func (s *jobService) executeServiceTask(ctx context.Context, job entities.Job) e
 	)
 	defer span.End()
 
-	md, err := s.repo.Definition().Get(ctx, job.Definition.ID)
+	// Through the engine's cache: a definition is immutable once deployed, and
+	// this runs on every job the worker picks up.
+	def, err := s.engine.GetProcessDefinition(ctx, job.Definition.ID)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "definition lookup failed")
 		return err
 	}
-	def := adapters.DefinitionEntityAdapter{Model: md}.ToEntity()
 
 	node := def.FindNode(job.Node.ID)
 	if node == nil {
@@ -867,12 +919,11 @@ func (s *jobService) rescheduleRepeatingTimer(ctx context.Context, job *entities
 		return
 	}
 
-	md, err := s.repo.Definition().Get(ctx, job.Definition.ID)
+	def, err := s.engine.GetProcessDefinition(ctx, job.Definition.ID)
 	if err != nil {
 		log.Error().Err(err).Str("jobId", job.ID.String()).Msg("Cannot reschedule repeating timer: definition unavailable")
 		return
 	}
-	def := adapters.DefinitionEntityAdapter{Model: md}.ToEntity()
 	node := def.FindNode(job.Node.ID)
 	if node == nil {
 		return
@@ -909,11 +960,10 @@ func (s *jobService) executeTimerBoundary(ctx context.Context, job entities.Job)
 		if err != nil {
 			return err
 		}
-		md, err := s.repo.Definition().Get(txCtx, job.Definition.ID)
+		def, err := s.engine.GetProcessDefinition(txCtx, job.Definition.ID)
 		if err != nil {
 			return err
 		}
-		def := adapters.DefinitionEntityAdapter{Model: md}.ToEntity()
 
 		// A boundary timer is a deadline on the activity it is attached to. Once
 		// that activity has moved on, the deadline is moot — firing it would
@@ -937,11 +987,10 @@ func (s *jobService) executeTimer(ctx context.Context, job entities.Job) error {
 			return err
 		}
 
-		md, err := s.repo.Definition().Get(txCtx, job.Definition.ID)
+		def, err := s.engine.GetProcessDefinition(txCtx, job.Definition.ID)
 		if err != nil {
 			return err
 		}
-		def := adapters.DefinitionEntityAdapter{Model: md}.ToEntity()
 
 		// The token is gone when another branch of an event-based gateway has
 		// already won the race. Proceeding anyway would take the losing branch

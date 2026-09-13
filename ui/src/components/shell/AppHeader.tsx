@@ -25,6 +25,7 @@ import {
 import { useAppStore } from '../../store/useAppStore';
 import { NotificationCenter } from '../NotificationCenter';
 import classes from './AppHeader.module.css';
+import { LanguageMenu } from '../../i18n/LanguageMenu';
 
 interface AppHeaderProps {
   navOpened: boolean;
@@ -113,7 +114,12 @@ export function AppHeader({
   );
 
   return (
-    <header className={classes.header}>
+    // A plain element, not <header>: this renders inside AppShell.Header, which
+    // is already the page's banner landmark. Nesting a second one made every
+    // screen report "more than one banner landmark" and "the banner landmark is
+    // contained in another landmark", which is how a screen-reader user loses
+    // the ability to jump to the header at all.
+    <div className={classes.header}>
       <Group h="100%" px="md" justify="space-between" wrap="nowrap" gap="sm">
         <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>
           <Burger opened={navOpened} onClick={onNavToggle} hiddenFrom="sm" size="sm" aria-label="Toggle navigation" />
@@ -160,6 +166,8 @@ export function AppHeader({
               {isDark ? <Sun size={18} /> : <Moon size={18} />}
             </ActionIcon>
           </Tooltip>
+
+          <LanguageMenu />
 
           <Tooltip label="Help" withArrow>
             <ActionIcon variant="subtle" color="gray" size="lg" onClick={onHelpOpen} aria-label="Open help">
@@ -226,6 +234,6 @@ export function AppHeader({
           </Menu>
         </Group>
       </Group>
-    </header>
+    </div>
   );
 }

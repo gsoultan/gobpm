@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gsoultan/metis/server/domains/entities"
+	"github.com/gsoultan/metis/server/domains/logic"
 	contracts2 "github.com/gsoultan/metis/server/domains/services/contracts"
 	"github.com/gsoultan/metis/server/repositories/contracts"
 	"github.com/gsoultan/metis/server/repositories/models"
@@ -185,6 +186,10 @@ func (h *TerminateEndEventHandler) DoExecute(ctx context.Context, instance *enti
 type IntermediateCatchEventHandler struct {
 	jobService contracts2.JobService
 	subRepo    contracts.SubscriptionRepository
+	// engine is here for the one case that does not wait: a conditional event
+	// whose condition is already true when the token arrives has nothing to
+	// wait for and has to advance immediately.
+	engine contracts2.EngineRunner
 }
 
 func (h *IntermediateCatchEventHandler) DoExecute(ctx context.Context, instance *entities.ProcessInstance, def *entities.ProcessDefinition, node entities.Node, iterationID string) error {
@@ -204,12 +209,37 @@ func (h *IntermediateCatchEventHandler) DoExecute(ctx context.Context, instance 
 		return h.jobService.EnqueueTimer(ctx, *instance, node, duration)
 	}
 
+	// A conditional event waits until something about the process becomes true.
+	//
+	// If it is already true there is nothing to wait for, so the token advances
+	// at once. If it is not, the token stays where it is and the engine
+	// re-reads the condition every time it advances this instance — the same
+	// arrangement an ad-hoc sub-process uses, and for the same reason: a
+	// condition written against the process's own data can only become true
+	// because something else in the process changed it.
+	if expr := node.GetStringProperty("condition_expression"); expr != "" {
+		if logic.GetConditionEvaluatorChain().Evaluate(expr, instance.Variables) {
+			return h.engine.ProceedIteration(ctx, instance, def, node.ID, iterationID)
+		}
+		return h.engine.UpdateInstance(ctx, *instance)
+	}
+
 	if node.Condition != "" {
 		// Asynchronous timer execution via job service.
 		return h.jobService.EnqueueTimer(ctx, *instance, node, node.Condition)
 	}
-	// If no condition, it's a passthrough for now (or a generic catch event)
-	return nil
+
+	// Nothing configured at all.
+	//
+	// This used to return nil, which left the token on the node with nothing in
+	// the system that would ever move it: the instance hung for ever, no
+	// incident, no log line, and the only symptom was a process that stopped.
+	// A catch event exists to wait for something, so one that names nothing to
+	// wait for is a modelling error, and saying so is the whole difference
+	// between a bug that is found in a minute and one that is found in a month.
+	return fmt.Errorf(
+		"catch event %q waits for nothing: give it a timer, a message, a signal or a condition",
+		node.ID)
 }
 
 func (h *IntermediateCatchEventHandler) subToModel(ent entities.EventSubscription) models.Subscription {

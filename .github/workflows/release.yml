@@ -5,8 +5,10 @@
 # rollback target nobody chose — and an image is the one artifact people deploy
 # without reading first.
 #
-# Nothing has been tagged yet, so this workflow has never run. The first `git
-# tag vX.Y.Z && git push --tags` is what makes ghcr.io/<owner>/metis real.
+# What is published alongside the image: a software bill of materials, build
+# provenance, and a signature. Between them they answer the three questions an
+# operator asks about a container they did not build — what is in it, where it
+# came from, and whether it is the one that was published.
 
 name: Release
 
@@ -18,6 +20,11 @@ on:
 permissions:
   contents: read
   packages: write
+  # For keyless signing and the provenance attestation: both exchange this
+  # workflow's OIDC identity for a short-lived certificate, so there is no
+  # long-lived signing key to store or to leak.
+  id-token: write
+  attestations: write
 
 jobs:
   image:
@@ -64,6 +71,7 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -78,7 +86,29 @@ jobs:
             VERSION=${{ steps.tags.outputs.version }}
           # Attest what this image was built from, so a deployed digest can be
           # traced back to a commit without trusting the tag.
-          provenance: true
+          provenance: mode=max
+          # A bill of materials, generated from the built image rather than from
+          # the manifests, so it lists what is actually in the layers.
+          sbom: true
+
+      - name: Attest the build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/metis
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign the image
+        # Keyless: the signature is bound to this workflow's identity and
+        # recorded in the public transparency log, so anybody can verify who
+        # published a digest without us holding a private key anywhere.
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          cosign sign --yes "ghcr.io/${{ github.repository_owner }}/metis@${DIGEST}"
 
       - name: Say what to pull
         run: |

@@ -1,19 +1,18 @@
 /**
- * useAppStore — the main application store.
+ * useAppStore — the application store.
  *
- * FE-ARCH-2: Focused sub-stores (useUIStore, useAuthStore, useNavigationStore)
- * are available for new code that only needs a single slice.  This monolithic
- * store is kept as the primary store so that zustand's built-in getState()
- * works in route guards and other non-React contexts.
+ * One store, persisted under one key, which `services/shared/auth.ts` reads
+ * the token from outside React. Three "focused sub-stores" used to sit beside
+ * it, each persisting to its own key; nothing imported them, and a token
+ * written to one of theirs would have been invisible to every request.
+ *
+ * Subscribe with a selector — `useAppStore((state) => state.theme)` — rather
+ * than destructuring the whole store, or the component re-renders on every
+ * write to any field.
  */
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { renamedStorage } from './persistedStorage';
-
-export { useUIStore } from './useUIStore';
-export { useAuthStore } from './useAuthStore';
-export type { AuthUser } from './useAuthStore';
-export { useNavigationStore } from './useNavigationStore';
 
 interface AppState {
   theme: 'light' | 'dark';

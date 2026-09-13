@@ -36,6 +36,7 @@ func (a DefinitionModelAdapter) ToModel() models.ProcessDefinitionModel {
 			TargetRef:     f.TargetRef,
 			Condition:     f.Condition,
 			Documentation: f.Documentation,
+			Waypoints:     waypointsToModel(f.Waypoints),
 		}
 	}
 	return models.ProcessDefinitionModel{
@@ -73,6 +74,7 @@ func (a DefinitionModelAdapter) nodeToModel(n *entities.Node) models.FlowNode {
 			TargetRef:     cf.TargetRef,
 			Condition:     cf.Condition,
 			Documentation: cf.Documentation,
+			Waypoints:     waypointsToModel(cf.Waypoints),
 		}
 	}
 
@@ -119,6 +121,9 @@ func (a DefinitionModelAdapter) nodeToModel(n *entities.Node) models.FlowNode {
 		Outgoing:            n.Outgoing,
 		X:                   n.X,
 		Y:                   n.Y,
+		Width:               n.Width,
+		Height:              n.Height,
+		IsExpanded:          n.IsExpanded,
 		Condition:           n.Condition,
 		Properties:          n.Properties,
 		Nodes:               nodes,
@@ -143,6 +148,7 @@ func (a DefinitionEntityAdapter) ToEntity() *entities.ProcessDefinition {
 			TargetRef:     f.TargetRef,
 			Condition:     f.Condition,
 			Documentation: f.Documentation,
+			Waypoints:     waypointsToEntity(f.Waypoints),
 		}
 		flows[i] = cf
 	}
@@ -172,6 +178,7 @@ func (a DefinitionEntityAdapter) nodeToEntity(n models.FlowNode) *entities.Node 
 			TargetRef:     cf.TargetRef,
 			Condition:     cf.Condition,
 			Documentation: cf.Documentation,
+			Waypoints:     waypointsToEntity(cf.Waypoints),
 		}
 	}
 	// map candidates (model strings -> entities)
@@ -213,9 +220,41 @@ func (a DefinitionEntityAdapter) nodeToEntity(n models.FlowNode) *entities.Node 
 		Outgoing:            n.Outgoing,
 		X:                   n.X,
 		Y:                   n.Y,
+		Width:               n.Width,
+		Height:              n.Height,
+		IsExpanded:          n.IsExpanded,
 		Condition:           n.Condition,
 		Properties:          n.Properties,
 		Nodes:               nodes,
 		Flows:               flows,
 	}
+}
+
+// waypointsToModel and waypointsToEntity copy a sequence flow's drawn route
+// across the persistence boundary.
+//
+// They are separate rather than generic because the two Waypoint types are
+// deliberately distinct: the entity is what the engine and the BPMN parser
+// work with, the model is what goes in the JSON column, and collapsing them
+// would let a storage change reach into the domain.
+func waypointsToModel(in []entities.Waypoint) []models.Waypoint {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]models.Waypoint, len(in))
+	for i, wp := range in {
+		out[i] = models.Waypoint{X: wp.X, Y: wp.Y}
+	}
+	return out
+}
+
+func waypointsToEntity(in []models.Waypoint) []entities.Waypoint {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]entities.Waypoint, len(in))
+	for i, wp := range in {
+		out[i] = entities.Waypoint{X: wp.X, Y: wp.Y}
+	}
+	return out
 }

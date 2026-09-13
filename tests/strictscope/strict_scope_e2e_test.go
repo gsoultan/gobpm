@@ -51,12 +51,12 @@ func newHarness(t *testing.T) *harness {
 	t.Helper()
 
 	db := testutils.SetupTestDB(t)
-	repo := repositories.NewRepository(db)
+	repo := repositories.NewRepository(testutils.StormConn(db))
 	dispatcher := observersimpl.NewEventDispatcher()
 	sse := observersimpl.NewSSEObserver()
-	svc := services.NewServiceFacade(repo, dispatcher, sse, "strict-scope-test-secret", func(*gorm.DB) {})
+	svc := services.NewServiceFacade(repo, dispatcher, sse, "strict-scope-test-secret", nil, nil, nil, func(*gorm.DB) {})
 
-	handler, _ := app.BuildAPIHandler(svc, endpoints.MakeEndpoints(svc), sse, nil, map[string]health.Checker{}, db)
+	handler, _ := app.BuildAPIHandler(svc, endpoints.MakeEndpoints(svc), sse, nil, map[string]health.Checker{}, testutils.StormConn(db))
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 

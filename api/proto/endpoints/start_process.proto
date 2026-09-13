@@ -6,4 +6,14 @@ import "google/protobuf/struct.proto";
 
 option go_package = "github.com/gsoultan/metis/api/proto/endpoints;endpoints";
 
-message StartProcessRequest { string project_id = 1; string definition_key = 2; google.protobuf.Struct variables = 3; } message StartProcessResponse { string instance_id = 1; string error = 2; }
+message StartProcessRequest {
+  string project_id = 1;
+  string definition_key = 2;
+  google.protobuf.Struct variables = 3;
+
+  // Start a named version instead of the live one. Zero means the live one,
+  // which is what every client written before this field sends.
+  //
+  // The use it exists for is trying a staged version before promoting it.
+  int32 version = 4;
+} message StartProcessResponse { string instance_id = 1; string error = 2; }

@@ -151,11 +151,78 @@ export const AGGREGATIONS = [
 export const ANY_VALUE = '-';
 
 /**
+ * Ready-made conditions, per column type.
+ *
+ * Someone writing their first table does not know that `]1..10]` excludes the
+ * lower bound, and should not have to. Picking the sentence writes the notation.
+ */
+export const CELL_TEMPLATES: Record<string, { value: string; label: string }[]> = {
+  string: [
+    { value: ANY_VALUE, label: 'Any value' },
+    { value: 'Approved', label: 'Exactly this word' },
+    { value: '"A", "B"', label: 'Either of two values' },
+    { value: 'not("A")', label: 'Anything except' },
+    { value: '""', label: 'Empty' },
+  ],
+  number: [
+    { value: ANY_VALUE, label: 'Any number' },
+    { value: '> 10', label: 'More than' },
+    { value: '>= 10', label: 'At least' },
+    { value: '< 10', label: 'Less than' },
+    { value: '[1..10]', label: 'Between, inclusive' },
+    { value: ']1..10]', label: 'Between, excluding the low end' },
+    { value: '10, 20', label: 'One of several' },
+  ],
+  boolean: [
+    { value: ANY_VALUE, label: 'Either' },
+    { value: 'true', label: 'Yes' },
+    { value: 'false', label: 'No' },
+  ],
+  date: [
+    { value: ANY_VALUE, label: 'Any date' },
+    { value: '> "2024-01-01"', label: 'After' },
+    { value: '< "2024-01-01"', label: 'Before' },
+  ],
+};
+
+export const COLUMN_TYPES = [
+  { value: 'string', label: 'Text' },
+  { value: 'number', label: 'Number' },
+  { value: 'boolean', label: 'Yes / no' },
+  { value: 'date', label: 'Date' },
+];
+
+/**
+ * The process variable a column reads or writes, derived from its heading.
+ *
+ * "Approval level" becomes `approval_level`, the same way the creation wizard
+ * turns a decision's name into its key. Nobody authoring a table should have to
+ * know that a variable name cannot contain a space.
+ */
+export function slugVariable(label: string): string {
+  return label
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+/**
+ * Whether a variable is still following its heading, and so should keep
+ * following it when the heading changes. Once somebody has typed their own
+ * name, a later edit to the heading leaves it alone.
+ */
+export function variableFollowsLabel(variable: string, label: string): boolean {
+  return variable.trim() === '' || variable === slugVariable(label);
+}
+
+/**
  * A new line's cells.
  *
- * Conditions start as the wildcard. They used to start as `""`, which is not
- * "anything" — it is "equals the empty string", so every line an author added
- * was one that could never match until they noticed and cleared it.
+ * An empty condition cell and `-` both mean "any value" to the engine. New
+ * lines are written with the wildcard rather than left blank so the meaning is
+ * visible in the grid; the only way to say "equals the empty string" is the
+ * quoted `""`, which the cell menu offers as "Empty".
  */
 export function newRuleRow(id: string, inputCount: number, outputCount: number): DecisionRuleRow {
   return {
@@ -177,6 +244,10 @@ const NUMBER_PATTERN = /^-?\d+(\.\d+)?$/;
  * through `Number()` and keep the string when that failed, so a cell holding
  * `"Approved"` produced the six characters `Approved` *with the quotes*, and an
  * empty cell produced the number zero.
+ *
+ * The declared column type decides the value's type. A text column holding
+ * `10` produces the text "10", not the number ten: the author chose "Text" and
+ * a downstream condition comparing it to a string must keep working.
  */
 export function parseOutputValue(raw: string, type: string): unknown {
   const text = raw.trim();
@@ -190,12 +261,7 @@ export function parseOutputValue(raw: string, type: string): unknown {
 
   // Quotes are how the old editor wrote strings, and how anyone used to FEEL
   // will type one. They are punctuation here, not part of the value.
-  if (text.length >= 2 && (text.startsWith('"') || text.startsWith("'")) && text.endsWith(text[0])) {
-    return text.slice(1, -1);
-  }
-  if (text === 'true' || text === 'false') return text === 'true';
-  if (NUMBER_PATTERN.test(text)) return Number(text);
-  return text;
+  return unquote(text);
 }
 
 /** Renders a stored result for editing, undoing parseOutputValue's quoting. */
@@ -223,6 +289,7 @@ export function formatOutputValue(value: unknown): string {
 export function describeCell(cell: string, columnLabel: string): string {
   const text = cell.trim();
   if (text === '' || text === ANY_VALUE) return `${columnLabel}: any value`;
+  if (text === '""' || text === "''") return `${columnLabel} is empty`;
 
   const range = text.match(/^([[\]])\s*(-?[\d.]+)\s*\.\.\s*(-?[\d.]+)\s*([[\]])$/);
   if (range) {
@@ -256,6 +323,17 @@ export function describeCell(cell: string, columnLabel: string): string {
   }
 
   return `${columnLabel} is ${unquote(text)}`;
+}
+
+/**
+ * The shape of a condition cell with its incidental differences removed, so
+ * that two lines saying the same thing in different spelling are seen as the
+ * same: `"A"` and `A`, `> 10` and `>10`, a blank cell and the wildcard.
+ */
+export function normalizeCell(cell: string): string {
+  const text = cell.trim().replace(/\s+/g, ' ');
+  if (text === '' || text === ANY_VALUE) return ANY_VALUE;
+  return unquote(text).replace(/\s*([<>=!.,]+)\s*/g, '$1');
 }
 
 function unquote(text: string): string {
@@ -300,7 +378,7 @@ export function findProblems(
     if (!output.name.trim()) {
       problems.push({
         severity: 'error',
-        message: `The result column “${output.label}” has no variable name, so nothing downstream can read it.`,
+        message: `The result column “${output.label}” has no process variable, so nothing downstream can read it. Give it a name under the column heading.`,
       });
     }
   });
@@ -309,7 +387,7 @@ export function findProblems(
     if (!input.expression.trim()) {
       problems.push({
         severity: 'error',
-        message: `The condition column “${input.label}” does not say which value it tests.`,
+        message: `The condition column “${input.label}” does not say which process variable it tests. Give it a name under the column heading.`,
       });
     }
   });
@@ -337,12 +415,12 @@ export function findProblems(
   // are a runtime failure rather than a smell.
   const seen = new Map<string, number>();
   rules.forEach((rule, index) => {
-    const signature = rule.input_entries.map((cell) => cell.trim()).join(' ');
+    const signature = rule.input_entries.map(normalizeCell).join('\u0000');
     const previous = seen.get(signature);
     if (previous !== undefined) {
       problems.push({
         severity: hitPolicy === 'UNIQUE' ? 'error' : 'warning',
-        message: `Lines ${previous + 1} and ${index + 1} test exactly the same conditions.`,
+        message: `Lines ${previous + 1} and ${index + 1} test the same conditions.`,
       });
     } else {
       seen.set(signature, index);
@@ -350,6 +428,43 @@ export function findProblems(
   });
 
   return problems;
+}
+
+/**
+ * A line's conditions with the spelling differences removed.
+ *
+ * `> 10` and `>10` are the same condition, and so are `"A"` and `'A'`. Two
+ * lines that differ only in those are still the same line twice.
+ */
+export function conditionSignature(rule: DecisionRuleRow): string {
+  return rule.input_entries.map(normaliseCell).join(' ');
+}
+
+/** One cell with whitespace outside quotes dropped and quotes unified. */
+export function normaliseCell(cell: string): string {
+  const text = cell.trim();
+  if (text === '' || text === ANY_VALUE) return ANY_VALUE;
+
+  let out = '';
+  let quote = '';
+  for (const character of text) {
+    if (quote) {
+      if (character === quote) {
+        quote = '';
+        out += '"';
+      } else {
+        out += character;
+      }
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      out += '"';
+    } else if (!/\s/.test(character)) {
+      out += character;
+    }
+  }
+  return out;
 }
 
 /** The table, in one sentence, for the person who has to trust it. */
@@ -469,11 +584,12 @@ export function validateCell(cell: string): string | undefined {
   if (doubleQuotes % 2 !== 0 || singleQuotes % 2 !== 0) return 'A quote is left open';
 
   // Brackets are counted outside quoted text, where they are punctuation rather
-  // than content. A range's `]…[` spellings mean depth can legitimately dip, so
-  // only the final balance is checked.
+  // than content. A range may open with `]` or close with `[` — that is how DMN
+  // spells an excluded end, and the cell menu offers it — so at the two ends of
+  // the cell a reversed bracket is a delimiter, not an unmatched one.
   let depth = 0;
   let quote = '';
-  for (const character of text) {
+  for (const character of asRangeDelimited(text)) {
     if (quote) {
       if (character === quote) quote = '';
       continue;
@@ -489,4 +605,12 @@ export function validateCell(cell: string): string | undefined {
   if (/\.\.\s*$/.test(text)) return 'This range has no upper end';
 
   return undefined;
+}
+
+/** `]1..10[` read as `[1..10]`, so the bracket count sees a closed range. */
+function asRangeDelimited(text: string): string {
+  let result = text;
+  if (result.startsWith(']')) result = `[${result.slice(1)}`;
+  if (result.endsWith('[') && result.includes('..')) result = `${result.slice(0, -1)}]`;
+  return result;
 }

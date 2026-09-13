@@ -1,0 +1,374 @@
+package pg
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+
+	"github.com/google/uuid"
+	"github.com/gsoultan/metis/internal/pkg/apierr"
+	"github.com/gsoultan/metis/server/repositories/contracts"
+	"github.com/gsoultan/metis/server/repositories/db"
+	"github.com/gsoultan/metis/server/repositories/models"
+	"github.com/gsoultan/metis/server/repositories/store/user"
+	"github.com/gsoultan/metis/server/repositories/store/userorganization"
+	"github.com/gsoultan/metis/server/repositories/store/userproject"
+	"github.com/gsoultan/storm/runtime"
+)
+
+type userRepository struct{ conn }
+
+// NewUserRepository returns the accounts that can sign in.
+//
+// Installation-wide rather than tenant-scoped where identity is concerned: an
+// account is resolved before there is a tenant to scope by, which is what makes
+// the lookup by username the one read that cannot be filtered. Listing accounts
+// is scoped, because that is a directory rather than an authentication.
+func NewUserRepository(c *db.Conn) contracts.UserRepository {
+	return &userRepository{conn{conn: c}}
+}
+
+func (r *userRepository) Get(ctx context.Context, id uuid.UUID) (models.UserModel, error) {
+	row, err := r.row(ctx, user.ID.Eq(id))
+	if err != nil {
+		return models.UserModel{}, err
+	}
+	return r.hydrate(ctx, row)
+}
+
+// GetByUsername resolves an account by the name somebody typed.
+//
+// Unscoped, necessarily: this runs during login, before any tenant exists to
+// scope by. It is also why the username is unique across the deleted rows —
+// reissuing one would let a new person inherit an old one's audit trail.
+func (r *userRepository) GetByUsername(ctx context.Context, username string) (models.UserModel, error) {
+	row, err := r.row(ctx, user.Username.Eq(username))
+	if err != nil {
+		return models.UserModel{}, err
+	}
+	return r.hydrate(ctx, row)
+}
+
+// GetWithPasswordByUsername returns the account and its hash.
+//
+// The hash is a separate return rather than a field, so it cannot ride along on
+// a struct that is otherwise handed to callers and serialised.
+func (r *userRepository) GetWithPasswordByUsername(ctx context.Context, username string) (models.UserModel, string, error) {
+	row, err := r.row(ctx, user.Username.Eq(username))
+	if err != nil {
+		return models.UserModel{}, "", err
+	}
+	user, err := r.hydrate(ctx, row)
+	if err != nil {
+		return models.UserModel{}, "", err
+	}
+	return user, row.PasswordHash, nil
+}
+
+func (r *userRepository) GetWithPasswordByID(ctx context.Context, id uuid.UUID) (models.UserModel, string, error) {
+	row, err := r.row(ctx, user.ID.Eq(id))
+	if err != nil {
+		return models.UserModel{}, "", err
+	}
+	user, err := r.hydrate(ctx, row)
+	if err != nil {
+		return models.UserModel{}, "", err
+	}
+	return user, row.PasswordHash, nil
+}
+
+// ListByOrganization returns the accounts in one tenant.
+//
+// Scoped, and it was not: this returned every account in the installation with
+// their memberships preloaded — a complete staff directory of every tenant, to
+// anybody signed in.
+func (r *userRepository) ListByOrganization(ctx context.Context, organizationID uuid.UUID) ([]models.UserModel, error) {
+	scope, err := r.scopeOf(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !scope.unrestricted() {
+		switch {
+		case scope.organization == uuid.Nil:
+			return nil, nil
+		case organizationID != uuid.Nil && organizationID != scope.organization:
+			return nil, nil
+		default:
+			organizationID = scope.organization
+		}
+	}
+	ex, err := r.conn.conn.MainExecutor(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	q := user.New().Order(user.Username.Asc())
+	if organizationID != uuid.Nil {
+		members, err := userorganization.New().
+			Where(userorganization.OrganizationID.Eq(organizationID)).
+			Unordered().
+			All(ctx, ex, nil)
+		if err != nil {
+			return nil, fmt.Errorf("could not read the organization's members: %w", err)
+		}
+		if len(members) == 0 {
+			return nil, nil
+		}
+		ids := make([][16]byte, 0, len(members))
+		for _, member := range members {
+			ids = append(ids, member.UserID)
+		}
+		q = q.Where(user.ID.In(ids...))
+	}
+	rows, err := q.All(ctx, ex, nil)
+	if err != nil {
+		return nil, fmt.Errorf("could not list accounts: %w", err)
+	}
+	out := make([]models.UserModel, 0, len(rows))
+	for _, row := range rows {
+		user, err := r.hydrate(ctx, row)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, user)
+	}
+	return out, nil
+}
+
+func (r *userRepository) Create(ctx context.Context, u models.UserModel, passwordHash string) error {
+	ex, err := r.conn.conn.MainExecutor(ctx)
+	if err != nil {
+		return err
+	}
+	roles, err := json.Marshal(u.Roles)
+	if err != nil {
+		return fmt.Errorf("could not encode the account's roles: %w", err)
+	}
+	ins := user.Create()
+	if id := uuid.UUID(u.ID); id != uuid.Nil {
+		ins.SetID(id)
+	}
+	ins.SetUsername(u.Username)
+	ins.SetPasswordHash(passwordHash)
+	ins.SetFullName(u.FullName)
+	ins.SetDisplayName(u.DisplayName)
+	ins.SetOrganization(u.Organization)
+	ins.SetEmail(u.Email)
+	ins.SetRoles(roles)
+	row, err := ins.Insert(ctx, ex)
+	if err != nil {
+		if errors.Is(err, runtime.ErrUniqueViolation) {
+			return fmt.Errorf("%w: an account called %q already exists", apierr.ErrInvalidArgument, u.Username)
+		}
+		return fmt.Errorf("could not create the account: %w", err)
+	}
+	for _, org := range u.Organizations {
+		if err := r.AddOrganization(ctx, row.ID, uuid.UUID(org.ID)); err != nil {
+			return err
+		}
+	}
+	for _, project := range u.Projects {
+		if err := r.AddProject(ctx, row.ID, uuid.UUID(project.ID)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SetPasswordHash replaces the credential and ends every session issued before
+// it — which is the whole reason somebody changes a password they think has
+// been compromised.
+func (r *userRepository) SetPasswordHash(ctx context.Context, id uuid.UUID, passwordHash string) error {
+	ex, err := r.conn.conn.MainExecutor(ctx)
+	if err != nil {
+		return err
+	}
+	row, err := r.row(ctx, user.ID.Eq(id))
+	if err != nil {
+		return err
+	}
+	mut := user.Mutate(row)
+	mut.SetPasswordHash(passwordHash)
+	mut.SetTokensValidFrom(nowUTC())
+	if err := mut.Update(ctx, ex); err != nil {
+		return fmt.Errorf("could not set the password: %w", err)
+	}
+	return nil
+}
+
+// Update saves an account's profile.
+//
+// The password hash is deliberately not written here. It has its own method, so
+// a caller that read an account, changed a name and wrote it back cannot blank
+// the credential with a field it never populated.
+func (r *userRepository) Update(ctx context.Context, u models.UserModel) error {
+	ex, err := r.conn.conn.MainExecutor(ctx)
+	if err != nil {
+		return err
+	}
+	row, err := r.row(ctx, user.ID.Eq(uuid.UUID(u.ID)))
+	if err != nil {
+		return err
+	}
+	roles, err := json.Marshal(u.Roles)
+	if err != nil {
+		return fmt.Errorf("could not encode the account's roles: %w", err)
+	}
+	mut := user.Mutate(row)
+	mut.SetUsername(u.Username)
+	mut.SetFullName(u.FullName)
+	mut.SetDisplayName(u.DisplayName)
+	mut.SetOrganization(u.Organization)
+	mut.SetEmail(u.Email)
+	mut.SetRoles(roles)
+	if err := mut.Update(ctx, ex); err != nil {
+		return fmt.Errorf("could not update the account: %w", err)
+	}
+	return nil
+}
+
+func (r *userRepository) Delete(ctx context.Context, id uuid.UUID) error {
+	if _, err := r.row(ctx, user.ID.Eq(id)); err != nil {
+		return err
+	}
+	ex, err := r.conn.conn.MainExecutor(ctx)
+	if err != nil {
+		return err
+	}
+	if err := user.Delete(ctx, ex, id); err != nil {
+		if errors.Is(err, runtime.ErrNoRow) {
+			return fmt.Errorf("%w: no such account", apierr.ErrNotFound)
+		}
+		return fmt.Errorf("could not delete the account: %w", err)
+	}
+	return nil
+}
+
+func (r *userRepository) AddOrganization(ctx context.Context, userID, organizationID uuid.UUID) error {
+	ex, err := r.conn.conn.MainExecutor(ctx)
+	if err != nil {
+		return err
+	}
+	ins := userorganization.Create()
+	ins.SetUserID(userID)
+	ins.SetOrganizationID(organizationID)
+	ins.DoNothing()
+	if _, err := ins.Insert(ctx, ex); err != nil && !errors.Is(err, runtime.ErrConflict) {
+		return fmt.Errorf("could not add the account to the organization: %w", err)
+	}
+	return nil
+}
+
+func (r *userRepository) RemoveOrganization(ctx context.Context, userID, organizationID uuid.UUID) error {
+	ex, err := r.conn.conn.MainExecutor(ctx)
+	if err != nil {
+		return err
+	}
+	if err := userorganization.Delete(ctx, ex, userID, organizationID); err != nil &&
+		!errors.Is(err, runtime.ErrNoRow) {
+		return fmt.Errorf("could not remove the account from the organization: %w", err)
+	}
+	return nil
+}
+
+func (r *userRepository) AddProject(ctx context.Context, userID, projectID uuid.UUID) error {
+	ex, err := r.conn.conn.MainExecutor(ctx)
+	if err != nil {
+		return err
+	}
+	ins := userproject.Create()
+	ins.SetUserID(userID)
+	ins.SetProjectID(projectID)
+	ins.DoNothing()
+	if _, err := ins.Insert(ctx, ex); err != nil && !errors.Is(err, runtime.ErrConflict) {
+		return fmt.Errorf("could not add the account to the project: %w", err)
+	}
+	return nil
+}
+
+func (r *userRepository) RemoveProject(ctx context.Context, userID, projectID uuid.UUID) error {
+	ex, err := r.conn.conn.MainExecutor(ctx)
+	if err != nil {
+		return err
+	}
+	if err := userproject.Delete(ctx, ex, userID, projectID); err != nil &&
+		!errors.Is(err, runtime.ErrNoRow) {
+		return fmt.Errorf("could not remove the account from the project: %w", err)
+	}
+	return nil
+}
+
+func (r *userRepository) row(ctx context.Context, preds ...user.Pred) (user.Row, error) {
+	ex, err := r.conn.conn.MainExecutor(ctx)
+	if err != nil {
+		return user.Row{}, err
+	}
+	row, found, err := user.New().Where(preds...).One(ctx, ex)
+	if err != nil {
+		return user.Row{}, fmt.Errorf("could not read the account: %w", err)
+	}
+	if !found {
+		return user.Row{}, fmt.Errorf("%w: no such user", apierr.ErrNotFound)
+	}
+	return row, nil
+}
+
+// hydrate loads an account's memberships.
+//
+// Two reads rather than a join, for the reason the platform accounts use: a
+// join returns one row per membership, which has to be regrouped anyway, and
+// the tables are small.
+func (r *userRepository) hydrate(ctx context.Context, row user.Row) (models.UserModel, error) {
+	ex, err := r.conn.conn.MainExecutor(ctx)
+	if err != nil {
+		return models.UserModel{}, err
+	}
+	user := models.UserModel{
+		Base: models.Base{
+			ID:        models.UUID(row.ID),
+			CreatedAt: row.CreatedAt,
+			UpdatedAt: row.UpdatedAt,
+		},
+		Username:     row.Username,
+		FullName:     row.FullName,
+		DisplayName:  row.DisplayName,
+		Organization: row.Organization,
+		Email:        row.Email,
+	}
+	if validFrom, ok := row.TokensValidFrom.Get(); ok {
+		user.TokensValidFrom = &validFrom
+	}
+	if len(row.Roles) > 0 {
+		if err := json.Unmarshal(row.Roles, &user.Roles); err != nil {
+			return models.UserModel{}, fmt.Errorf("could not decode an account's roles: %w", err)
+		}
+	}
+
+	orgs, err := userorganization.New().
+		Where(userorganization.UserID.Eq(uuid.UUID(row.ID))).
+		Unordered().
+		All(ctx, ex, nil)
+	if err != nil {
+		return models.UserModel{}, fmt.Errorf("could not read the account's organizations: %w", err)
+	}
+	for _, org := range orgs {
+		user.Organizations = append(user.Organizations, models.OrganizationModel{
+			Base: models.Base{ID: models.UUID(org.OrganizationID)},
+		})
+	}
+
+	projects, err := userproject.New().
+		Where(userproject.UserID.Eq(uuid.UUID(row.ID))).
+		Unordered().
+		All(ctx, ex, nil)
+	if err != nil {
+		return models.UserModel{}, fmt.Errorf("could not read the account's projects: %w", err)
+	}
+	for _, project := range projects {
+		user.Projects = append(user.Projects, models.ProjectModel{
+			Base: models.Base{ID: models.UUID(project.ProjectID)},
+		})
+	}
+	return user, nil
+}

@@ -9,7 +9,7 @@ export const projectService = {
 
   async createProject(organizationId: string, name: string, description: string, signal?: AbortSignal) {
     const response = await projectClient.createProject({ organizationId, name, description }, { signal });
-    return { project: response.project, err: response.error };
+    return { project: raiseIfRefused(response).project };
   },
 
   async updateProject(projectId: string, organizationId: string, name: string, description: string, signal?: AbortSignal) {

@@ -89,3 +89,31 @@ func TestParseRefusesDeeplyNestedSubprocesses(t *testing.T) {
 		t.Fatal("a 20,000-deep definition was accepted; the subprocess mapping recurses, and a stack overflow would kill the process rather than fail the request")
 	}
 }
+
+// TestParseRefusesDeeplyNestedAdHocSubprocesses is the same hostile input
+// through the element that was just added.
+//
+// mapNodes recurses through <adHocSubProcess> exactly as it does through
+// <subProcess>, so adding the element without checking this would have reopened
+// a stack overflow that kills the process rather than failing the request —
+// and the existing guard names only the one element, so it proves nothing about
+// the new one.
+func TestParseRefusesDeeplyNestedAdHocSubprocesses(t *testing.T) {
+	const depth = 20000
+
+	var b strings.Builder
+	b.WriteString(`<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"><process id="p" name="p">`)
+	for i := range depth {
+		fmt.Fprintf(&b, `<adHocSubProcess id="a%d">`, i)
+	}
+	b.WriteString(strings.Repeat(`</adHocSubProcess>`, depth))
+	b.WriteString(`</process></definitions>`)
+
+	if size := b.Len(); size > 2<<20 {
+		t.Fatalf("the payload is %d bytes, past the body limit, so this no longer tests a reachable case", size)
+	}
+
+	if _, err := (&BPMNXMLParser{}).Parse(strings.NewReader(b.String())); err == nil {
+		t.Fatal("a 20,000-deep ad-hoc definition was accepted; the mapping recurses and a stack overflow would take the process down")
+	}
+}

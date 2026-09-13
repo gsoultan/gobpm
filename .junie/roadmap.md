@@ -207,6 +207,70 @@
         defaults are pinned by test (`TestSecurityDefaults`), because changing
         either one is a security decision with a rollout plan behind it rather
         than a tweak.
+- [x] 9. BPMN interoperability and process mining (2026-09-12)
+  - [x] **Diagram interchange round-trips.** Import and export carry shape bounds,
+        `isExpanded`, and connector waypoints. Export previously wrote a bare
+        `<definitions>` with no namespace and no diagram: valid XML that this
+        parser read back, so the round trip looked healthy, and that no other BPMN
+        tool would open. The geometry has a field at every layer it crosses —
+        entity, database model, protobuf, designer save request — because the
+        adapters copy field by field and a missing one is dropped in silence.
+        Covered by `server/domains/services/impl/bpmn_xml_diagram_test.go`,
+        `server/domains/adapters/definition_geometry_test.go` and the geometry
+        cases in `ui/src/mappers/definitionMapper.test.ts`.
+  - [x] **Export stopped dropping nodes.** `classifyNodes` had no case for a
+        sub-process, so exporting one produced a valid file with the sub-process
+        and its children missing, and reported success. Pools, lanes, escalation
+        and compensation throws and the terminate marker went the same way.
+  - [x] **Execution-affecting attributes survive.** Gateway `default` flow,
+        `calledElement`, `cancelActivity`, multi-instance loop characteristics,
+        and Camunda-namespaced topic/assignee/formKey. The default flow matters
+        most: the engine refuses to guess at a decision point, so losing it turned
+        a working diagram into one that raises an incident.
+  - [x] **Conditional events.** New in both the engine and the designer. Evaluated
+        on arrival and again at the end of every advance of the same instance,
+        which is the only thing that can make the condition true. Re-evaluation
+        reads the tokens rather than a subscription table, so there is no new
+        state and no migration. `tests/bpmn/conditional_event_test.go`.
+  - [x] **A catch event with nothing to wait for is refused.** It used to return
+        success and leave the token in place — a permanent hang with no incident
+        and no log line.
+  - [x] **Ad-hoc sub-processes are authorable.** The engine has run them for a
+        while; nothing in the designer could produce one. `SubProcessConfig` plus
+        `ui/src/domain/adHocSubProcess.ts`, which refuses an ad-hoc group with no
+        steps in it and one that is also event-triggered.
+  - [x] **OCEL 2.0 export** at `GET /api/v1/projects/{id}/ocel`. The activity is
+        the node name, not the audit kind — the obvious mapping discovers a model
+        with four boxes in it. Instances relate to definition *and version*.
+        Process variables are excluded unless `?include_variables=true`: the audit
+        data map is the instance's business facts and a control-flow model needs
+        none of them. Tenant scope comes from the repository, as it does for every
+        other project-scoped read.
+
+- [x] 10. Connector delivery is proven, not assumed (2026-09-12)
+  - [x] **RabbitMQ publishes are confirmed and mandatory.** Pointing the connector
+        at a real broker for the first time found that the advertised
+        "Queue (Direct Publish)" configuration published to the default exchange
+        with an empty routing key and delivered nothing, while returning
+        `{"status": "published"}`. The unreachable fallback beside it only ran on
+        a publish error, which fire-and-forget publishes never produce.
+        `tests/connector/broker_test.go` failed on all three cases before the fix.
+  - [x] **The broker suite runs in CI.** `METIS_TEST_RABBITMQ_URL` plus a
+        `rabbitmq:3-alpine` service on the `go-security-reliability` job. The
+        existing "No suite skipped for want of a database" step fails the build on
+        any skip, so the gate cannot silently stop running.
+  - [x] **SMTP is tested against a server that speaks SMTP.**
+        `tests/connector/smtp_test.go` runs an in-process server and asserts the
+        envelope sender, recipient, subject header and body. Hermetic, so it needs
+        no gating and always runs.
+  - [ ] **Two publish paths in `messaging.go` still have no confirm.** The
+        external-task bridge (`messaging.go:150`) stalls a task until its lock
+        expires while logging "Forwarded external task to RabbitMQ"; the inbound
+        dead-letter publish (`messaging.go:233`) routes correctly — the DLQ is
+        declared durable at line 223 — but an inbound message is auto-acked
+        before it, so a broker-side rejection loses it. Neither is the connector's
+        "advertised configuration delivers nothing", which is why they were left.
+
 - [ ] 7. User-Friendly UX Roadmap
   - [x] Business Timeline audit log: `AuditWriter` contract + `narrativeFor` narrative generator + lifecycle hooks for all task events (Claim/Unclaim/Complete/Assign/Delegate/Create).
   - [x] Task Inbox UX overhaul: priority badges, overdue countdown, bulk actions.
@@ -742,12 +806,14 @@
     tenant scoping was deployed, versioned, and permanently invisible to its own
     organization. The XML parser now also carries `topic=` / `camunda:topic` into
     `ExternalTopic` both ways, so XML-deployed processes can produce external tasks at all.
-  - **Go SDK** (`sdk/`, own module, zero dependencies): deploy/start, messages/signals,
-    tasks, and a long-poll `Worker` whose handler budget is its lock. Proven by
-    `sdk/examples/quickstart` against a live server: login → deploy BPMN → worker serves
+  - **Go SDK** (own module, zero dependencies): deploy/start, messages/signals,
+    tasks, and a long-poll `Worker` whose handler budget is its lock. Proven by its
+    `examples/quickstart` against a live server: login → deploy BPMN → worker serves
     the external task → human task claimed/completed → instance completed → timeline read.
-    `docs/integration.md` documents exactly what that program exercises. CI and `make gate`
-    include the SDK module, which the module-wide commands cannot see.
+    `docs/integration.md` documents exactly what that program exercises. Since extracted
+    to its own repository, [gsoultan/metis-sdk](https://github.com/gsoultan/metis-sdk),
+    where its own CI enforces the zero-dependency promise; it is no longer part of
+    `make gate` here.
   - **Transaction-joining sweep, found by running the product**: five repositories (29 call
     sites — variable snapshots, connectors, external tasks, incidents, compensatable
     activities) called `ResolveDB` instead of `GetTx`, so their writes ignored any active
@@ -779,9 +845,28 @@
 2. ~~**P0 Reliability remainder**~~ — the connector contract tier landed
    (`tests/connector/contract_test.go`), which was the last missing tier. Outage
    simulation and feature flags had already landed.
-3. **P1** — `golangci-lint` backlog burn-down; order is in `.golangci.yml`.
-4. **P2 UX Delight** — Task Inbox SLA fields: overdue countdown and priority badge
-   backend fields. Business Timeline is already complete.
+3. ~~**P1** — `golangci-lint` backlog burn-down~~ — closed. `golangci-lint run` reports
+   **0 issues**. The last seventeen were cleared rather than baselined: unchecked type
+   assertions in `internal/pkg/lru` (now comma-ok, degrading to a cache miss rather than a
+   panic), a dead `maxConcurrentJobs = 5` const whose comment still claimed it was the
+   semaphore default while the real one is `defaultJobWorkers = 10`, a discarded static-asset
+   write, `noctx` in four tests, and one genuine false positive — the shutdown drain's
+   deliberately non-inherited context, now `//nolint:contextcheck` with the reason.
+4. ~~**P2 UX Delight** — Task Inbox SLA fields~~ — already delivered; this entry was stale
+   against the checklist at §9.7, which marks the overhaul done. Priority and due date are
+   authored on the node, copied onto the task in `task.go`, and carried out through
+   `TaskPBAdapter`. That chain had no test; `tests/bpmn/task_sla_fields_test.go` now asserts it
+   end to end, because the failure would have been silent — every task ordinary, never overdue.
+
+**Found while closing the above (2026-09-07), all fixed:** three cross-tenant disclosures of the
+same shape — a filter that was *skipped* when absent rather than matching nothing, with no
+tenant scope behind it. `GET /processes/statistics` counted every organization's instances and
+tasks; `ListUsers` and `ListGroups` returned every account and group in the installation, with
+memberships preloaded. Regression tests in `tests/tenant/statistics_scope_test.go` and
+`tests/tenant/directory_scope_test.go`. Note these were invisible to
+`METIS_FEATURE_STRICT_TENANT_SCOPE`: a query that never asks for a scope is not one the flag
+can deny. Scoping them is what made them visible to it, which is why item 1 below gained three
+call sites.
 
 **Closed since this list was written:** Phase 2 landed the real FEEL parser, and the
 memory-exhaustion vector it existed to remove is now off by default —

@@ -128,8 +128,8 @@ export function ServiceTaskConfig({ data, onUpdate }: NodeConfigProps) {
           <TextInput
             label="Web address"
             placeholder="https://api.example.com/webhook"
-            value={asText(data.url)}
-            onChange={(e) => onUpdate({ url: e.target.value })}
+            value={asText(data.httpUrl ?? data.http_url ?? data.url)}
+            onChange={(e) => onUpdate({ httpUrl: e.target.value })}
           />
           <PasswordInput
             label="Access token"
@@ -149,8 +149,8 @@ export function ServiceTaskConfig({ data, onUpdate }: NodeConfigProps) {
           <TextInput
             label="Topic"
             placeholder="e.g. process-invoice"
-            value={asText(data.topic)}
-            onChange={(e) => onUpdate({ topic: e.target.value })}
+            value={asText(data.externalTopic ?? data.external_topic ?? data.topic)}
+            onChange={(e) => onUpdate({ externalTopic: e.target.value })}
           />
         </PropertySection>
       )}

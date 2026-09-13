@@ -10,7 +10,6 @@ import {
   Center,
   Box,
   ThemeIcon,
-  Divider,
   Group,
 } from '@mantine/core';
 import { useState } from 'react';
@@ -30,13 +29,17 @@ import {
 } from 'lucide-react';
 import { toStoreUser } from '../mappers/userMapper';
 
+// Plain statements of what the product does, not marketing superlatives. The
+// login page used to claim "sub-millisecond" execution and "GDPR-compliant"
+// logs — neither measured nor certified — which is the same class of untruth as
+// the invented dashboard metrics an earlier pass removed.
 const BRAND_FEATURES = [
-  { icon: ShieldCheck, title: 'Enterprise Security', desc: 'Role-based access control & full audit trail' },
-  { icon: Zap, title: 'Lightning Fast', desc: 'Sub-millisecond process execution engine' },
-  { icon: Activity, title: 'Real-time Insight', desc: 'Live dashboards & process monitoring' },
-  { icon: Lock, title: 'Compliance Ready', desc: 'GDPR-compliant with immutable logs' },
-  { icon: GitBranch, title: 'Visual Modeling', desc: 'Drag-and-drop BPMN process designer' },
-  { icon: BarChart3, title: 'Analytics', desc: 'KPI tracking & bottleneck detection' },
+  { icon: ShieldCheck, title: 'Role-based access', desc: 'Users, groups and per-organization scoping' },
+  { icon: GitBranch, title: 'Visual modelling', desc: 'Design BPMN processes on a drag-and-drop canvas' },
+  { icon: Activity, title: 'Live monitoring', desc: 'Watch instances, tasks and incidents as they happen' },
+  { icon: Lock, title: 'Audit trail', desc: 'Every step is recorded and can be replayed' },
+  { icon: Zap, title: 'Decisions', desc: 'DMN decision tables with a real FEEL engine' },
+  { icon: BarChart3, title: 'Connectors', desc: 'Call external services and receive signed webhooks' },
 ] as const;
 
 export function Login({ redirectTo }: { redirectTo?: string }) {
@@ -173,7 +176,7 @@ export function Login({ redirectTo }: { redirectTo?: string }) {
         </Stack>
 
         <Text size="xs" c="rgba(255,255,255,0.3)" className="login-brand-footer">
-          © 2026 Metis BPM · Enterprise Edition
+          © 2026 Metis BPM
         </Text>
       </Box>
 
@@ -281,17 +284,6 @@ export function Login({ redirectTo }: { redirectTo?: string }) {
                   </Stack>
                 </form>
               </Paper>
-              
-              {/* Test Credentials */}
-              <Stack gap={6} ta="center">
-                <Divider label="Demo Credentials" labelPosition="center" color="gray.3" />
-                <Group justify="center" gap={6}>
-                  <Text size="xs" c="dimmed">Username:</Text>
-                  <Text size="xs" fw={700} ff="monospace" c="indigo">admin</Text>
-                  <Text size="xs" c="dimmed" ml={4}>Password:</Text>
-                  <Text size="xs" fw={700} ff="monospace" c="indigo">admin</Text>
-                </Group>
-              </Stack>
             </Stack>
           </Box>
         </Center>

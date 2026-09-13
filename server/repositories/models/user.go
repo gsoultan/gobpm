@@ -19,14 +19,22 @@ type UserModel struct {
 	//
 	// Nullable because existing rows predate it, and a zero time there would
 	// invalidate every session on the deployment that adds the column.
-	TokensValidFrom *time.Time          `json:"-"`
-	FullName        string              `json:"full_name"`
-	DisplayName     string              `json:"display_name"`
-	Organization    string              `json:"organization"`
-	Email           string              `json:"email"`
-	Roles           []string            `gorm:"type:text;serializer:json" json:"roles,omitzero"`
-	Organizations   []OrganizationModel `gorm:"many2many:user_organizations" json:"organizations,omitzero"`
-	Projects        []ProjectModel      `gorm:"many2many:user_projects" json:"projects,omitzero"`
+	TokensValidFrom *time.Time `json:"-"`
+	FullName        string     `json:"full_name"`
+	DisplayName     string     `json:"display_name"`
+	Organization    string     `json:"organization"`
+	Email           string     `json:"email"`
+	Roles           []string   `gorm:"type:text;serializer:json" json:"roles,omitzero"`
+	// Loaded by the repository, not by the ORM. These were a GORM many-to-many,
+	// which derived the join columns from the Go type names — user_model_id,
+	// organization_model_id — and then kept creating them alongside the ones
+	// the schema actually wanted, so a row could satisfy one pair of foreign
+	// keys and violate the other.
+	//
+	// The join tables belong to the storm model now (UserOrganization,
+	// UserProject) and these are plain fields the repository fills.
+	Organizations []OrganizationModel `gorm:"-" json:"organizations,omitzero"`
+	Projects      []ProjectModel      `gorm:"-" json:"projects,omitzero"`
 }
 
 // TableName overrides the table name for UserModel.

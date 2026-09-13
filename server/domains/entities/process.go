@@ -85,19 +85,53 @@ func (pi *ProcessInstance) IsCompleted(node *Node) bool {
 	return containsNode(pi.CompletedNodes, node)
 }
 
+// RemoveTokenByNode drops every token sitting on node.
+//
+// A nil node removes nothing. The engine reaches here with one whenever a
+// token's node is absent from the definition it just loaded — the shape an
+// instance is left in if it is ever pointed at a version whose graph does not
+// contain the node it was waiting on. This used to dereference the nil inside
+// the comparison, which did not panic and did not return: the goroutine spun
+// forever, holding the transaction it was called in, with no incident and no
+// error to say so. Whoever completed that task simply never got a response.
+//
+// Callers that know the node ID but not the node should use RemoveTokenByNodeID.
 func (pi *ProcessInstance) RemoveTokenByNode(node *Node) {
+	if node == nil {
+		return
+	}
+	pi.RemoveTokenByNodeID(node.ID)
+}
+
+// RemoveTokenByNodeID drops every token sitting on nodeID.
+//
+// The engine knows the ID it is advancing past even when the definition no
+// longer describes that node, so this is the form that can still clear the token
+// in the case RemoveTokenByNode has to refuse.
+func (pi *ProcessInstance) RemoveTokenByNodeID(nodeID string) {
 	pi.Tokens = slices.DeleteFunc(pi.Tokens, func(t Token) bool {
-		return t.Node != nil && t.Node.ID == node.ID
+		return t.Node != nil && t.Node.ID == nodeID
 	})
 }
 
+// RemoveTokenByIteration drops the token for one iteration of a multi-instance
+// node. Nil-safe for the same reason RemoveTokenByNode is.
 func (pi *ProcessInstance) RemoveTokenByIteration(node *Node, iterationID string) {
+	if node == nil {
+		return
+	}
 	pi.Tokens = slices.DeleteFunc(pi.Tokens, func(t Token) bool {
 		return t.Node != nil && t.Node.ID == node.ID && t.IterationID == iterationID
 	})
 }
 
+// GetTokensByNode returns every token sitting on node. Nil-safe: a node the
+// definition does not describe holds no tokens as far as callers are concerned,
+// which is the same answer the other accessors here give.
 func (pi *ProcessInstance) GetTokensByNode(node *Node) []Token {
+	if node == nil {
+		return nil
+	}
 	var out []Token
 	for _, t := range pi.Tokens {
 		if t.Node != nil && t.Node.ID == node.ID {

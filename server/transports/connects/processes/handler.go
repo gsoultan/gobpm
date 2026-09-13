@@ -29,6 +29,7 @@ func (h *ProcessHandler) StartProcess(ctx context.Context, req *connect.Request[
 		ProjectID:     req.Msg.ProjectId,
 		DefinitionKey: req.Msg.DefinitionKey,
 		Variables:     vars,
+		Version:       int(req.Msg.Version),
 	})
 	if err != nil {
 		return nil, err

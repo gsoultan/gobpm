@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/gsoultan/metis/internal/pkg/secrets"
@@ -13,18 +12,19 @@ import (
 
 	"github.com/gsoultan/metis/server/repositories/gorms"
 
-	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
 	"github.com/gsoultan/metis/internal/pkg/config"
 	"github.com/gsoultan/metis/internal/pkg/crypto"
+	"github.com/gsoultan/metis/internal/pkg/dbpool"
 	"github.com/gsoultan/metis/internal/pkg/redaction"
 	"github.com/gsoultan/metis/server/domains/services/contracts"
+	stormdb "github.com/gsoultan/metis/server/repositories/db"
 	"github.com/gsoultan/metis/server/repositories/migrations"
+	"github.com/gsoultan/metis/server/repositories/model"
 	"github.com/gsoultan/metis/server/repositories/models"
+	"github.com/gsoultan/storm"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
-	"gorm.io/driver/mysql"
-	"gorm.io/driver/postgres"
-	"gorm.io/driver/sqlserver"
 	"gorm.io/gorm"
 )
 
@@ -66,7 +66,7 @@ func (s *setupService) Setup(ctx context.Context, req contracts.SetupRequest) er
 	}
 
 	// 2. Run migrations on the target database
-	if err := migrateTargetDatabase(ctx, targetDB); err != nil {
+	if err := migrateTargetDatabase(ctx, targetDB, req); err != nil {
 		cleanup()
 		return fmt.Errorf("failed to migrate target database: %w", err)
 	}
@@ -96,7 +96,29 @@ func (s *setupService) Setup(ctx context.Context, req contracts.SetupRequest) er
 
 const testConnectionTimeout = 10 * time.Second
 
+// TestConnection opens a database and reports whether it answered.
+//
+// Only while the installation is unconfigured. This endpoint is public, because
+// the wizard that uses it runs before anyone can sign in — and it takes a host
+// and a port from the caller and reports precisely what happened to the attempt.
+// On a configured installation that is an unauthenticated port scanner: the
+// reply distinguishes "connection refused" from a timeout from an authentication
+// failure, which is enough to map whatever network the server sits in.
+//
+// After setup, the same job is done by the environments endpoint, which requires
+// an administrator.
 func (s *setupService) TestConnection(ctx context.Context, req contracts.TestConnectionRequest) contracts.TestConnectionResult {
+	status, err := s.GetSetupStatus(ctx)
+	if err != nil {
+		return contracts.TestConnectionResult{Success: false, Message: "Could not determine whether this installation is configured"}
+	}
+	if status.IsInitialized {
+		return contracts.TestConnectionResult{
+			Success: false,
+			Message: "This installation is already configured. Test a database connection from Settings → Environments.",
+		}
+	}
+
 	if req.DatabaseDriver == "" {
 		return contracts.TestConnectionResult{Success: false, Message: "Database driver is required"}
 	}
@@ -110,7 +132,10 @@ func (s *setupService) TestConnection(ctx context.Context, req contracts.TestCon
 		SSLEnabled: req.DBSSLEnabled,
 	}
 	dsn := config.BuildConnectionString(req.DatabaseDriver, fields)
-	dialector := buildDialector(req.DatabaseDriver, dsn)
+	dialector, err := gorms.Dialector(req.DatabaseDriver, dsn)
+	if err != nil {
+		return contracts.TestConnectionResult{Success: false, Message: err.Error()}
+	}
 
 	db, err := gorm.Open(dialector, gorms.Config())
 	if err != nil {
@@ -139,40 +164,15 @@ func (s *setupService) TestConnection(ctx context.Context, req contracts.TestCon
 	return contracts.TestConnectionResult{Success: true, Message: "Connection successful"}
 }
 
-func buildDialector(driver, dsn string) gorm.Dialector {
-	switch driver {
-	case config.DriverPostgres:
-		return postgres.Open(dsn)
-	case config.DriverMySQL:
-		return mysql.Open(dsn)
-	case config.DriverSQLServer:
-		return sqlserver.Open(dsn)
-	default:
-		// Same busy-timeout treatment as the app's own open path; a
-		// freshly set-up database must not fail its second request.
-		return sqlite.Open(sqliteSetupDSN(dsn))
-	}
-}
-
-// sqliteSetupDSN mirrors the app's busy-timeout default for databases the
-// setup wizard creates.
-func sqliteSetupDSN(dsn string) string {
-	if strings.Contains(dsn, "_pragma=busy_timeout") {
-		return dsn
-	}
-	separator := "?"
-	if strings.Contains(dsn, "?") {
-		separator = "&"
-	}
-	return dsn + separator + "_pragma=busy_timeout(5000)"
-}
-
 func validateSetupRequest(req contracts.SetupRequest) error {
 	if req.AdminUsername == "" || req.AdminPassword == "" || req.AdminFullName == "" || req.AdminPublicName == "" || req.OrganizationName == "" {
 		return errors.New("admin username, password, full name, public name and organization name are required")
 	}
 	if req.DatabaseDriver == "" {
 		return errors.New("database driver is required")
+	}
+	if !config.SupportedDriver(req.DatabaseDriver) {
+		return fmt.Errorf("this runs on PostgreSQL; %q is not a database engine it supports", req.DatabaseDriver)
 	}
 	// Validated here, before saveConfiguration encrypts anything with the key.
 	//
@@ -247,21 +247,20 @@ func buildDatabaseFields(req contracts.SetupRequest) config.DatabaseFields {
 
 func openTargetDatabase(req contracts.SetupRequest) (*gorm.DB, func(), error) {
 	dsn := config.BuildConnectionString(req.DatabaseDriver, buildDatabaseFields(req))
-	dialector := buildDialector(req.DatabaseDriver, dsn)
+	dialector, err := gorms.Dialector(req.DatabaseDriver, dsn)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	db, err := gorm.Open(dialector, gorms.Config())
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to open target database: %w", err)
 	}
 
-	// SQLite gets one connection, mirroring the app's own open path: pooled
-	// connections deadlock on lock upgrades, which busy_timeout cannot help
-	// with, and this database is about to be hot-swapped in as the live one.
-	if req.DatabaseDriver == config.DriverSQLite || req.DatabaseDriver == "" {
-		if sqlDB, err := db.DB(); err == nil {
-			sqlDB.SetMaxOpenConns(1)
-		}
-	}
+	// Sized the same way the app's own open path sizes it — this database is
+	// about to be hot-swapped in as the live one, so it must not run the rest
+	// of its life on a pool nobody configured.
+	dbpool.Apply(db)
 
 	cleanup := func() {
 		sqlDB, err := db.DB()
@@ -285,14 +284,48 @@ func openTargetDatabase(req contracts.SetupRequest) (*gorm.DB, func(), error) {
 // recording a single version, and the first boot afterwards would treat a brand
 // new database as one that had never been migrated — replaying every data
 // migration over it, including the one that walks every process instance.
-func migrateTargetDatabase(ctx context.Context, db *gorm.DB) error {
+func migrateTargetDatabase(ctx context.Context, db *gorm.DB, req contracts.SetupRequest) error {
 	// Only the schema migrations. The data migrations need the repository layer,
 	// which setup does not have here, and they repair rows written by older
 	// versions of the engine — of which a database created seconds ago has none.
 	// The first boot runs and records them against empty tables, which costs two
 	// queries that find nothing.
-	_, err := migrations.Run(ctx, db, migrations.Schema(models.MigrationModels()))
-	return err
+	if _, err := migrations.Run(ctx, db, migrations.Schema(models.MigrationModels())); err != nil {
+		return err
+	}
+	return ensureStormSchema(ctx, req)
+}
+
+// ensureStormSchema creates the tables the GORM migrations do not describe, in
+// the database the wizard has just configured.
+//
+// The same two steps the application performs at boot, run here because setup
+// writes into this database immediately afterwards — the admin's organization
+// membership lands in a join table the GORM models no longer declare, and
+// without this the very first insert of a fresh installation fails with
+// "relation user_organizations does not exist".
+//
+// A second connection rather than the GORM one, because these are storm's own
+// DDL and its schema builder speaks pgx.
+func ensureStormSchema(ctx context.Context, req contracts.SetupRequest) error {
+	want, err := storm.Build(model.All()...)
+	if err != nil {
+		return fmt.Errorf("the model layer does not build: %w", err)
+	}
+	dsn := config.BuildConnectionString(req.DatabaseDriver, buildDatabaseFields(req))
+	pool, err := pgxpool.New(ctx, config.PostgresURL(dsn))
+	if err != nil {
+		return fmt.Errorf("could not open the target database for the storm schema: %w", err)
+	}
+	defer pool.Close()
+
+	if _, err := stormdb.EnsureTables(ctx, pool, want); err != nil {
+		return fmt.Errorf("could not create the storm tables: %w", err)
+	}
+	if _, err := stormdb.EnsureColumnDefaults(ctx, pool, want); err != nil {
+		return fmt.Errorf("could not reconcile the storm column defaults: %w", err)
+	}
+	return nil
 }
 
 const defaultProjectName = "Default Project"
@@ -339,17 +372,37 @@ func seedTargetDatabase(db *gorm.DB, req contracts.SetupRequest) error {
 				ID:        models.UUID(uuid.Must(uuid.NewV7())),
 				CreatedAt: now,
 			},
-			Username:      req.AdminUsername,
-			PasswordHash:  string(hash),
-			FullName:      req.AdminFullName,
-			DisplayName:   req.AdminPublicName,
-			Email:         req.AdminEmail,
-			Roles:         []string{"ADMIN"},
-			Organizations: []models.OrganizationModel{org},
-			Projects:      []models.ProjectModel{project},
+			Username:     req.AdminUsername,
+			PasswordHash: string(hash),
+			FullName:     req.AdminFullName,
+			DisplayName:  req.AdminPublicName,
+			Email:        req.AdminEmail,
+			Roles:        []string{"ADMIN"},
 		}
 		if err := tx.Create(&admin).Error; err != nil {
 			return fmt.Errorf("failed to create admin user: %w", err)
+		}
+
+		// The memberships, written explicitly.
+		//
+		// They used to be GORM associations on the struct above, which wrote
+		// the join rows as a side effect of creating the user. The join tables
+		// belong to the storm model now and the association tags are gone, so
+		// the side effect went with them — silently: setup succeeded, the admin
+		// existed, and signing in showed "authenticated principal has no
+		// organization membership" on every page.
+		//
+		// Raw SQL because this runs on the database the wizard is configuring,
+		// which is not the one the repositories are connected to yet.
+		if err := tx.Exec(
+			`INSERT INTO user_organizations (user_id, organization_id) VALUES (?, ?)`,
+			admin.ID, org.ID).Error; err != nil {
+			return fmt.Errorf("failed to put the admin in the organization: %w", err)
+		}
+		if err := tx.Exec(
+			`INSERT INTO user_projects (user_id, project_id) VALUES (?, ?)`,
+			admin.ID, project.ID).Error; err != nil {
+			return fmt.Errorf("failed to put the admin in the project: %w", err)
 		}
 
 		return nil

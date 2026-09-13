@@ -43,6 +43,17 @@ func RegisterHandlers(m *http.ServeMux, eps process.Endpoints, options []httptra
 		common.EncodeResponse,
 		options...,
 	))
+	// The object-centric event log for a whole project. It is a project-level
+	// read rather than an instance-level one because a mined model is only
+	// meaningful across cases, and the tenant scope is applied by the
+	// repository the same way it is for every other project-scoped read.
+	m.Handle("GET /api/v1/projects/{id}/ocel", httptransport.NewServer(
+		eps.ExportOCEL,
+		decodeExportOCELRequest,
+		common.EncodeResponse,
+		options...,
+	))
+
 	m.Handle("GET /api/v1/instances/{id}/subprocesses", httptransport.NewServer(
 		eps.ListSubProcesses,
 		decodeListSubProcessesRequest,
@@ -91,8 +102,16 @@ func decodeStartProcessRequest(_ context.Context, r *http.Request) (any, error) 
 }
 
 func decodeListInstancesRequest(_ context.Context, r *http.Request) (any, error) {
+	// ListInstancesRequest has carried Page and PageSize all along, and the
+	// endpoint passes them to ListInstancesPaged — but nothing read them off the
+	// query string, so every caller got the first page at the server default and
+	// no way past it. A busy project's older instances were unreachable over
+	// HTTP while the paging that would reach them was already implemented.
+	page, pageSize := common.PageParams(r)
 	return process.ListInstancesRequest{
 		ProjectID: r.URL.Query().Get("project_id"),
+		Page:      page,
+		PageSize:  pageSize,
 	}, nil
 }
 
@@ -109,6 +128,17 @@ func decodeGetExecutionPathRequest(_ context.Context, r *http.Request) (any, err
 func decodeGetAuditLogsRequest(_ context.Context, r *http.Request) (any, error) {
 	id := r.PathValue("id")
 	return process.GetAuditLogsRequest{InstanceID: id}, nil
+}
+
+func decodeExportOCELRequest(_ context.Context, r *http.Request) (any, error) {
+	// Anything other than an explicit "true" means off. A query string is
+	// caller-supplied and a permissive parse here — treating "1", "yes" or a
+	// bare "?include_variables" as consent — would widen what leaves the
+	// building on a typo.
+	return process.ExportOCELRequest{
+		ProjectID:        r.PathValue("id"),
+		IncludeVariables: r.URL.Query().Get("include_variables") == "true",
+	}, nil
 }
 
 func decodeListSubProcessesRequest(_ context.Context, r *http.Request) (any, error) {

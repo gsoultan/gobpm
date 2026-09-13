@@ -23,6 +23,11 @@ type JobEnqueuer interface {
 // JobWorker manages the job execution lifecycle.
 type JobWorker interface {
 	StartWorkers(ctx context.Context)
+	// StopWorkers stops claiming jobs and waits, briefly, for the ones already
+	// claimed. Without it a shutdown abandoned in-flight work: the final status
+	// write rode the cancelled context and failed, so the row kept its lock
+	// until the lease expired and the job was frozen for minutes.
+	StopWorkers(ctx context.Context) error
 
 	// ProcessPendingJobs runs one round of pending jobs and waits for it to
 	// finish, for a caller that needs the work done before it looks at the

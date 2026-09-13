@@ -14,6 +14,11 @@ import {
   ActionIcon
 } from '@mantine/core';
 import { type FormField } from './FormBuilder';
+// Imported here rather than at the root: the date-picker stylesheet is only
+// needed where a picker is, and importing it eagerly pulled the whole
+// @mantine/dates chunk (~19 kB gzipped) onto the critical path for every
+// visitor, picker or not.
+import '@mantine/dates/styles.css';
 import { DatePickerInput } from '@mantine/dates';
 import { CheckCircle, Info } from 'lucide-react';
 import { useTaskForm } from '../hooks/useTaskForm';

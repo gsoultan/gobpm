@@ -246,7 +246,309 @@ func Schema(models []any) []Migration {
 				return nil
 			},
 		},
+		{
+			Version: 13,
+			Name:    "index the job claim query",
+			// The job worker asks for pending jobs whose time has come, oldest
+			// first, several times a second forever. The table has single-column
+			// indexes on status and next_run_at, which is not the same thing: the
+			// planner picks one and filters the rest, so the scan grows with every
+			// completed job ever written. A composite matching the predicate and
+			// the order keeps it flat.
+			Run: func(_ context.Context, db *gorm.DB) error {
+				model, err := modelForTable(db, models, "jobs")
+				if err != nil {
+					return err
+				}
+				const index = "ix_jobs_claim"
+				if db.Migrator().HasIndex(model, index) {
+					return nil
+				}
+				if err := db.Exec(
+					"CREATE INDEX " + index + " ON jobs (status, next_run_at)",
+				).Error; err != nil {
+					return fmt.Errorf("create %s: %w", index, err)
+				}
+				return nil
+			},
+		},
+		{
+			Version: 12,
+			Name:    "signed webhook receiver tables",
+			// The signed-webhook feature shipped its models and repository but
+			// no migration, so `webhooks` and `webhook_deliveries` existed only
+			// on installations old enough to predate versioning (where the
+			// baseline AutoMigrate had made them). Every newer install answered
+			// the feature's endpoints with "no such table" and a 500, while
+			// /readyz stayed green because it only pings the database — a broken
+			// feature that never paged anyone.
+			Run: func(_ context.Context, db *gorm.DB) error {
+				for _, table := range []string{"webhooks", "webhook_deliveries"} {
+					model, err := modelForTable(db, models, table)
+					if err != nil {
+						return err
+					}
+					if db.Migrator().HasTable(model) {
+						continue
+					}
+					if err := db.AutoMigrate(model); err != nil {
+						return fmt.Errorf("create %s: %w", table, err)
+					}
+				}
+				return nil
+			},
+		},
+		{
+			Version: 14,
+			Name:    "which version of a process is live",
+			// Deploying a process used to promote it in the same act that saved it,
+			// because "the live version" was defined as whichever sorted highest.
+			// This table makes the choice explicit, and reversible.
+			//
+			// Deliberately not backfilled. An installation that has never promoted
+			// anything has no rows here, and the reader treats an absent row as "the
+			// highest version" — which is exactly what it did before. The first
+			// deploy or promotion after the upgrade writes the row.
+			Run: func(_ context.Context, db *gorm.DB) error {
+				model, err := modelForTable(db, models, "process_definition_releases")
+				if err != nil {
+					return err
+				}
+				if db.Migrator().HasTable(model) {
+					return nil
+				}
+				if err := db.AutoMigrate(model); err != nil {
+					return fmt.Errorf("create process_definition_releases: %w", err)
+				}
+				return nil
+			},
+		},
+		{
+			Version: 16,
+			Name:    "the runtimes a project deploys into",
+			// A project can have a development, staging and production runtime,
+			// each with its own database and its own port. This table is the
+			// registry of them; the data they hold is in the databases they name,
+			// not here.
+			Run: func(_ context.Context, db *gorm.DB) error {
+				model, err := modelForTable(db, models, "environments")
+				if err != nil {
+					return err
+				}
+				if db.Migrator().HasTable(model) {
+					return nil
+				}
+				if err := db.AutoMigrate(model); err != nil {
+					return fmt.Errorf("create environments: %w", err)
+				}
+				return nil
+			},
+		},
+		{
+			Version: 15,
+			Name:    "releases are a timeline, not a single current version",
+			// A release row said only "this version is live". Arranging a cutover
+			// in advance needs it to say "live from this moment", so the answer
+			// becomes a function of the rows and the clock and nothing has to
+			// wake up to apply it.
+			//
+			// Written to be safe in both directions: on a fresh database
+			// migration 14 already created the table from the current model, so
+			// the column and the new index are there and every step below is a
+			// no-op. On a database that ran 14 in its first form, this adds them.
+			Run: func(_ context.Context, db *gorm.DB) error {
+				model, err := modelForTable(db, models, "process_definition_releases")
+				if err != nil {
+					return err
+				}
+				if !db.Migrator().HasColumn(model, "activate_at") {
+					if err := db.Migrator().AddColumn(model, "activate_at"); err != nil {
+						return fmt.Errorf("add process_definition_releases.activate_at: %w", err)
+					}
+				}
+				// Rows written before the column existed are already in force, so
+				// they take the time they were created. Guarded on IS NULL so it
+				// does nothing when the dialect gave the new column a default.
+				if err := db.Model(model).
+					Where("activate_at IS NULL").
+					UpdateColumn("activate_at", gorm.Expr("created_at")).Error; err != nil {
+					return fmt.Errorf("backfill process_definition_releases.activate_at: %w", err)
+				}
+				// The old index made (key, project) unique, which a timeline must
+				// not be — the same key changes version more than once.
+				const oldIndex = "idx_definition_release_key"
+				if db.Migrator().HasIndex(model, oldIndex) {
+					// Raw SQL rather than Migrator().DropIndex.
+					//
+					// GORM's PostgreSQL migrator builds `DROP INDEX
+					// CURRENT_SCHEMA.<name>` and PostgreSQL refuses it —
+					// CURRENT_SCHEMA is a function, not an identifier, so the
+					// statement is a syntax error every time, on any search_path.
+					// This migration is guarded by HasIndex, so only an
+					// installation upgrading from before it ever reached the
+					// call: a fresh install skips it and looks fine, which is
+					// why nothing caught it until the suite was pointed at a
+					// real PostgreSQL.
+					//
+					// IF EXISTS rather than relying on the guard alone, because
+					// two replicas can both pass HasIndex and only one can drop.
+					if err := db.Exec("DROP INDEX IF EXISTS " + oldIndex).Error; err != nil {
+						return fmt.Errorf("drop %s: %w", oldIndex, err)
+					}
+				}
+				const newIndex = "idx_definition_release_timeline"
+				if !db.Migrator().HasIndex(model, newIndex) {
+					if err := db.Migrator().CreateIndex(model, newIndex); err != nil {
+						return fmt.Errorf("create %s: %w", newIndex, err)
+					}
+				}
+				return nil
+			},
+		},
+		{
+			Version: 17,
+			Name:    "an SSE event says who it is for",
+			// The live event stream carries process variables. The bus that
+			// moves events between replicas carried only the payload, so a
+			// replica reading one back had no way to know whose it was and
+			// delivered it to every browser it held — every tenant's business
+			// data, live, to anybody signed in.
+			//
+			// These two columns are the audience. Rows written before them are
+			// left null and dropped on delivery rather than broadcast: the bus
+			// prunes within minutes, and an event whose audience is unknown has
+			// no safe audience.
+			Run: func(_ context.Context, db *gorm.DB) error {
+				model, err := modelForTable(db, models, "broadcast_events")
+				if err != nil {
+					return err
+				}
+				for _, column := range []string{"organization_id", "environment_id"} {
+					if db.Migrator().HasColumn(model, column) {
+						continue
+					}
+					if err := db.Migrator().AddColumn(model, column); err != nil {
+						return fmt.Errorf("add broadcast_events.%s: %w", column, err)
+					}
+				}
+				const index = "ix_broadcast_events_org"
+				if !db.Migrator().HasIndex(model, index) {
+					if err := db.Migrator().CreateIndex(model, index); err != nil {
+						return fmt.Errorf("create %s: %w", index, err)
+					}
+				}
+				return nil
+			},
+		},
+		{
+			Version: 18,
+			Name:    "one name per column",
+			// Four columns whose Go field and database column disagreed, found
+			// by diffing the GORM schema against the storm model rather than by
+			// a query failing. Nothing broke while only GORM read them; the
+			// moment a ported repository named the column the model describes,
+			// it was a SQL error on every read of that table.
+			//
+			// Not a plain rename, and the reason is the migration that runs
+			// first. The baseline is AutoMigrate over the *current* models, so
+			// by the time this executes on an existing installation the new
+			// column already exists — added, empty, beside the old one holding
+			// the data. A rename guarded on "skip if the new column is there"
+			// therefore skipped on every real upgrade and left every form
+			// without its definition, every connector without its properties
+			// and every external task without its references. Silently: the
+			// migration reported success.
+			//
+			// So all three states are handled. Only the old column is a rename,
+			// which is metadata-only in PostgreSQL. Both is a copy and a drop.
+			// Only the new is a fresh install with nothing to do.
+			Run: func(_ context.Context, db *gorm.DB) error {
+				renames := []struct{ table, from, to string }{
+					{"forms", "schema", "fields"},
+					{"connectors", "schema", "properties"},
+					{"external_tasks", "process_instance_id", "instance_id"},
+					{"external_tasks", "process_definition_id", "definition_id"},
+				}
+				for _, rename := range renames {
+					if err := moveColumn(db, models, rename.table, rename.from, rename.to); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		},
+		{
+			Version: 19,
+			Name:    "the join tables name their columns",
+			// GORM derived a many-to-many join table's columns from the Go type
+			// names, so an account's organizations were joined on
+			// user_model_id and organization_model_id — names that say nothing
+			// and match no other foreign key in the database.
+			//
+			// RENAME is metadata-only in PostgreSQL. Guarded both ways so a
+			// fresh installation, whose AutoMigrate already created the right
+			// names, does not fail on a rename with nothing to rename.
+			Run: func(_ context.Context, db *gorm.DB) error {
+				renames := []struct{ table, from, to string }{
+					{"user_organizations", "user_model_id", "user_id"},
+					{"user_organizations", "organization_model_id", "organization_id"},
+					{"user_projects", "user_model_id", "user_id"},
+					{"user_projects", "project_model_id", "project_id"},
+				}
+				for _, rename := range renames {
+					if err := moveColumn(db, models, rename.table, rename.from, rename.to); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		},
 	}
+}
+
+// moveColumn gets a column's data under its new name, whatever state the table
+// is in.
+//
+// Three states, because the baseline migration is AutoMigrate over the current
+// models and therefore adds the new column before any rename can run:
+//
+//   - only the old column: RENAME, which is metadata-only in PostgreSQL — no
+//     table rewrite and no long lock.
+//   - both: the new one is empty and the old one holds the data, so copy across
+//     and drop the old. This is the state every existing installation is in,
+//     and the state a rename-only migration silently skipped.
+//   - only the new column: a fresh install, nothing to do.
+//
+// The copy fills only rows whose new value is still null, so running twice
+// cannot overwrite anything written between the two runs.
+func moveColumn(db *gorm.DB, models []any, table, from, to string) error {
+	if !db.Migrator().HasTable(table) {
+		return nil
+	}
+	hasOld, hasNew := db.Migrator().HasColumn(table, from), db.Migrator().HasColumn(table, to)
+	switch {
+	case !hasOld:
+		return nil
+	case !hasNew:
+		if err := db.Exec(fmt.Sprintf("ALTER TABLE %q RENAME COLUMN %q TO %q", table, from, to)).Error; err != nil {
+			return fmt.Errorf("rename %s.%s to %s: %w", table, from, to, err)
+		}
+		return nil
+	}
+
+	if err := db.Exec(fmt.Sprintf(
+		"UPDATE %q SET %q = %q WHERE %q IS NULL AND %q IS NOT NULL",
+		table, to, from, to, from)).Error; err != nil {
+		return fmt.Errorf("copy %s.%s into %s: %w", table, from, to, err)
+	}
+	// Dropped rather than left behind: two columns holding one fact is how the
+	// next reader picks the wrong one, and the old name is what the drift check
+	// would go on reporting for ever.
+	if err := db.Exec(fmt.Sprintf("ALTER TABLE %q DROP COLUMN %q", table, from)).Error; err != nil {
+		return fmt.Errorf("drop %s.%s: %w", table, from, err)
+	}
+	_ = models
+	return nil
 }
 
 // versionedDefinitionTables are the tables whose (project_id, key, version) must

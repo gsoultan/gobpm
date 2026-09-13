@@ -24,6 +24,11 @@ const FLOW_EVENTS: EventChoice[] = [
   { value: 'timer', label: 'Time', blurb: 'The process pauses here and carries on by itself.' },
   { value: 'message', label: 'A message', blurb: 'Another system tells this one process to carry on.' },
   { value: 'signal', label: 'A signal', blurb: 'A broadcast: every process waiting for this signal carries on.' },
+  {
+    value: 'conditional',
+    label: 'Something to become true',
+    blurb: 'The process waits here until what you describe is true of its own data.',
+  },
 ];
 
 /** What a step attached to another one can additionally wait for. */
@@ -41,6 +46,7 @@ function inferEventType(data: NodeConfigProps['data']): string {
   if (data.escalationCode) return 'escalation';
   if (data.signalName) return 'signal';
   if (data.messageName) return 'message';
+  if (data.conditionExpression) return 'conditional';
   return 'timer';
 }
 
@@ -122,6 +128,20 @@ export function EventConfig({ data, onUpdate }: NodeConfigProps) {
             description="The value that picks out this process from the others waiting — usually the id it was started with."
             value={asText(data.correlationKey)}
             onChange={(e) => onUpdate({ correlationKey: e.target.value })}
+          />
+        </PropertySection>
+      )}
+
+      {eventType === 'conditional' && (
+        <PropertySection
+          title="What has to become true"
+          hint="Checked when the process arrives, and again every time the process moves on elsewhere. Nothing outside the process will wake it, so this has to be about the process's own data."
+        >
+          <TextInput
+            label="Carry on when"
+            placeholder="e.g. funded >= 1000"
+            value={asText(data.conditionExpression)}
+            onChange={(e) => onUpdate({ conditionExpression: e.target.value })}
           />
         </PropertySection>
       )}

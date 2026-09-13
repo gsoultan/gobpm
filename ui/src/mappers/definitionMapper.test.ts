@@ -147,6 +147,56 @@ describe('the arrows between steps', () => {
     expect(edge.target).toBe('end');
     expect(edge.data?.condition).toBe('approvalLevel = director');
   });
+
+  /**
+   * The arrow's caption is not executable.
+   *
+   * Labelling a path "Yes" used to deploy it with the condition `Yes` — an
+   * unbound name, so the gateway found no matching flow, the path was never
+   * taken, and (with the implicit-default flag off, which is the default) the
+   * instance raised an incident at the first decision. Nothing in the designer
+   * said so.
+   */
+  it('never turns a caption into a condition', () => {
+    const payload = buildDefinitionPayload(
+      'A process',
+      'a-process',
+      [] as Nodes,
+      [{ id: 'f1', source: 'start', target: 'end', label: 'Yes' }] as Edges,
+    );
+
+    expect(payload.flows[0].condition).toBe('');
+  });
+
+  it('keeps the condition when a caption is also present', () => {
+    const payload = buildDefinitionPayload(
+      'A process',
+      'a-process',
+      [] as Nodes,
+      [{ id: 'f1', source: 'start', target: 'end', label: 'Approved', data: { condition: 'amount > 1000' } }] as Edges,
+    );
+
+    expect(payload.flows[0].condition).toBe('amount > 1000');
+  });
+});
+
+/**
+ * Two service-task settings the engine reads under names the panel did not
+ * write. The panel wrote `url` and `topic`; the engine reads the `http_url`
+ * property and the external topic column, which the mapper fills from `httpUrl`
+ * and `externalTopic`. So a "call a web address" step deployed and did nothing
+ * at all, and the canvas showed no sign of it.
+ */
+describe('service task wiring', () => {
+  it('sends the web address under the name the engine reads', () => {
+    const saved = payloadFor({ httpUrl: 'https://api.example.com/hook' }, 'serviceTask');
+    expect(saved.properties?.http_url).toBe('https://api.example.com/hook');
+  });
+
+  it('sends the external topic as its own field, not a setting', () => {
+    const saved = payloadFor({ externalTopic: 'process-invoice' }, 'serviceTask');
+    expect(saved.external_topic).toBe('process-invoice');
+  });
 });
 
 /**
@@ -266,5 +316,64 @@ describe('what the throwing events save', () => {
     );
     expect(saved.properties?.message_name).toBe('ORDER_READY');
     expect(saved.properties?.correlation_key).toBe('${orderId}');
+  });
+});
+
+/**
+ * Opening an imported diagram and saving it without touching it.
+ *
+ * A BPMN file from another tool carries a layout: every shape's size, whether a
+ * sub-process is drawn expanded, and the exact bends of every connector. None
+ * of that is anything the designer draws with — React Flow sizes nodes by CSS
+ * and routes its own edges — so it only survives if the mapper carries it
+ * through untouched. Dropped, the symptom is the worst kind: the diagram opens
+ * looking right, and is flattened to this tool's defaults by the one action a
+ * user is certain changed nothing.
+ */
+describe('imported diagram geometry', () => {
+  it('carries node size and expansion back out on save', () => {
+    const loaded = mapLoadedNodes([
+      // @ts-expect-error — the fixture is deliberately the server's shape.
+      { id: 'sub', name: 'Review', type: 'subProcess', x: 100, y: 200, width: 350, height: 180, is_expanded: true },
+    ]);
+
+    expect(loaded[0].data.width).toBe(350);
+    expect(loaded[0].data.height).toBe(180);
+    expect(loaded[0].data.isExpanded).toBe(true);
+
+    const payload = buildDefinitionPayload('P', 'p', loaded as Nodes, []);
+    expect(payload.nodes[0].width).toBe(350);
+    expect(payload.nodes[0].height).toBe(180);
+    expect(payload.nodes[0].is_expanded).toBe(true);
+  });
+
+  it('does not write geometry into the property bag as well', () => {
+    const loaded = mapLoadedNodes([
+      // @ts-expect-error — the fixture is deliberately the server's shape.
+      { id: 'sub', name: 'Review', type: 'subProcess', x: 1, y: 2, width: 350, height: 180, is_expanded: true },
+    ]);
+    const payload = buildDefinitionPayload('P', 'p', loaded as Nodes, []);
+
+    expect(payload.nodes[0].properties).not.toHaveProperty('width');
+    expect(payload.nodes[0].properties).not.toHaveProperty('height');
+    expect(payload.nodes[0].properties).not.toHaveProperty('isExpanded');
+  });
+
+  it('keeps the bends an author put in a connector', () => {
+    const edges = mapLoadedEdges([
+      // @ts-expect-error — the fixture is deliberately the server's shape.
+      { id: 'f1', source_ref: 'a', target_ref: 'b', waypoints: [{ x: 10, y: 20 }, { x: 30, y: 20 }, { x: 30, y: 60 }] },
+    ]);
+
+    const payload = buildDefinitionPayload('P', 'p', [], edges as Edges);
+    expect(payload.flows[0].waypoints).toEqual([{ x: 10, y: 20 }, { x: 30, y: 20 }, { x: 30, y: 60 }]);
+  });
+
+  it('sends an empty route for an edge the designer drew', () => {
+    const payload = buildDefinitionPayload('P', 'p', [], [
+      { id: 'f1', source: 'a', target: 'b', data: { condition: '' } },
+    ] as Edges);
+
+    expect(payload.flows[0].waypoints).toEqual([]);
   });
 });

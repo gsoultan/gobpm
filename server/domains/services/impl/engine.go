@@ -34,6 +34,8 @@ type Engine struct {
 	dispatcher     observerContracts.EventDispatcher
 	jobSvc         serviceContracts.JobService
 	varHistory     serviceContracts.VariableHistoryWriter
+	// Decoded definitions, bounded and keyed by tenant. See definition_cache.go.
+	definitions *definitionCache
 }
 
 // EngineOption is a functional option for configuring an Engine after construction.
@@ -67,7 +69,7 @@ func NewExecutionEngine(
 	dispatcher observerContracts.EventDispatcher,
 	opts ...EngineOption,
 ) *Engine {
-	e := &Engine{repo: repo, dispatcher: dispatcher}
+	e := &Engine{repo: repo, dispatcher: dispatcher, definitions: newDefinitionCache()}
 	for _, opt := range opts {
 		opt(e)
 	}
@@ -101,10 +103,13 @@ func (e *Engine) StartSubProcess(ctx context.Context, projectID uuid.UUID, defin
 func (e *Engine) startProcessInternal(ctx context.Context, projectID uuid.UUID, definitionKey string, version int, vars map[string]any, parentInstanceID uuid.UUID, parentNodeID string) (uuid.UUID, error) {
 	var m models.ProcessDefinitionModel
 	var err error
+	// Resolved within the project, not across the tenant: two projects in one
+	// organization can both hold this key, and picking the wrong one would run
+	// the wrong process model under the right name.
 	if version > 0 {
-		m, err = e.repo.Definition().GetByKeyAndVersion(ctx, definitionKey, version)
+		m, err = e.repo.Definition().GetByProjectKeyAndVersion(ctx, projectID, definitionKey, version)
 	} else {
-		m, err = e.repo.Definition().GetByKey(ctx, definitionKey)
+		m, err = e.repo.Definition().GetLiveByProjectKey(ctx, projectID, definitionKey)
 	}
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("could not find definition: %w", err)
@@ -189,11 +194,9 @@ func (e *Engine) GetInstanceForUpdate(ctx context.Context, id uuid.UUID) (entiti
 }
 
 func (e *Engine) GetProcessDefinition(ctx context.Context, id uuid.UUID) (*entities.ProcessDefinition, error) {
-	m, err := e.repo.Definition().Get(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	return adapters.DefinitionEntityAdapter{Model: m}.ToEntity(), nil
+	// Read through the bounded, tenant-keyed cache: a definition is immutable
+	// once deployed, and this is read on every job, message and timer.
+	return e.loadDefinition(ctx, id)
 }
 
 func (e *Engine) ListInstances(ctx context.Context, projectID uuid.UUID) ([]entities.ProcessInstance, error) {
@@ -453,7 +456,92 @@ func (e *Engine) proceedInternal(ctx context.Context, instance *entities.Process
 
 	// Step 4: mark node completed and follow outgoing flows.
 	instance.MarkCompleted(node)
-	return e.followOutgoingFlows(ctx, instance, def, nodeID)
+	if err := e.followOutgoingFlows(ctx, instance, def, nodeID); err != nil {
+		return err
+	}
+
+	// Step 5: a conditional event waiting elsewhere in this instance may now be
+	// satisfied by what this advance changed.
+	return e.resumeSatisfiedConditionalEvents(ctx, instance, def)
+}
+
+// conditionalSweepKey marks a conditional re-evaluation already in progress.
+type conditionalSweepKey struct{}
+
+// resumeSatisfiedConditionalEvents advances any conditional event in this
+// instance whose condition has become true.
+//
+// A conditional event waits on the process's own data rather than on a clock or
+// an inbound message, so nothing external will ever wake it: the only thing
+// that can make its condition true is another part of this same instance
+// changing a variable. This is that moment — the end of an advance, after the
+// outgoing flows have run and whatever they set is visible.
+//
+// It reads the tokens rather than a subscription table. The token already
+// records where the instance is waiting, so a conditional event needs no row of
+// its own, no migration, and no way for the two to disagree.
+//
+// The context flag stops the sweep re-entering itself: proceeding a conditional
+// event runs a full advance, which ends here again, and two conditional events
+// that each satisfy the other would otherwise recurse until the stack gave out.
+// One sweep per top-level advance is enough — anything a resumed event changes
+// is picked up by the sweep at the end of *its* advance.
+func (e *Engine) resumeSatisfiedConditionalEvents(ctx context.Context, instance *entities.ProcessInstance, def *entities.ProcessDefinition) error {
+	if ctx.Value(conditionalSweepKey{}) != nil {
+		return nil
+	}
+
+	waiting := e.waitingConditionalNodes(instance, def)
+	if len(waiting) == 0 {
+		// The overwhelmingly common case, and it costs one pass over the
+		// instance's tokens with no query and no allocation behind it.
+		return nil
+	}
+
+	sweepCtx := context.WithValue(ctx, conditionalSweepKey{}, true)
+	for _, node := range waiting {
+		expr := node.GetStringProperty("condition_expression")
+		if !logic.GetConditionEvaluatorChain().Evaluate(expr, instance.Variables) {
+			continue
+		}
+		if err := e.Proceed(sweepCtx, instance, def, node.ID); err != nil {
+			return fmt.Errorf("resume conditional event %s: %w", node.ID, err)
+		}
+	}
+	return nil
+}
+
+// waitingConditionalNodes returns the conditional events this instance is
+// currently parked on.
+func (e *Engine) waitingConditionalNodes(instance *entities.ProcessInstance, def *entities.ProcessDefinition) []*entities.Node {
+	// Both of these stay nil unless the instance actually holds a conditional
+	// event. This runs at the end of every advance, so allocating a map on the
+	// overwhelmingly common path — no conditional events anywhere — would be a
+	// per-token-move allocation to answer "no".
+	var waiting []*entities.Node
+	var seen map[string]bool
+	for i := range instance.Tokens {
+		token := &instance.Tokens[i]
+		if token.Node == nil || seen[token.Node.ID] {
+			continue
+		}
+		// The token carries a node as it was when the token was made. The
+		// definition is the authority on what that node is configured to do, so
+		// the lookup is by id — a token holding a stale copy would be read with
+		// whatever the condition used to say.
+		node := def.FindNode(token.Node.ID)
+		if node == nil {
+			continue
+		}
+		if node.GetStringProperty("condition_expression") != "" {
+			if seen == nil {
+				seen = make(map[string]bool, 1)
+			}
+			seen[node.ID] = true
+			waiting = append(waiting, node)
+		}
+	}
+	return waiting
 }
 
 // handleBoundaryInterrupt removes the host activity token when an interrupting
@@ -560,7 +648,11 @@ func (e *Engine) checkAdHocCompletion(ctx context.Context, instance *entities.Pr
 // nodes.  Returns (true, nil) when execution should continue past the node.
 func (e *Engine) removeOrCheckMultiInstance(ctx context.Context, instance *entities.ProcessInstance, def *entities.ProcessDefinition, node *entities.Node, nodeID, iterationID string) (bool, error) {
 	if node == nil || node.MultiInstanceType == "" || node.MultiInstanceType == "none" {
-		instance.RemoveTokenByNode(node)
+		// By node ID, not by node: this branch deliberately accepts a nil node —
+		// the definition no longer describes what the token is sitting on — and
+		// the token still has to come off, or the instance keeps a token nothing
+		// will ever advance.
+		instance.RemoveTokenByNodeID(nodeID)
 		return true, nil
 	}
 	return e.checkMultiInstanceCompletion(ctx, instance, def, node, nodeID, iterationID)
@@ -823,11 +915,10 @@ func (e *Engine) triggerSubscription(ctx context.Context, sub entities.EventSubs
 			return fmt.Errorf("instance %s has no definition reference", instance.ID)
 		}
 
-		md, err := e.repo.Definition().Get(txCtx, instance.Definition.ID)
+		def, err := e.loadDefinition(txCtx, instance.Definition.ID)
 		if err != nil {
 			return fmt.Errorf("load definition %s: %w", instance.Definition.ID, err)
 		}
-		def := adapters.DefinitionEntityAdapter{Model: md}.ToEntity()
 
 		for k, v := range vars {
 			instance.SetVariable(k, v)
